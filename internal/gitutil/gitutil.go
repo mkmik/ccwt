@@ -4,10 +4,13 @@ package gitutil
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // RepoRoot runs `git rev-parse --show-toplevel` and returns the resulting
@@ -48,6 +51,63 @@ func AddWorktree(path, branch string) error {
 		return err
 	}
 	return nil
+}
+
+// Worktree is one entry from `git worktree list`.
+type Worktree struct {
+	Path   string
+	Branch string // empty when HEAD is detached
+}
+
+// ListWorktrees parses `git worktree list --porcelain` and returns all
+// registered worktrees (including the main one).
+func ListWorktrees() ([]Worktree, error) {
+	out, err := exec.Command("git", "worktree", "list", "--porcelain").Output()
+	if err != nil {
+		return nil, err
+	}
+	var wts []Worktree
+	var cur Worktree
+	flush := func() {
+		if cur.Path != "" {
+			wts = append(wts, cur)
+		}
+		cur = Worktree{}
+	}
+	for line := range strings.SplitSeq(string(out), "\n") {
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			flush()
+			cur.Path = strings.TrimPrefix(line, "worktree ")
+		case strings.HasPrefix(line, "branch "):
+			cur.Branch = strings.TrimPrefix(strings.TrimPrefix(line, "branch "), "refs/heads/")
+		}
+	}
+	flush()
+	return wts, nil
+}
+
+// Commit holds the bits of a git commit we display.
+type Commit struct {
+	Time    time.Time
+	Subject string
+}
+
+// LastCommit returns the HEAD commit of the repository at repoPath.
+func LastCommit(repoPath string) (Commit, error) {
+	out, err := exec.Command("git", "-C", repoPath, "log", "-1", "--format=%ct%n%s").Output()
+	if err != nil {
+		return Commit{}, err
+	}
+	parts := strings.SplitN(strings.TrimRight(string(out), "\n"), "\n", 2)
+	if len(parts) < 2 {
+		return Commit{}, fmt.Errorf("unexpected git log output: %q", string(out))
+	}
+	sec, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return Commit{}, fmt.Errorf("parse commit time %q: %w", parts[0], err)
+	}
+	return Commit{Time: time.Unix(sec, 0), Subject: parts[1]}, nil
 }
 
 func stripClaudeWorktreeSuffix(path string) string {
