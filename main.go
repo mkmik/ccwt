@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
+	"golang.org/x/term"
 
 	"github.com/mmikulicic/ccwt/internal/gitutil"
 	"github.com/mmikulicic/ccwt/internal/namegen"
@@ -68,8 +69,7 @@ func (c *NewWorktreeBranchCmd) Run() error {
 // won't fill it with escape codes. Format: ESC ] 7 ; file://<host><path> ST
 // where ST is ESC \ . The path is URL-encoded via net/url.
 func emitOSC7(path string) {
-	fi, err := os.Stderr.Stat()
-	if err != nil || fi.Mode()&os.ModeCharDevice == 0 {
+	if !term.IsTerminal(int(os.Stderr.Fd())) {
 		return
 	}
 	host, _ := os.Hostname()
