@@ -14,8 +14,8 @@ import (
 	"github.com/alecthomas/kong"
 	"golang.org/x/term"
 
-	"github.com/mmikulicic/ccwt/internal/gitutil"
-	"github.com/mmikulicic/ccwt/internal/namegen"
+	"github.com/mkmik/ccwt/internal/gitutil"
+	"github.com/mkmik/ccwt/internal/namegen"
 )
 
 type NewWorktreeNameCmd struct{}

@@ -1,4 +1,4 @@
-module github.com/mmikulicic/ccwt
+module github.com/mkmik/ccwt
 
 go 1.26.3
 
