@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -17,6 +18,19 @@ import (
 	"github.com/mkmik/ccwt/internal/gitutil"
 	"github.com/mkmik/ccwt/internal/namegen"
 )
+
+// set by goreleaser
+var version = "(devel)"
+
+func getVersion() string {
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		if v := bi.Main.Version; v != "" && v != "(devel)" {
+			return v
+		}
+	}
+	// otherwise fallback to the version set by goreleaser
+	return version
+}
 
 type NewWorktreeNameCmd struct{}
 
@@ -232,6 +246,8 @@ var cli struct {
 	NewWorktreeBranch NewWorktreeBranchCmd `cmd:"" name:"new" help:"Create a new worktree under .claude/worktrees/<name> on a new branch worktree-<name>, and print <name>."`
 	List              ListCmd              `cmd:"" name:"list" help:"List Claude Code worktrees with branch, age, running-session, and last commit."`
 	RepoRoot          RepoRootCmd          `cmd:"" name:"repo-root" help:"Print the root directory of the current git repository."`
+
+	Version kong.VersionFlag `name:"version" help:"Print version information and quit"`
 }
 
 func main() {
@@ -239,6 +255,9 @@ func main() {
 		kong.Name("ccwt"),
 		kong.Description("Claude Code worktree helper."),
 		kong.UsageOnError(),
+		kong.Vars{
+			"version": getVersion(),
+		},
 	)
 	ctx.FatalIfErrorf(ctx.Run())
 }
