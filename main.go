@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,12 +52,29 @@ func (c *NewWorktreeBranchCmd) Run() error {
 		return err
 	}
 
-	if err := gitutil.AddWorktree(filepath.Join(parent, name), "worktree-"+name); err != nil {
+	worktreePath := filepath.Join(parent, name)
+	if err := gitutil.AddWorktree(worktreePath, "worktree-"+name); err != nil {
 		return err
 	}
 
+	emitOSC7(worktreePath)
 	fmt.Println(name)
 	return nil
+}
+
+// emitOSC7 writes an OSC 7 escape sequence to stderr telling the terminal
+// (iTerm2, Ghostty, WezTerm, …) that the current working directory is now
+// `path`. Emitted only when stderr is a TTY so redirecting stderr to a file
+// won't fill it with escape codes. Format: ESC ] 7 ; file://<host><path> ST
+// where ST is ESC \ . The path is URL-encoded via net/url.
+func emitOSC7(path string) {
+	fi, err := os.Stderr.Stat()
+	if err != nil || fi.Mode()&os.ModeCharDevice == 0 {
+		return
+	}
+	host, _ := os.Hostname()
+	u := url.URL{Scheme: "file", Host: host, Path: path}
+	fmt.Fprintf(os.Stderr, "\x1b]7;%s\x1b\\", u.String())
 }
 
 type ListCmd struct{}
@@ -211,7 +229,7 @@ func truncate(s string, max int) string {
 
 var cli struct {
 	NewWorktreeName   NewWorktreeNameCmd   `cmd:"" name:"new-worktree-name" help:"Generate a Claude Code-style worktree name (adjective-verb-noun)."`
-	NewWorktreeBranch NewWorktreeBranchCmd `cmd:"" name:"new-worktree-branch" help:"Create a new worktree under .claude/worktrees/<name> on a new branch worktree-<name>, and print <name>."`
+	NewWorktreeBranch NewWorktreeBranchCmd `cmd:"" name:"new" help:"Create a new worktree under .claude/worktrees/<name> on a new branch worktree-<name>, and print <name>."`
 	List              ListCmd              `cmd:"" name:"list" help:"List Claude Code worktrees with branch, age, running-session, and last commit."`
 	RepoRoot          RepoRootCmd          `cmd:"" name:"repo-root" help:"Print the root directory of the current git repository."`
 }

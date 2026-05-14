@@ -1,0 +1,35 @@
+#!/bin/bash
+export CLAUDE_CODE_EFFORT_LEVEL=max
+
+clack_args=(
+    --claude-bin "$HOME/.local/bin/claude"
+)
+
+claude_args=(
+    --allow-dangerously-skip-permissions
+)
+
+forwarded_args=()
+has_worktree=0
+no_worktree=0
+for arg in "$@"; do
+    case "$arg" in
+        --no-worktree)
+            no_worktree=1
+            ;;
+        --worktree|--worktree=*)
+            has_worktree=1
+            forwarded_args+=("$arg")
+            ;;
+        *)
+            forwarded_args+=("$arg")
+            ;;
+    esac
+done
+
+if [ "$has_worktree" -eq 0 ] && [ "$no_worktree" -eq 0 ]; then
+    WORKTREE=$(ccwt new) || exit $?
+    claude_args+=(--worktree "$WORKTREE")
+fi
+
+exec clack "${clack_args[@]}" -- claude "${claude_args[@]}" "${forwarded_args[@]}"
