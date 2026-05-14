@@ -2,21 +2,65 @@ name: Release
 
 on:
   push:
+    branches: [main]
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump type"
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: minor
 
 permissions:
   contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip release]') }}
     steps:
       - name: Check out code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
+
+      - name: Compute next version
+        id: ver
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          BUMP="${{ inputs.bump || 'minor' }}"
+          LATEST=$(git describe --tags --abbrev=0 --match='v*' 2>/dev/null || echo "v0.0.0")
+          MAJOR=$(echo "$LATEST" | sed -E 's/^v([0-9]+).*/\1/')
+          MINOR=$(echo "$LATEST" | sed -E 's/^v[0-9]+\.([0-9]+).*/\1/')
+          PATCH=$(echo "$LATEST" | sed -E 's/^v[0-9]+\.[0-9]+\.([0-9]+).*/\1/')
+          case "$BUMP" in
+            major) MAJOR=$((MAJOR+1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR+1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH+1)) ;;
+          esac
+          NEXT="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "Latest tag: $LATEST"
+          echo "Bump type:  $BUMP"
+          echo "Next tag:   $NEXT"
+          echo "next=$NEXT" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag
+        if: ${{ steps.ver.outputs.next != '' }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.ver.outputs.next }}" -m "Release ${{ steps.ver.outputs.next }}"
+          git push origin "${{ steps.ver.outputs.next }}"
 
       - name: Set up Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
