@@ -52,10 +52,15 @@ func (c *RepoRootCmd) Run() error {
 	return nil
 }
 
-type NewWorktreeBranchCmd struct{}
+type NewWorktreeBranchCmd struct {
+	Name string `arg:"" optional:"" help:"Worktree name (auto-generated if omitted). Reused if a worktree with this name already exists."`
+}
 
 func (c *NewWorktreeBranchCmd) Run() error {
-	name := namegen.Generate()
+	name := c.Name
+	if name == "" {
+		name = namegen.Generate()
+	}
 
 	root, err := gitutil.RepoRoot(true)
 	if err != nil {
@@ -68,8 +73,17 @@ func (c *NewWorktreeBranchCmd) Run() error {
 	}
 
 	worktreePath := filepath.Join(parent, name)
-	if err := gitutil.AddWorktree(worktreePath, "worktree-"+name); err != nil {
-		return err
+
+	_, statErr := os.Stat(worktreePath)
+	switch {
+	case statErr == nil:
+		// Worktree directory already exists; reuse.
+	case os.IsNotExist(statErr):
+		if err := gitutil.AddWorktree(worktreePath, "worktree-"+name); err != nil {
+			return err
+		}
+	default:
+		return statErr
 	}
 
 	emitOSC7(worktreePath)
