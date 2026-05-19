@@ -53,6 +53,65 @@ func AddWorktree(path, branch string) error {
 	return nil
 }
 
+// RemoveWorktree removes the linked worktree at path via
+// `git worktree remove --force <path>`. --force is used so a worktree
+// with local modifications still gets removed. If the path is not a
+// registered worktree (already gone), nil is returned — making the
+// operation idempotent.
+func RemoveWorktree(path string) error {
+	var buf bytes.Buffer
+	cmd := exec.Command("git", "worktree", "remove", "--force", path)
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	if err := cmd.Run(); err != nil {
+		out := buf.String()
+		if strings.Contains(out, "is not a working tree") {
+			return nil
+		}
+		os.Stderr.Write(buf.Bytes())
+		return err
+	}
+	return nil
+}
+
+// PruneWorktrees runs `git worktree prune` to clean up stale registrations
+// (worktree entries whose on-disk directory no longer exists).
+func PruneWorktrees() error {
+	var buf bytes.Buffer
+	cmd := exec.Command("git", "worktree", "prune")
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	if err := cmd.Run(); err != nil {
+		os.Stderr.Write(buf.Bytes())
+		return err
+	}
+	return nil
+}
+
+// DeleteBranch deletes a local branch. Without force, `git branch -d` is
+// used, which refuses to delete an unmerged branch; with force, `-D`
+// force-deletes. A branch that doesn't exist is treated as success so the
+// caller can re-invoke after a partial deletion without surfacing an error.
+func DeleteBranch(branch string, force bool) error {
+	flag := "-d"
+	if force {
+		flag = "-D"
+	}
+	var buf bytes.Buffer
+	cmd := exec.Command("git", "branch", flag, branch)
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	if err := cmd.Run(); err != nil {
+		out := buf.String()
+		if strings.Contains(out, "not found") {
+			return nil
+		}
+		os.Stderr.Write(buf.Bytes())
+		return err
+	}
+	return nil
+}
+
 // Worktree is one entry from `git worktree list`.
 type Worktree struct {
 	Path   string

@@ -118,6 +118,40 @@ func emitOSC7(path string) {
 	fmt.Fprintf(os.Stderr, "\x1b]7;%s\x1b\\", u.String())
 }
 
+type RemoveCmd struct {
+	Name  string `arg:"" help:"Worktree name to remove."`
+	Force bool   `short:"D" help:"Force-delete the branch even when it is not merged."`
+}
+
+func (c *RemoveCmd) Run() error {
+	root, err := gitutil.RepoRoot(true)
+	if err != nil {
+		return err
+	}
+
+	worktreePath := filepath.Join(root, ".claude", "worktrees", c.Name)
+	branch := "worktree-" + c.Name
+
+	cwdTop, _ := gitutil.RepoRoot(false)
+	if cwdTop == worktreePath {
+		return fmt.Errorf("refusing to remove %s: current directory is inside it (cd elsewhere first)", c.Name)
+	}
+
+	if _, err := os.Stat(worktreePath); err == nil {
+		if err := gitutil.RemoveWorktree(worktreePath); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	if err := gitutil.PruneWorktrees(); err != nil {
+		return err
+	}
+
+	return gitutil.DeleteBranch(branch, c.Force)
+}
+
 type ListCmd struct{}
 
 func (c *ListCmd) Run() error {
@@ -272,6 +306,7 @@ var cli struct {
 	NewWorktreeName   NewWorktreeNameCmd   `cmd:"" name:"new-worktree-name" help:"Generate a Claude Code-style worktree name (adjective-verb-noun)."`
 	NewWorktreeBranch NewWorktreeBranchCmd `cmd:"" name:"new" help:"Create a new worktree under .claude/worktrees/<name> on a new branch worktree-<name>, and print <name>."`
 	List              ListCmd              `cmd:"" name:"list" help:"List Claude Code worktrees with branch, age, running-session, and last commit."`
+	Remove            RemoveCmd            `cmd:"" name:"remove" help:"Delete a worktree under .claude/worktrees/<name> and its branch (merged-only; -D to force unmerged)."`
 	RepoRoot          RepoRootCmd          `cmd:"" name:"repo-root" help:"Print the root directory of the current git repository."`
 
 	Version kong.VersionFlag `name:"version" help:"Print version information and quit"`
