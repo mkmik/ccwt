@@ -53,10 +53,23 @@ func (c *RepoRootCmd) Run() error {
 }
 
 type NewWorktreeBranchCmd struct {
-	Name string `arg:"" optional:"" help:"Worktree name (auto-generated if omitted). Reused if a worktree with this name already exists."`
+	Name        string `arg:"" optional:"" help:"Worktree name (auto-generated if omitted). Reused if a worktree with this name already exists."`
+	ForceCreate bool   `help:"Create a new worktree even when cwd is already inside one (otherwise the enclosing worktree's name is returned instead)."`
 }
 
 func (c *NewWorktreeBranchCmd) Run() error {
+	if c.Name == "" && !c.ForceCreate {
+		path, name, err := gitutil.CurrentClaudeWorktree()
+		if err != nil {
+			return err
+		}
+		if name != "" {
+			emitOSC7(path)
+			fmt.Println(name)
+			return nil
+		}
+	}
+
 	name := c.Name
 	if name == "" {
 		name = namegen.Generate()

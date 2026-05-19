@@ -110,6 +110,23 @@ func LastCommit(repoPath string) (Commit, error) {
 	return Commit{Time: time.Unix(sec, 0), Subject: parts[1]}, nil
 }
 
+// CurrentClaudeWorktree returns the path and name of the Claude Code
+// worktree that contains the git toplevel of the current working
+// directory, or ("", "", nil) if the toplevel isn't shaped like
+// .../.claude/worktrees/<name>. An error is returned only if
+// `git rev-parse --show-toplevel` itself fails.
+func CurrentClaudeWorktree() (path, name string, err error) {
+	top, err := RepoRoot(false)
+	if err != nil {
+		return "", "", err
+	}
+	parent := filepath.Dir(top)
+	if filepath.Base(parent) == "worktrees" && filepath.Base(filepath.Dir(parent)) == ".claude" {
+		return top, filepath.Base(top), nil
+	}
+	return "", "", nil
+}
+
 func stripClaudeWorktreeSuffix(path string) string {
 	parent := filepath.Dir(path)
 	if filepath.Base(parent) == "worktrees" && filepath.Base(filepath.Dir(parent)) == ".claude" {
