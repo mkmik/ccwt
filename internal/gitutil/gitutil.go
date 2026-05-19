@@ -134,12 +134,11 @@ func ListWorktrees() ([]Worktree, error) {
 		cur = Worktree{}
 	}
 	for line := range strings.SplitSeq(string(out), "\n") {
-		switch {
-		case strings.HasPrefix(line, "worktree "):
+		if rest, ok := strings.CutPrefix(line, "worktree "); ok {
 			flush()
-			cur.Path = strings.TrimPrefix(line, "worktree ")
-		case strings.HasPrefix(line, "branch "):
-			cur.Branch = strings.TrimPrefix(strings.TrimPrefix(line, "branch "), "refs/heads/")
+			cur.Path = rest
+		} else if rest, ok := strings.CutPrefix(line, "branch "); ok {
+			cur.Branch = strings.TrimPrefix(rest, "refs/heads/")
 		}
 	}
 	flush()
@@ -158,15 +157,15 @@ func LastCommit(repoPath string) (Commit, error) {
 	if err != nil {
 		return Commit{}, err
 	}
-	parts := strings.SplitN(strings.TrimRight(string(out), "\n"), "\n", 2)
-	if len(parts) < 2 {
+	timeStr, subject, ok := strings.Cut(strings.TrimRight(string(out), "\n"), "\n")
+	if !ok {
 		return Commit{}, fmt.Errorf("unexpected git log output: %q", string(out))
 	}
-	sec, err := strconv.ParseInt(parts[0], 10, 64)
+	sec, err := strconv.ParseInt(timeStr, 10, 64)
 	if err != nil {
-		return Commit{}, fmt.Errorf("parse commit time %q: %w", parts[0], err)
+		return Commit{}, fmt.Errorf("parse commit time %q: %w", timeStr, err)
 	}
-	return Commit{Time: time.Unix(sec, 0), Subject: parts[1]}, nil
+	return Commit{Time: time.Unix(sec, 0), Subject: subject}, nil
 }
 
 // CurrentClaudeWorktree returns the path and name of the Claude Code

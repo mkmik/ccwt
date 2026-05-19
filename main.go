@@ -1,13 +1,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime/debug"
-	"sort"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -91,7 +92,7 @@ func (c *NewWorktreeBranchCmd) Run() error {
 	switch {
 	case statErr == nil:
 		// Worktree directory already exists; reuse.
-	case os.IsNotExist(statErr):
+	case errors.Is(statErr, os.ErrNotExist):
 		if err := gitutil.AddWorktree(worktreePath, "worktree-"+name); err != nil {
 			return err
 		}
@@ -141,7 +142,7 @@ func (c *RemoveCmd) Run() error {
 		if err := gitutil.RemoveWorktree(worktreePath); err != nil {
 			return err
 		}
-	} else if !os.IsNotExist(err) {
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 
@@ -196,8 +197,8 @@ func (c *ListCmd) Run() error {
 		}
 		rows = append(rows, r)
 	}
-	sort.Slice(rows, func(i, j int) bool {
-		return rows[i].sortTime.After(rows[j].sortTime)
+	slices.SortFunc(rows, func(a, b row) int {
+		return b.sortTime.Compare(a.sortTime)
 	})
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
