@@ -56,7 +56,13 @@ func (c *RepoRootCmd) Run() error {
 type DotDotCmd struct{}
 
 func (c *DotDotCmd) Run() error {
-	return (&RepoRootCmd{RootWorktree: true}).Run()
+	path, err := gitutil.RepoRoot(true)
+	if err != nil {
+		return err
+	}
+	emitCdRequest(path)
+	fmt.Println(path)
+	return nil
 }
 
 type NewWorktreeBranchCmd struct {
@@ -72,6 +78,7 @@ func (c *NewWorktreeBranchCmd) Run() error {
 		}
 		if name != "" {
 			emitOSC7(path)
+			emitCdRequest(path)
 			fmt.Println(name)
 			return nil
 		}
@@ -107,8 +114,19 @@ func (c *NewWorktreeBranchCmd) Run() error {
 	}
 
 	emitOSC7(worktreePath)
+	emitCdRequest(worktreePath)
 	fmt.Println(name)
 	return nil
+}
+
+// emitCdRequest writes path to the file named by the CCWT_WRAPPER_CD_FILE
+// env var (if set), so the shell wrapper installed by `ccwt init <shell>`
+// can `cd` there after this binary exits. No-op when the env var is unset,
+// so users not running through the wrapper get unchanged behaviour.
+func emitCdRequest(path string) {
+	if f := os.Getenv("CCWT_WRAPPER_CD_FILE"); f != "" {
+		_ = os.WriteFile(f, []byte(path), 0o600)
+	}
 }
 
 // emitOSC7 writes an OSC 7 escape sequence to stderr telling the terminal
@@ -289,6 +307,50 @@ func isClaudeActiveIn(worktreePath string, cwds map[string]bool) bool {
 	return false
 }
 
+type InitCmd struct {
+	Shell string `arg:"" enum:"bash,zsh,fish" help:"Shell to emit the integration snippet for (bash, zsh, or fish)."`
+}
+
+const posixInitSnippet = `# Source from your rc file with:
+#   source <(ccwt init zsh)    # or: ccwt init bash
+ccwt() {
+    local _ccwt_cd_file _ccwt_rc
+    _ccwt_cd_file=$(mktemp) || return $?
+    CCWT_WRAPPER_CD_FILE="$_ccwt_cd_file" command ccwt "$@"
+    _ccwt_rc=$?
+    if [ -s "$_ccwt_cd_file" ]; then
+        builtin cd -- "$(cat -- "$_ccwt_cd_file")"
+    fi
+    rm -f -- "$_ccwt_cd_file"
+    return $_ccwt_rc
+}
+`
+
+const fishInitSnippet = `# Source from config.fish with:
+#   ccwt init fish | source
+function ccwt
+    set -l _ccwt_cd_file (mktemp); or return $status
+    set -lx CCWT_WRAPPER_CD_FILE $_ccwt_cd_file
+    command ccwt $argv
+    set -l _ccwt_rc $status
+    if test -s $_ccwt_cd_file
+        builtin cd (cat $_ccwt_cd_file)
+    end
+    rm -f -- $_ccwt_cd_file
+    return $_ccwt_rc
+end
+`
+
+func (c *InitCmd) Run() error {
+	switch c.Shell {
+	case "bash", "zsh":
+		fmt.Print(posixInitSnippet)
+	case "fish":
+		fmt.Print(fishInitSnippet)
+	}
+	return nil
+}
+
 func humanAge(d time.Duration) string {
 	switch {
 	case d < time.Minute:
@@ -316,6 +378,7 @@ var cli struct {
 	Remove            RemoveCmd            `cmd:"" name:"remove" help:"Delete a worktree under .claude/worktrees/<name> and its branch (merged-only; -D to force unmerged)."`
 	RepoRoot          RepoRootCmd          `cmd:"" name:"repo-root" help:"Print the root directory of the current git repository."`
 	DotDot            DotDotCmd            `cmd:"" name:".." help:"Print the enclosing repo root, stripping any .claude/worktrees/<name> suffix (shorthand for repo-root --root-worktree)."`
+	Init              InitCmd              `cmd:"" name:"init" help:"Emit a shell integration snippet to source from your rc file (e.g. source <(ccwt init zsh), or for fish: ccwt init fish | source)."`
 
 	Version kong.VersionFlag `name:"version" help:"Print version information and quit"`
 }
