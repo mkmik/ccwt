@@ -53,6 +53,12 @@ func (c *RepoRootCmd) Run() error {
 	return nil
 }
 
+type DotDotCmd struct{}
+
+func (c *DotDotCmd) Run() error {
+	return (&RepoRootCmd{RootWorktree: true}).Run()
+}
+
 type NewWorktreeBranchCmd struct {
 	Name        string `arg:"" optional:"" help:"Worktree name (auto-generated if omitted). Reused if a worktree with this name already exists."`
 	ForceCreate bool   `help:"Create a new worktree even when cwd is already inside one (otherwise the enclosing worktree's name is returned instead)."`
@@ -309,6 +315,7 @@ var cli struct {
 	List              ListCmd              `cmd:"" name:"list" help:"List Claude Code worktrees with branch, age, running-session, and last commit."`
 	Remove            RemoveCmd            `cmd:"" name:"remove" help:"Delete a worktree under .claude/worktrees/<name> and its branch (merged-only; -D to force unmerged)."`
 	RepoRoot          RepoRootCmd          `cmd:"" name:"repo-root" help:"Print the root directory of the current git repository."`
+	DotDot            DotDotCmd            `cmd:"" name:".." help:"Print the enclosing repo root, stripping any .claude/worktrees/<name> suffix (shorthand for repo-root --root-worktree)."`
 
 	Version kong.VersionFlag `name:"version" help:"Print version information and quit"`
 }
