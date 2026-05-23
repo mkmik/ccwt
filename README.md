@@ -20,22 +20,17 @@ This drops a `ccwt` binary in `$(go env GOPATH)/bin` (make sure that's on your `
 A program can't change its parent shell's working directory, so on its own `ccwt new`
 can only *print* the path of the worktree it created. To make `ccwt` actually `cd` you
 into a worktree (and `ccwt ..` jump you back to the repo root), source the integration
-snippet for your shell from your rc file:
+snippet from your shell's rc file:
 
 ```sh
-# bash / zsh — add to ~/.bashrc or ~/.zshrc
-source <(ccwt init zsh)     # or: source <(ccwt init bash)
+source <(ccwt init zsh)
 ```
 
-```fish
-# fish — add to ~/.config/fish/config.fish
-ccwt init fish | source
-```
-
-This defines a thin `ccwt` shell function that wraps the binary and performs the `cd`
-for you. Everything still works without it — you just won't get the automatic directory
-change. (On supporting terminals such as iTerm2, Ghostty, and WezTerm, `ccwt` also emits
-an OSC 7 sequence so the terminal tracks the new working directory.)
+See `ccwt init --help` for the shells that are supported. The snippet defines a thin
+`ccwt` shell function that wraps the binary and performs the `cd` for you. Everything
+still works without it — you just won't get the automatic directory change. (On
+supporting terminals such as iTerm2, Ghostty, and WezTerm, `ccwt` also emits an OSC 7
+sequence so the terminal tracks the new working directory.)
 
 ## Quick start
 
@@ -142,7 +137,7 @@ swallow stderr, or you'll lose the cwd report.
 | `ccwt new-worktree-name` | Print a generated worktree name (`adjective-verb-noun`) without creating anything. |
 | `ccwt repo-root` | Print the root of the current git repository. Add `--root-worktree` to print the *enclosing* repo root when you're inside a `.claude/worktrees/<name>` worktree. |
 | `ccwt ..` | Shorthand for `repo-root --root-worktree`: print (and, with shell integration, `cd` to) the enclosing repository root. |
-| `ccwt init <bash\|zsh\|fish>` | Emit the shell-integration snippet to source from your rc file. |
+| `ccwt init <shell>` | Emit the shell-integration snippet to source from your rc file. Run `ccwt init --help` for the supported shells. |
 | `ccwt --version` | Print version information. |
 
 ### Layout
