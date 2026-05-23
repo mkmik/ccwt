@@ -28,8 +28,7 @@ source <(ccwt init zsh)
 
 The snippet defines a thin `ccwt` shell function that wraps the binary and performs the
 `cd` for you. Everything still works without it — you just won't get the automatic
-directory change. (On supporting terminals such as iTerm2, Ghostty, and WezTerm, `ccwt`
-also emits an OSC 7 sequence so the terminal tracks the new working directory.)
+directory change.
 
 ## Quick start
 
