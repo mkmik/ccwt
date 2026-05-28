@@ -364,11 +364,11 @@ func humanAge(d time.Duration) string {
 	}
 }
 
-func truncate(s string, max int) string {
-	if len(s) <= max {
+func truncate(s string, limit int) string {
+	if len(s) <= limit {
 		return s
 	}
-	return s[:max-1] + "…"
+	return s[:limit-1] + "…"
 }
 
 var cli struct {
