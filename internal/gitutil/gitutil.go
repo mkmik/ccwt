@@ -192,3 +192,27 @@ func stripClaudeWorktreeSuffix(path string) string {
 	}
 	return path
 }
+
+// ClaudeWorktreeRepoRoot derives the enclosing repository root for a path that
+// lives inside a Claude Code worktree (.../.claude/worktrees/<name>, or any
+// descendant of it) using pure string manipulation — no git invocation and no
+// filesystem access. It returns the path up to, but not including, the
+// .claude directory and true; or ("", false) when path is not inside such a
+// worktree.
+//
+// Unlike stripClaudeWorktreeSuffix, which only strips an exact
+// .claude/worktrees/<name> suffix, this locates the component anywhere in the
+// path. It exists for the case where the worktree directory has been deleted
+// while it was the current directory: git can no longer read the cwd (getcwd
+// fails), so RepoRoot errors out, but the shell still records the old path in
+// $PWD and that string is enough to compute where to escape to.
+func ClaudeWorktreeRepoRoot(path string) (string, bool) {
+	sep := string(filepath.Separator)
+	segs := strings.Split(path, sep)
+	for i := 0; i+2 < len(segs); i++ {
+		if segs[i] == ".claude" && segs[i+1] == "worktrees" && segs[i+2] != "" {
+			return strings.Join(segs[:i], sep), true
+		}
+	}
+	return "", false
+}

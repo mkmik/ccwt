@@ -58,6 +58,20 @@ type DotDotCmd struct{}
 func (c *DotDotCmd) Run() error {
 	path, err := gitutil.RepoRoot(true)
 	if err != nil {
+		// git couldn't resolve the toplevel — most often because the current
+		// directory was deleted out from under us (e.g. the worktree was
+		// removed while we were sitting in it), so getcwd() fails. The shell
+		// still records the old path in $PWD, so fall back to stripping the
+		// .claude/worktrees/<name> component from it. We only trust the result
+		// when the derived root still exists on disk; otherwise surface git's
+		// original error rather than emit a path the shell can't cd into.
+		if root, ok := gitutil.ClaudeWorktreeRepoRoot(os.Getenv("PWD")); ok {
+			if fi, statErr := os.Stat(root); statErr == nil && fi.IsDir() {
+				emitCdRequest(root)
+				fmt.Println(root)
+				return nil
+			}
+		}
 		return err
 	}
 	emitCdRequest(path)
