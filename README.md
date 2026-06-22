@@ -130,6 +130,7 @@ swallow stderr, or you'll lose the cwd report.
 | Command | Description |
 | --- | --- |
 | `ccwt new [name]` | Create a worktree under `.claude/worktrees/<name>` on a new branch `worktree-<name>`, and print `<name>`. Generates a name if omitted; reuses an existing worktree of the same name. When run inside a worktree it returns the enclosing one instead of creating a new one (override with `--force-create`). |
+| `ccwt cd <name>` | `cd` into an existing worktree under `.claude/worktrees/<name>` (with shell integration). Like `ccwt new <name>` but never creates the worktree — errors if it doesn't exist — and the name is required. `ccwt cd ..` is shorthand for `ccwt ..`, and `ccwt cd -` jumps to the previous directory (`$OLDPWD`), like the shell's `cd -`. |
 | `ccwt list` | List the repo's Claude Code worktrees with branch, age, running-session status, and last commit, sorted newest-first. |
 | `ccwt remove <name>` | Remove the worktree at `.claude/worktrees/<name>` and delete its branch. Refuses if you're currently inside it. The branch is deleted only if merged; pass `-D` to force-delete an unmerged branch. |
 | `ccwt new-worktree-name` | Print a generated worktree name (`adjective-verb-noun`) without creating anything. |
