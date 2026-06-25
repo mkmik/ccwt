@@ -133,6 +133,49 @@ func (c *NewWorktreeBranchCmd) Run() error {
 	return nil
 }
 
+type CdCmd struct {
+	Name string `arg:"" help:"Worktree name to cd into (must already exist). Use \"..\" for the enclosing repo root, or \"-\" for the previous directory ($OLDPWD)."`
+}
+
+func (c *CdCmd) Run() error {
+	if c.Name == ".." {
+		return (&DotDotCmd{}).Run()
+	}
+
+	if c.Name == "-" {
+		// Like the shell's `cd -`: jump to the previous directory. OLDPWD is
+		// exported by bash/zsh/fish, so we read it straight from the env.
+		// ponytail: no existence check — the wrapper's `builtin cd` validates
+		// it and surfaces the canonical error, same as native `cd -`.
+		old := os.Getenv("OLDPWD")
+		if old == "" {
+			return errors.New("cd -: OLDPWD not set")
+		}
+		emitOSC7(old)
+		emitCdRequest(old)
+		fmt.Println(old)
+		return nil
+	}
+
+	root, err := gitutil.RepoRoot(true)
+	if err != nil {
+		return err
+	}
+
+	worktreePath := filepath.Join(root, ".claude", "worktrees", c.Name)
+	if _, err := os.Stat(worktreePath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("worktree %q does not exist (use `ccwt new %s` to create it)", c.Name, c.Name)
+		}
+		return err
+	}
+
+	emitOSC7(worktreePath)
+	emitCdRequest(worktreePath)
+	fmt.Println(c.Name)
+	return nil
+}
+
 // emitCdRequest writes path to the file named by the CCWT_WRAPPER_CD_FILE
 // env var (if set), so the shell wrapper installed by `ccwt init <shell>`
 // can `cd` there after this binary exits. No-op when the env var is unset,
@@ -388,6 +431,7 @@ func truncate(s string, limit int) string {
 var cli struct {
 	NewWorktreeName   NewWorktreeNameCmd   `cmd:"" name:"new-worktree-name" help:"Generate a Claude Code-style worktree name (adjective-verb-noun)."`
 	NewWorktreeBranch NewWorktreeBranchCmd `cmd:"" name:"new" help:"Create a new worktree under .claude/worktrees/<name> on a new branch worktree-<name>, and print <name>."`
+	Cd                CdCmd                `cmd:"" name:"cd" help:"cd into an existing worktree under .claude/worktrees/<name> (errors if it doesn't exist). Use \"..\" for the enclosing repo root, or \"-\" for the previous directory."`
 	List              ListCmd              `cmd:"" name:"list" help:"List Claude Code worktrees with branch, age, running-session, and last commit."`
 	Remove            RemoveCmd            `cmd:"" name:"remove" help:"Delete a worktree under .claude/worktrees/<name> and its branch (merged-only; -D to force unmerged)."`
 	RepoRoot          RepoRootCmd          `cmd:"" name:"repo-root" help:"Print the root directory of the current git repository."`
