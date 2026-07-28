@@ -64,11 +64,6 @@ func addWorktree(args ...string) error {
 	return nil
 }
 
-// BranchExists reports whether a local branch named `branch` exists.
-func BranchExists(branch string) bool {
-	return exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/"+branch).Run() == nil
-}
-
 // RemoveWorktree removes the linked worktree at path via
 // `git worktree remove --force <path>`. --force is used so a worktree
 // with local modifications still gets removed. If the path is not a

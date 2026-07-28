@@ -80,12 +80,13 @@ func (c *DotDotCmd) Run() error {
 }
 
 type NewWorktreeBranchCmd struct {
-	Name        string `arg:"" optional:"" help:"An existing branch to check the new worktree out on (the worktree name is then generated), or a worktree name (auto-generated if omitted; reused if a worktree with this name already exists)."`
+	Name        string `arg:"" optional:"" help:"Worktree name (auto-generated if omitted). Reused if a worktree with this name already exists."`
+	Switch      string `help:"Check the new worktree out on this existing branch instead of creating a new branch worktree-<name>."`
 	ForceCreate bool   `help:"Create a new worktree even when cwd is already inside one (otherwise the enclosing worktree's name is returned instead)."`
 }
 
 func (c *NewWorktreeBranchCmd) Run() error {
-	if c.Name == "" && !c.ForceCreate {
+	if c.Name == "" && c.Switch == "" && !c.ForceCreate {
 		path, name, err := gitutil.CurrentClaudeWorktree()
 		if err != nil {
 			return err
@@ -98,15 +99,7 @@ func (c *NewWorktreeBranchCmd) Run() error {
 		}
 	}
 
-	// `ccwt new <existing-branch>` means "fresh worktree checked out on that
-	// branch" — the equivalent of `ccwt new` followed by `git switch <branch>`,
-	// so the worktree itself gets a generated name. A name that isn't a local
-	// branch keeps the original meaning: a worktree <name> on branch
-	// worktree-<name>.
-	name, branch := c.Name, ""
-	if name != "" && gitutil.BranchExists(name) {
-		name, branch = namegen.Generate(), name
-	}
+	name := c.Name
 	if name == "" {
 		name = namegen.Generate()
 	}
@@ -126,11 +119,16 @@ func (c *NewWorktreeBranchCmd) Run() error {
 	_, statErr := os.Stat(worktreePath)
 	switch {
 	case statErr == nil:
-		// Worktree directory already exists; reuse.
+		// Worktree directory already exists; reuse. --switch can't be honoured
+		// on a worktree we didn't create, so say so rather than silently
+		// landing the user on the wrong branch.
+		if c.Switch != "" {
+			return fmt.Errorf("worktree %q already exists: --switch only applies when creating one", name)
+		}
 	case errors.Is(statErr, os.ErrNotExist):
 		var addErr error
-		if branch != "" {
-			addErr = gitutil.AddWorktreeOnBranch(worktreePath, branch)
+		if c.Switch != "" {
+			addErr = gitutil.AddWorktreeOnBranch(worktreePath, c.Switch)
 		} else {
 			addErr = gitutil.AddWorktree(worktreePath, "worktree-"+name)
 		}
