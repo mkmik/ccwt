@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// TestAddWorktreeOnBranch covers the `ccwt new <existing-branch>` path: a
+// TestAddWorktreeOnBranch covers the `ccwt new --switch <branch>` path: a
 // worktree whose directory name is unrelated to the branch it checks out.
 func TestAddWorktreeOnBranch(t *testing.T) {
 	repo := t.TempDir()
@@ -19,13 +19,6 @@ func TestAddWorktreeOnBranch(t *testing.T) {
 		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
-	}
-
-	if !BranchExists("foobar") {
-		t.Error("BranchExists(foobar) = false, want true")
-	}
-	if BranchExists("nope") {
-		t.Error("BranchExists(nope) = true, want false")
 	}
 
 	wt := filepath.Join(repo, ".claude", "worktrees", "generated-name")
