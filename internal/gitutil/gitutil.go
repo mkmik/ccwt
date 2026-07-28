@@ -42,8 +42,19 @@ func RepoRoot(stripClaudeWorktree bool) (string, error) {
 // output is written verbatim to the process stderr so the user sees git's
 // own error message.
 func AddWorktree(path, branch string) error {
+	return addWorktree("-b", branch, path)
+}
+
+// AddWorktreeOnBranch creates a new linked worktree at `path` checked out on
+// the *existing* branch `branch`, via `git worktree add <path> <branch>`.
+// Output handling matches AddWorktree.
+func AddWorktreeOnBranch(path, branch string) error {
+	return addWorktree(path, branch)
+}
+
+func addWorktree(args ...string) error {
 	var buf bytes.Buffer
-	cmd := exec.Command("git", "worktree", "add", "-b", branch, path)
+	cmd := exec.Command("git", append([]string{"worktree", "add"}, args...)...)
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	if err := cmd.Run(); err != nil {
@@ -51,6 +62,11 @@ func AddWorktree(path, branch string) error {
 		return err
 	}
 	return nil
+}
+
+// BranchExists reports whether a local branch named `branch` exists.
+func BranchExists(branch string) bool {
+	return exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/"+branch).Run() == nil
 }
 
 // RemoveWorktree removes the linked worktree at path via

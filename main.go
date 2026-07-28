@@ -80,7 +80,7 @@ func (c *DotDotCmd) Run() error {
 }
 
 type NewWorktreeBranchCmd struct {
-	Name        string `arg:"" optional:"" help:"Worktree name (auto-generated if omitted). Reused if a worktree with this name already exists."`
+	Name        string `arg:"" optional:"" help:"An existing branch to check the new worktree out on (the worktree name is then generated), or a worktree name (auto-generated if omitted; reused if a worktree with this name already exists)."`
 	ForceCreate bool   `help:"Create a new worktree even when cwd is already inside one (otherwise the enclosing worktree's name is returned instead)."`
 }
 
@@ -98,7 +98,15 @@ func (c *NewWorktreeBranchCmd) Run() error {
 		}
 	}
 
-	name := c.Name
+	// `ccwt new <existing-branch>` means "fresh worktree checked out on that
+	// branch" — the equivalent of `ccwt new` followed by `git switch <branch>`,
+	// so the worktree itself gets a generated name. A name that isn't a local
+	// branch keeps the original meaning: a worktree <name> on branch
+	// worktree-<name>.
+	name, branch := c.Name, ""
+	if name != "" && gitutil.BranchExists(name) {
+		name, branch = namegen.Generate(), name
+	}
 	if name == "" {
 		name = namegen.Generate()
 	}
@@ -120,8 +128,14 @@ func (c *NewWorktreeBranchCmd) Run() error {
 	case statErr == nil:
 		// Worktree directory already exists; reuse.
 	case errors.Is(statErr, os.ErrNotExist):
-		if err := gitutil.AddWorktree(worktreePath, "worktree-"+name); err != nil {
-			return err
+		var addErr error
+		if branch != "" {
+			addErr = gitutil.AddWorktreeOnBranch(worktreePath, branch)
+		} else {
+			addErr = gitutil.AddWorktree(worktreePath, "worktree-"+name)
+		}
+		if addErr != nil {
+			return addErr
 		}
 	default:
 		return statErr
