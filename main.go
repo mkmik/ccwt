@@ -83,6 +83,17 @@ type NewWorktreeBranchCmd struct {
 	Name        string `arg:"" optional:"" help:"Worktree name (auto-generated if omitted). Reused if a worktree with this name already exists."`
 	Switch      string `help:"Check the new worktree out on this existing branch instead of creating a new branch worktree-<name>."`
 	ForceCreate bool   `help:"Create a new worktree even when cwd is already inside one (otherwise the enclosing worktree's name is returned instead)."`
+	Path        bool   `help:"Print the worktree's absolute path instead of its name."`
+}
+
+// out is what `new` prints: the worktree's path with --path, its name
+// otherwise. Both always describe the same worktree, including in the
+// enclosing-worktree case where nothing is created.
+func (c *NewWorktreeBranchCmd) out(path, name string) string {
+	if c.Path {
+		return path
+	}
+	return name
 }
 
 func (c *NewWorktreeBranchCmd) Run() error {
@@ -94,7 +105,7 @@ func (c *NewWorktreeBranchCmd) Run() error {
 		if name != "" {
 			emitOSC7(path)
 			emitCdRequest(path)
-			fmt.Println(name)
+			fmt.Println(c.out(path, name))
 			return nil
 		}
 	}
@@ -141,7 +152,7 @@ func (c *NewWorktreeBranchCmd) Run() error {
 
 	emitOSC7(worktreePath)
 	emitCdRequest(worktreePath)
-	fmt.Println(name)
+	fmt.Println(c.out(worktreePath, name))
 	return nil
 }
 
