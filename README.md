@@ -54,6 +54,13 @@ ccwt new --switch foobar          # .claude/worktrees/dreamy-foraging-hickey, on
 ccwt new mywt --switch foobar     # .claude/worktrees/mywt, on branch foobar
 ```
 
+`--path` prints the worktree's absolute path instead of its name — handy for scripts
+that need to `cd` there or pass it to another tool:
+
+```sh
+ccwt new --path                   # /path/to/repo/.claude/worktrees/dreamy-foraging-hickey
+```
+
 `ccwt list` renders a table of the repo's worktrees with their branch, age, last commit,
 and whether a Claude Code session is currently running in each:
 
@@ -137,7 +144,7 @@ swallow stderr, or you'll lose the cwd report.
 
 | Command | Description |
 | --- | --- |
-| `ccwt new [name]` | Create a worktree under `.claude/worktrees/<name>` on a new branch `worktree-<name>`, and print `<name>`. Generates a name if omitted; reuses an existing worktree of the same name. `--switch <branch>` checks the worktree out on an existing branch instead of creating one (`ccwt new` + `git switch <branch>`). When run inside a worktree it returns the enclosing one instead of creating a new one (override with `--force-create`). |
+| `ccwt new [name]` | Create a worktree under `.claude/worktrees/<name>` on a new branch `worktree-<name>`, and print `<name>`. Generates a name if omitted; reuses an existing worktree of the same name. `--switch <branch>` checks the worktree out on an existing branch instead of creating one (`ccwt new` + `git switch <branch>`). When run inside a worktree it returns the enclosing one instead of creating a new one (override with `--force-create`). `--path` prints the worktree's absolute path instead of `<name>`. |
 | `ccwt cd <name>` | `cd` into an existing worktree under `.claude/worktrees/<name>` (with shell integration) — never creates it, errors if it doesn't exist, and the name is required. `ccwt cd ..` is shorthand for `ccwt ..`, and `ccwt cd -` jumps to the previous directory (`$OLDPWD`), like the shell's `cd -`. |
 | `ccwt list` | List the repo's Claude Code worktrees with branch, age, running-session status, and last commit, sorted newest-first. |
 | `ccwt remove <name>` | Remove the worktree at `.claude/worktrees/<name>` and delete its branch. Refuses if you're currently inside it. The branch is deleted only if merged; pass `-D` to force-delete an unmerged branch. |
