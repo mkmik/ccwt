@@ -280,7 +280,9 @@ func (c *RemoveCmd) Run() error {
 	}
 
 	if !c.KeepBranch {
-		if err := gitutil.DeleteBranch(branch, c.Force); err != nil {
+		// Force-delete: the check above is the safety valve, and it is the only
+		// one that agrees with the "✓" in `ccwt list`.
+		if err := gitutil.DeleteBranch(branch); err != nil {
 			return err
 		}
 	}
