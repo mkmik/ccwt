@@ -84,7 +84,7 @@ so it doesn't flicker, with a status bar along the bottom:
 * dreamy-foraging-hickey    worktree-dreamy-foraging-hickey  2h   yes     * Add the widget
   calm-baking-otter       ✓ worktree-calm-baking-otter       1d   no        Fix the flux capacitor
 
- ccwt  q:quit  p:pull  ↵:open  r:remove │ main  ↑1 ↓2
+ ccwt  q:quit  p:pull  x:new  ↵:open  r:remove │ main  ↑1 ↓2
 ```
 
 `q` (or Ctrl-C) quits, `p` runs `git pull` and reports the result in the bar. The rest of
@@ -95,7 +95,12 @@ the bar is the branch you launched it from and how far it has drifted from its u
 The arrow keys (or `j`/`k`) select a worktree, and the bar grows the actions that apply to
 it: `↵` opens it as its own Herdr workspace (via `herdr worktree open`, like the plugin in
 `herdr-plugin/`), and `r` removes it, refusing an unmerged branch exactly like `ccwt remove`.
-Clicking a row opens it directly.
+Clicking a row opens it directly. `x` creates a worktree and opens it — the same thing the
+plugin's **New ccwt worktree** action does, without leaving the list.
+
+The Herdr actions (`x`, `↵`, click-to-open) only exist when the tui is itself running in a
+Herdr pane; elsewhere there's no session to open a workspace in, so they're dropped from the
+bar and their keys do nothing.
 
 ## Using ccwt with Claude Code
 

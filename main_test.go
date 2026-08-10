@@ -274,6 +274,26 @@ func TestStatusBarIsExactlyOneLineWide(t *testing.T) {
 	}
 }
 
+// The keys that call herdr only work inside a herdr pane, so outside one the
+// bar must not advertise them — while the keys that don't need herdr stay.
+func TestStatusBarShowsHerdrActionsOnlyUnderHerdr(t *testing.T) {
+	for _, tc := range []struct {
+		env  string
+		want bool
+	}{{"", false}, {"1", true}} {
+		t.Setenv("HERDR_ENV", tc.env)
+		bar := statusBar(200, "", "some-worktree")
+		for _, key := range []string{"x:new", "↵:open"} {
+			if strings.Contains(bar, key) != tc.want {
+				t.Errorf("HERDR_ENV=%q: %q in the bar = %v, want %v", tc.env, key, !tc.want, tc.want)
+			}
+		}
+		if !strings.Contains(bar, "r:remove") {
+			t.Errorf("HERDR_ENV=%q: r:remove is gone, but it doesn't need herdr", tc.env)
+		}
+	}
+}
+
 // The selection is kept by name, so it has to survive the list changing under
 // it: rows reordering (a commit lands elsewhere) must not move it, and the
 // selected worktree disappearing must not wedge the arrows.
