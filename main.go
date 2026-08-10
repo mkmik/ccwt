@@ -10,6 +10,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"strings"
+	"sync"
 	"text/tabwriter"
 	"time"
 
@@ -323,53 +324,73 @@ func (c *ListCmd) Run() error {
 	// output stays parseable. Unmarked cells get the same two-space gutter
 	// so the columns line up.
 	tty := stdoutIsTTY()
-	var cur string
-	var merged map[string]bool
-	if tty {
-		cur, _, _ = gitutil.CurrentClaudeWorktree()
-		merged = gitutil.MergedBranches()
-	}
 	claudeDir := filepath.Join(root, ".claude", "worktrees") + string(filepath.Separator)
-	claudeCwdSet := claudeCwds()
+	claudeWts := slices.DeleteFunc(wts, func(wt gitutil.Worktree) bool {
+		return !strings.HasPrefix(wt.Path, claudeDir)
+	})
 
 	type row struct {
 		name, branch, age, claude, subject string
+		dirty                              bool
 		sortTime                           time.Time
 	}
-	var rows []row
-	for _, wt := range wts {
-		if !strings.HasPrefix(wt.Path, claudeDir) {
-			continue
-		}
-		r := row{
-			name:   filepath.Base(wt.Path),
-			branch: wt.Branch,
-			claude: "no",
-		}
-		if r.branch == "" {
-			r.branch = "(detached)"
+
+	// Every lookup below shells out to git or lsof, and none of them depend on
+	// each other, so they all go out at once: serially they are essentially the
+	// whole runtime of the command (~500ms across 21 worktrees on a large repo),
+	// in parallel it costs about as much as the slowest single worktree.
+	// Each goroutine owns one rows[i], so no locking.
+	var (
+		wg           sync.WaitGroup
+		rows         = make([]row, len(claudeWts))
+		cur          string
+		merged       map[string]bool
+		claudeCwdSet map[string]bool
+	)
+	wg.Go(func() { claudeCwdSet = claudeCwds() })
+	if tty {
+		wg.Go(func() { cur, _, _ = gitutil.CurrentClaudeWorktree() })
+		wg.Go(func() { merged = gitutil.MergedBranches() })
+	}
+	for i, wt := range claudeWts {
+		wg.Go(func() {
+			r := &rows[i]
+			r.name = filepath.Base(wt.Path)
+			r.branch = wt.Branch
+			if r.branch == "" {
+				r.branch = "(detached)"
+			}
+			if commit, err := gitutil.LastCommit(wt.Path); err == nil {
+				r.age = humanAge(time.Since(commit.Time))
+				r.subject = truncate(commit.Subject, 60)
+				r.sortTime = commit.Time
+			} else {
+				r.age = "?"
+				r.subject = "(no commits)"
+			}
+			if tty {
+				r.dirty = gitutil.Dirty(wt.Path)
+			}
+		})
+	}
+	wg.Wait()
+
+	// The rest is map lookups against results the fan-out had to finish first.
+	for i, wt := range claudeWts {
+		r := &rows[i]
+		r.claude = "no"
+		if isClaudeActiveIn(wt.Path, claudeCwdSet) {
+			r.claude = "yes"
 		}
 		if tty {
 			r.name = marker(wt.Path == cur, "*") + r.name
 			r.branch = marker(merged[wt.Branch], "✓") + r.branch
+			r.subject = marker(r.dirty, "*") + r.subject
 		}
-		if isClaudeActiveIn(wt.Path, claudeCwdSet) {
-			r.claude = "yes"
-		}
-		if commit, err := gitutil.LastCommit(wt.Path); err == nil {
-			r.age = humanAge(time.Since(commit.Time))
-			r.subject = truncate(commit.Subject, 60)
-			r.sortTime = commit.Time
-		} else {
-			r.age = "?"
-			r.subject = "(no commits)"
-		}
-		if tty {
-			r.subject = marker(gitutil.Dirty(wt.Path), "*") + r.subject
-		}
-		rows = append(rows, r)
 	}
-	slices.SortFunc(rows, func(a, b row) int {
+	// Stable: worktrees sharing a commit timestamp keep `git worktree list`
+	// order rather than shuffling between runs.
+	slices.SortStableFunc(rows, func(a, b row) int {
 		return b.sortTime.Compare(a.sortTime)
 	})
 

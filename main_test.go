@@ -118,6 +118,34 @@ func TestListMarksMerged(t *testing.T) {
 	}
 }
 
+// TestListRowsStayPaired: `list` looks each worktree up concurrently, so pin
+// the invariant that breaks if a result ever lands on the wrong row — every
+// name must still be printed next to its own branch and its own commit.
+func TestListRowsStayPaired(t *testing.T) {
+	initRepo(t)
+	want := map[string]string{}
+	for _, name := range []string{"alpha", "bravo", "charlie", "delta", "echo"} {
+		path := capture(t, &NewWorktreeBranchCmd{Name: name, Path: true})
+		git(t, "-C", path, "commit", "--allow-empty", "-m", "subject-"+name)
+		want[name] = "subject-" + name
+	}
+
+	for _, line := range strings.Split(capture(t, &ListCmd{}), "\n") {
+		name, rest, _ := strings.Cut(line, " ")
+		subject, ok := want[name]
+		if !ok {
+			continue // header
+		}
+		if !strings.Contains(rest, subject) || !strings.Contains(rest, "worktree-"+name) {
+			t.Errorf("row for %s carries another worktree's data: %q", name, line)
+		}
+		delete(want, name)
+	}
+	if len(want) != 0 {
+		t.Errorf("worktrees missing from the listing: %v", want)
+	}
+}
+
 // TestRemoveUnmerged: an unmerged branch blocks the removal outright, leaving
 // the worktree intact rather than stranding the branch — and --keep-branch
 // removes the worktree while keeping the branch.
