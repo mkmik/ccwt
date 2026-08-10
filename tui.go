@@ -24,6 +24,7 @@ import (
 
 type TuiCmd struct {
 	Interval time.Duration `default:"2s" help:"How often to re-read the worktree list."`
+	Fetch    time.Duration `default:"1m" help:"How often to fetch origin/main in the background (0 to never)."`
 }
 
 func (c *TuiCmd) Run() error {
@@ -33,6 +34,8 @@ func (c *TuiCmd) Run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	go fetchMain(ctx, c.Fetch)
 
 	// Raw mode so single keypresses arrive without waiting for a newline. If
 	// stdin isn't a terminal we just run without keys: the list still
@@ -315,6 +318,35 @@ func gitLine(args ...string) string {
 	}
 	line, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
 	return line
+}
+
+// fetchMain refreshes origin/main in the background, so the ahead/behind counts
+// in the status bar drift towards what's actually on the remote instead of
+// showing whatever the last hand-run fetch left behind.
+//
+// Just the one branch: a bare `git fetch` walks every ref the remote has, and
+// this runs unattended in a pane. Failures are dropped — offline simply means
+// the counts stay put, and the one-line bar has better things to say than that
+// a background fetch didn't work. The sleep comes after the fetch rather than
+// from a ticker, which is also what keeps a slow fetch off the next one's heels.
+//
+// ponytail: "main" literally, so a master-branch repo fetches nothing at all.
+// Ask git for the remote's HEAD if that ever comes up.
+func fetchMain(ctx context.Context, every time.Duration) {
+	if every <= 0 {
+		return
+	}
+	for {
+		// origin main, not origin main:refs/remotes/origin/main: with the
+		// refspec a clone already has, git updates the remote-tracking branch
+		// on its own, and without forcing it past a rewritten history.
+		_ = exec.CommandContext(ctx, "git", "fetch", "--quiet", "origin", "main").Run()
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(every):
+		}
+	}
 }
 
 // gitPull runs a pull and boils its chatter down to the one line the bar has
