@@ -259,6 +259,16 @@ func (c *RemoveCmd) Run() error {
 
 type ListCmd struct{}
 
+// marker returns the "* " flag, or the blank gutter of the same width so
+// unmarked cells stay aligned. The trailing space keeps the marker from
+// gluing itself to the text, which makes the text easier to select.
+func marker(on bool) string {
+	if on {
+		return "* "
+	}
+	return "  "
+}
+
 // ponytail: package var so tests can force the tty branch.
 var stdoutIsTTY = func() bool { return term.IsTerminal(int(os.Stdout.Fd())) }
 
@@ -271,9 +281,10 @@ func (c *ListCmd) Run() error {
 	if err != nil {
 		return err
 	}
-	// The worktree we're running in gets a "*" on its name, and one on its
+	// The worktree we're running in gets a "* " on its name, and one on its
 	// last commit when it has uncommitted changes — but only for human
-	// readers: piped output stays parseable.
+	// readers: piped output stays parseable. Unmarked cells get the same
+	// two-space gutter so the columns line up.
 	tty := stdoutIsTTY()
 	var cur string
 	if tty {
@@ -296,8 +307,8 @@ func (c *ListCmd) Run() error {
 			branch: wt.Branch,
 			claude: "no",
 		}
-		if wt.Path == cur {
-			r.name = "*" + r.name
+		if tty {
+			r.name = marker(wt.Path == cur) + r.name
 		}
 		if r.branch == "" {
 			r.branch = "(detached)"
@@ -313,8 +324,8 @@ func (c *ListCmd) Run() error {
 			r.age = "?"
 			r.subject = "(no commits)"
 		}
-		if tty && gitutil.Dirty(wt.Path) {
-			r.subject = "*" + r.subject
+		if tty {
+			r.subject = marker(gitutil.Dirty(wt.Path)) + r.subject
 		}
 		rows = append(rows, r)
 	}
@@ -322,8 +333,12 @@ func (c *ListCmd) Run() error {
 		return b.sortTime.Compare(a.sortTime)
 	})
 
+	gutter := ""
+	if tty {
+		gutter = marker(false)
+	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tBRANCH\tAGE\tCLAUDE\tLAST COMMIT")
+	fmt.Fprintln(w, gutter+"NAME\tBRANCH\tAGE\tCLAUDE\t"+gutter+"LAST COMMIT")
 	for _, r := range rows {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", r.name, r.branch, r.age, r.claude, r.subject)
 	}
