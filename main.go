@@ -282,12 +282,12 @@ func (c *RemoveCmd) Run() error {
 
 type ListCmd struct{}
 
-// marker returns the "* " flag, or the blank gutter of the same width so
+// marker returns the flag glyph, or the blank gutter of the same width so
 // unmarked cells stay aligned. The trailing space keeps the marker from
 // gluing itself to the text, which makes the text easier to select.
-func marker(on bool) string {
+func marker(on bool, glyph string) string {
 	if on {
-		return "* "
+		return glyph + " "
 	}
 	return "  "
 }
@@ -304,14 +304,17 @@ func (c *ListCmd) Run() error {
 	if err != nil {
 		return err
 	}
-	// The worktree we're running in gets a "* " on its name, and one on its
-	// last commit when it has uncommitted changes — but only for human
-	// readers: piped output stays parseable. Unmarked cells get the same
-	// two-space gutter so the columns line up.
+	// The worktree we're running in gets a "* " on its name, one on its last
+	// commit when it has uncommitted changes, and a "✓ " on its branch when
+	// that branch is already merged — but only for human readers: piped
+	// output stays parseable. Unmarked cells get the same two-space gutter
+	// so the columns line up.
 	tty := stdoutIsTTY()
 	var cur string
+	var merged map[string]bool
 	if tty {
 		cur, _, _ = gitutil.CurrentClaudeWorktree()
+		merged = gitutil.MergedBranches()
 	}
 	claudeDir := filepath.Join(root, ".claude", "worktrees") + string(filepath.Separator)
 	claudeCwdSet := claudeCwds()
@@ -330,11 +333,12 @@ func (c *ListCmd) Run() error {
 			branch: wt.Branch,
 			claude: "no",
 		}
-		if tty {
-			r.name = marker(wt.Path == cur) + r.name
-		}
 		if r.branch == "" {
 			r.branch = "(detached)"
+		}
+		if tty {
+			r.name = marker(wt.Path == cur, "*") + r.name
+			r.branch = marker(merged[wt.Branch], "✓") + r.branch
 		}
 		if isClaudeActiveIn(wt.Path, claudeCwdSet) {
 			r.claude = "yes"
@@ -348,7 +352,7 @@ func (c *ListCmd) Run() error {
 			r.subject = "(no commits)"
 		}
 		if tty {
-			r.subject = marker(gitutil.Dirty(wt.Path)) + r.subject
+			r.subject = marker(gitutil.Dirty(wt.Path), "*") + r.subject
 		}
 		rows = append(rows, r)
 	}
@@ -358,10 +362,10 @@ func (c *ListCmd) Run() error {
 
 	gutter := ""
 	if tty {
-		gutter = marker(false)
+		gutter = marker(false, "")
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, gutter+"NAME\tBRANCH\tAGE\tCLAUDE\t"+gutter+"LAST COMMIT")
+	fmt.Fprintln(w, gutter+"NAME\t"+gutter+"BRANCH\tAGE\tCLAUDE\t"+gutter+"LAST COMMIT")
 	for _, r := range rows {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", r.name, r.branch, r.age, r.claude, r.subject)
 	}
