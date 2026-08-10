@@ -47,19 +47,18 @@ func TestListMarksCurrent(t *testing.T) {
 	defer func(orig func() bool) { stdoutIsTTY = orig }(stdoutIsTTY)
 	stdoutIsTTY = func() bool { return true }
 	for _, line := range strings.Split(capture(t, &ListCmd{}), "\n") {
-		name, rest, _ := strings.Cut(line, " ")
-		switch name {
-		case "NAME":
-		case "*" + here:
-			if !strings.Contains(rest, "*init") {
+		switch {
+		case line == "" || strings.HasPrefix(line, "  NAME"):
+		case strings.HasPrefix(line, "* "+here+" "):
+			if !strings.Contains(line, "* init") {
 				t.Errorf("dirty worktree missing commit marker: %q", line)
 			}
-		case other:
-			if strings.Contains(rest, "*") {
+		case strings.HasPrefix(line, "  "+other+" "):
+			if strings.Contains(line, "*") {
 				t.Errorf("clean worktree has a commit marker: %q", line)
 			}
 		default:
-			t.Errorf("unexpected first column %q in line %q", name, line)
+			t.Errorf("unexpected line %q", line)
 		}
 	}
 
