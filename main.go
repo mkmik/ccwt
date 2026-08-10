@@ -259,6 +259,9 @@ func (c *RemoveCmd) Run() error {
 
 type ListCmd struct{}
 
+// ponytail: package var so tests can force the tty branch.
+var stdoutIsTTY = func() bool { return term.IsTerminal(int(os.Stdout.Fd())) }
+
 func (c *ListCmd) Run() error {
 	root, err := gitutil.RepoRoot(true)
 	if err != nil {
@@ -267,6 +270,14 @@ func (c *ListCmd) Run() error {
 	wts, err := gitutil.ListWorktrees()
 	if err != nil {
 		return err
+	}
+	// The worktree we're running in gets a "*" on its name, and one on its
+	// last commit when it has uncommitted changes — but only for human
+	// readers: piped output stays parseable.
+	tty := stdoutIsTTY()
+	var cur string
+	if tty {
+		cur, _, _ = gitutil.CurrentClaudeWorktree()
 	}
 	claudeDir := filepath.Join(root, ".claude", "worktrees") + string(filepath.Separator)
 	claudeCwdSet := claudeCwds()
@@ -285,6 +296,9 @@ func (c *ListCmd) Run() error {
 			branch: wt.Branch,
 			claude: "no",
 		}
+		if wt.Path == cur {
+			r.name = "*" + r.name
+		}
 		if r.branch == "" {
 			r.branch = "(detached)"
 		}
@@ -298,6 +312,9 @@ func (c *ListCmd) Run() error {
 		} else {
 			r.age = "?"
 			r.subject = "(no commits)"
+		}
+		if tty && gitutil.Dirty(wt.Path) {
+			r.subject = "*" + r.subject
 		}
 		rows = append(rows, r)
 	}

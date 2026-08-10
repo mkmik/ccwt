@@ -66,9 +66,13 @@ and whether a Claude Code session is currently running in each:
 
 ```
 NAME                     BRANCH                          AGE  CLAUDE  LAST COMMIT
-dreamy-foraging-hickey   worktree-dreamy-foraging-hickey  2h  yes     Add the widget
+*dreamy-foraging-hickey  worktree-dreamy-foraging-hickey  2h  yes     *Add the widget
 calm-baking-otter        worktree-calm-baking-otter       1d  no      Fix the flux capacitor
 ```
+
+A `*` on the name marks the worktree you're currently in; a `*` on the last commit means
+that worktree has uncommitted changes. Both are omitted when stdout isn't a terminal, so
+piped output stays parseable.
 
 ## Using ccwt with Claude Code
 
