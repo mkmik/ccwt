@@ -88,7 +88,7 @@ func (c *TuiCmd) Run() error {
 	}
 	open := func() error {
 		name := u.sel
-		if name == "" {
+		if name == "" || !underHerdr() {
 			return nil
 		}
 		return act("opening "+name+"…", func() string { return herdrOpen(name) })
@@ -110,6 +110,10 @@ func (c *TuiCmd) Run() error {
 				return nil
 			case k == "p":
 				if err := act("pulling…", gitPull); err != nil {
+					return err
+				}
+			case k == "x" && underHerdr():
+				if err := act("creating…", herdrNew); err != nil {
 					return err
 				}
 			case k == "\x1b[A", k == "k":
@@ -261,11 +265,19 @@ func readKeys() <-chan string {
 // statusBar is one reverse-video line: what the keys do, then either a
 // transient message (the result of a pull) or how far the branch has drifted
 // from its upstream, cut or padded to exactly the terminal width. The
-// per-worktree actions only appear once there's a worktree to apply them to.
+// per-worktree actions only appear once there's a worktree to apply them to,
+// and the herdr ones only when there's a herdr to open a workspace in.
 func statusBar(cols int, msg, sel string) string {
+	herdr := underHerdr()
 	keys := " ccwt  q:quit  p:pull"
+	if herdr {
+		keys += "  x:new"
+	}
 	if sel != "" {
-		keys += "  ↵:open  r:remove"
+		if herdr {
+			keys += "  ↵:open"
+		}
+		keys += "  r:remove"
 	}
 	if msg == "" {
 		msg = gitDivergence()
@@ -315,6 +327,24 @@ func gitPull() string {
 		return "pull failed: " + strings.TrimSpace(lines[len(lines)-1])
 	}
 	return "pull: " + strings.TrimSpace(lines[0])
+}
+
+// underHerdr reports whether the tui is running inside a herdr pane — herdr
+// exports HERDR_ENV into every pane it spawns. Outside one there is no session
+// for `herdr worktree open` to put a workspace in, so the actions that call it
+// are hidden and their keys ignored rather than left to fail on every press.
+func underHerdr() bool { return os.Getenv("HERDR_ENV") != "" }
+
+// herdrNew is the herdr plugin's new-worktree action from the inside: create a
+// worktree, open it. --force-create in spirit, since the tui is usually run
+// from inside the repo and sometimes from inside a worktree, and either way
+// what "new" should do there is make a fresh one.
+func herdrNew() string {
+	_, name, err := (&NewWorktreeBranchCmd{ForceCreate: true}).create()
+	if err != nil {
+		return "new failed: " + err.Error()
+	}
+	return herdrOpen(name)
 }
 
 // herdrOpen opens a worktree as its own herdr workspace, the same way the

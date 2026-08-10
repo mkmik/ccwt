@@ -99,16 +99,27 @@ func (c *NewWorktreeBranchCmd) out(path, name string) string {
 }
 
 func (c *NewWorktreeBranchCmd) Run() error {
+	path, name, err := c.create()
+	if err != nil {
+		return err
+	}
+	emitOSC7(path)
+	emitCdRequest(path)
+	fmt.Println(c.out(path, name))
+	return nil
+}
+
+// create makes (or reuses) the worktree and reports its path and name, without
+// the terminal side effects Run adds — which is what callers that aren't a
+// command line (the tui) want.
+func (c *NewWorktreeBranchCmd) create() (string, string, error) {
 	if c.Name == "" && c.Switch == "" && !c.ForceCreate {
 		path, name, err := gitutil.CurrentClaudeWorktree()
 		if err != nil {
-			return err
+			return "", "", err
 		}
 		if name != "" {
-			emitOSC7(path)
-			emitCdRequest(path)
-			fmt.Println(c.out(path, name))
-			return nil
+			return path, name, nil
 		}
 	}
 
@@ -119,12 +130,12 @@ func (c *NewWorktreeBranchCmd) Run() error {
 
 	root, err := gitutil.RepoRoot(true)
 	if err != nil {
-		return err
+		return "", "", err
 	}
 
 	parent := filepath.Join(root, ".claude", "worktrees")
 	if err := os.MkdirAll(parent, 0o755); err != nil {
-		return err
+		return "", "", err
 	}
 
 	worktreePath := filepath.Join(parent, name)
@@ -136,7 +147,7 @@ func (c *NewWorktreeBranchCmd) Run() error {
 		// on a worktree we didn't create, so say so rather than silently
 		// landing the user on the wrong branch.
 		if c.Switch != "" {
-			return fmt.Errorf("worktree %q already exists: --switch only applies when creating one", name)
+			return "", "", fmt.Errorf("worktree %q already exists: --switch only applies when creating one", name)
 		}
 	case errors.Is(statErr, os.ErrNotExist):
 		var addErr error
@@ -146,16 +157,13 @@ func (c *NewWorktreeBranchCmd) Run() error {
 			addErr = gitutil.AddWorktree(worktreePath, "worktree-"+name)
 		}
 		if addErr != nil {
-			return addErr
+			return "", "", addErr
 		}
 	default:
-		return statErr
+		return "", "", statErr
 	}
 
-	emitOSC7(worktreePath)
-	emitCdRequest(worktreePath)
-	fmt.Println(c.out(worktreePath, name))
-	return nil
+	return worktreePath, name, nil
 }
 
 type CdCmd struct {
@@ -571,7 +579,7 @@ var cli struct {
 	NewWorktreeBranch NewWorktreeBranchCmd `cmd:"" name:"new" help:"Create a new worktree under .claude/worktrees/<name> on a new branch worktree-<name>, and print <name>."`
 	Cd                CdCmd                `cmd:"" name:"cd" help:"cd into an existing worktree under .claude/worktrees/<name> (errors if it doesn't exist). Use \"..\" for the enclosing repo root, or \"-\" for the previous directory."`
 	List              ListCmd              `cmd:"" name:"list" aliases:"ls" help:"List Claude Code worktrees with branch, age, running-session, and last commit."`
-	Tui               TuiCmd               `cmd:"" name:"tui" help:"Show the worktree list full-screen, refreshing as things change. q quits, p runs git pull, arrows select a worktree, enter (or a click) opens it in herdr, r removes it."`
+	Tui               TuiCmd               `cmd:"" name:"tui" help:"Show the worktree list full-screen, refreshing as things change. q quits, p runs git pull, arrows select a worktree, r removes it. Under herdr, x creates a worktree and opens it, and enter (or a click) opens the selected one."`
 	Remove            RemoveCmd            `cmd:"" name:"remove" help:"Delete a worktree under .claude/worktrees/<name> and its branch (merged-only; -D to force unmerged, --keep-branch to remove only the worktree). Use \".\" for the current worktree; removing it cds to the repo root."`
 	RepoRoot          RepoRootCmd          `cmd:"" name:"repo-root" help:"Print the root directory of the current git repository."`
 	DotDot            DotDotCmd            `cmd:"" name:".." help:"Print the enclosing repo root, stripping any .claude/worktrees/<name> suffix (shorthand for repo-root --root-worktree)."`
