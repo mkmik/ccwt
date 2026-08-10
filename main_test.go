@@ -13,16 +13,7 @@ import (
 // must describe the same worktree the nameful form prints — including the
 // enclosing-worktree case, where no worktree is created.
 func TestNewPath(t *testing.T) {
-	repo := t.TempDir()
-	t.Chdir(repo)
-	for _, args := range [][]string{
-		{"init", "-b", "main"},
-		{"-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "init"},
-	} {
-		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
+	initRepo(t)
 
 	name := capture(t, &NewWorktreeBranchCmd{})
 	path := capture(t, &NewWorktreeBranchCmd{Name: name, Path: true})
@@ -45,16 +36,7 @@ func TestNewPath(t *testing.T) {
 // and a dirty worktree's last commit. Each must appear on its row only, and
 // only when stdout is a tty.
 func TestListMarksCurrent(t *testing.T) {
-	repo := t.TempDir()
-	t.Chdir(repo)
-	for _, args := range [][]string{
-		{"init", "-b", "main"},
-		{"-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "init"},
-	} {
-		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
+	initRepo(t)
 	here := capture(t, &NewWorktreeBranchCmd{})
 	other := capture(t, &NewWorktreeBranchCmd{})
 	t.Chdir(capture(t, &NewWorktreeBranchCmd{Name: here, Path: true}))
@@ -85,6 +67,48 @@ func TestListMarksCurrent(t *testing.T) {
 	if out := capture(t, &ListCmd{}); strings.Contains(out, "*") {
 		t.Errorf("non-tty output contains a marker:\n%s", out)
 	}
+}
+
+// TestRemoveCurrent covers `ccwt remove .` from inside the worktree it names:
+// the worktree goes away and the command prints (and asks the wrapper to cd to)
+// the repo root, instead of refusing.
+func TestRemoveCurrent(t *testing.T) {
+	repo := initRepo(t)
+	path := capture(t, &NewWorktreeBranchCmd{Name: "gone", Path: true})
+	t.Chdir(path)
+
+	cdFile := filepath.Join(t.TempDir(), "cd")
+	t.Setenv("CCWT_WRAPPER_CD_FILE", cdFile)
+
+	// EvalSymlinks: on macOS t.TempDir() hands out /var/..., git reports /private/var/...
+	want, err := filepath.EvalSymlinks(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := capture(t, &RemoveCmd{Name: ".", Force: true}); got != want {
+		t.Errorf("printed %q, want repo root %q", got, want)
+	}
+	if got, err := os.ReadFile(cdFile); err != nil || string(got) != want {
+		t.Errorf("cd request = %q, %v; want %q", got, err, want)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("worktree %s still exists (%v)", path, err)
+	}
+}
+
+func initRepo(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	t.Chdir(repo)
+	for _, args := range [][]string{
+		{"init", "-b", "main"},
+		{"-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "init"},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	return repo
 }
 
 // capture runs cmd with stdout redirected and returns what it printed.

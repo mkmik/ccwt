@@ -39,6 +39,7 @@ ccwt new            # create a fresh worktree on a new branch, and cd into it
 ccwt list           # show all Claude Code worktrees in this repo
 ccwt ..             # jump back to the repository root
 ccwt remove <name>  # delete a worktree and its branch when you're done
+ccwt remove .       # ... or the one you're in: deletes it and cds you out
 ```
 
 `ccwt new` creates a worktree at `.claude/worktrees/<name>` on a new branch
@@ -151,7 +152,7 @@ swallow stderr, or you'll lose the cwd report.
 | `ccwt new [name]` | Create a worktree under `.claude/worktrees/<name>` on a new branch `worktree-<name>`, and print `<name>`. Generates a name if omitted; reuses an existing worktree of the same name. `--switch <branch>` checks the worktree out on an existing branch instead of creating one (`ccwt new` + `git switch <branch>`). When run inside a worktree it returns the enclosing one instead of creating a new one (override with `--force-create`). `--path` prints the worktree's absolute path instead of `<name>`. |
 | `ccwt cd <name>` | `cd` into an existing worktree under `.claude/worktrees/<name>` (with shell integration) — never creates it, errors if it doesn't exist, and the name is required. `ccwt cd ..` is shorthand for `ccwt ..`, and `ccwt cd -` jumps to the previous directory (`$OLDPWD`), like the shell's `cd -`. |
 | `ccwt list` | List the repo's Claude Code worktrees with branch, age, running-session status, and last commit, sorted newest-first. |
-| `ccwt remove <name>` | Remove the worktree at `.claude/worktrees/<name>` and delete its branch. Refuses if you're currently inside it. The branch is deleted only if merged; pass `-D` to force-delete an unmerged branch. |
+| `ccwt remove <name>` | Remove the worktree at `.claude/worktrees/<name>` and delete its branch. `.` means the worktree you're currently in; removing the one you're in cds you to the repo root, like `ccwt ..`. The branch is deleted only if merged; pass `-D` to force-delete an unmerged branch. |
 | `ccwt new-worktree-name` | Print a generated worktree name (`adjective-verb-noun`) without creating anything. |
 | `ccwt repo-root` | Print the root of the current git repository. Add `--root-worktree` to print the *enclosing* repo root when you're inside a `.claude/worktrees/<name>` worktree. |
 | `ccwt ..` | Shorthand for `repo-root --root-worktree`: print (and, with shell integration, `cd` to) the enclosing repository root. |
