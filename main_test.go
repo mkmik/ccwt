@@ -144,12 +144,44 @@ func TestRemoveUnmerged(t *testing.T) {
 	}
 }
 
+// TestRemoveSquashMerged: a branch contained in main, whose stale
+// origin/<branch> still points at the pre-squash commits, must still be
+// removable. `git branch -d` asks "merged into the upstream?" rather than
+// "merged into main?" and refuses — after the worktree is already gone.
+func TestRemoveSquashMerged(t *testing.T) {
+	repo := initRepo(t)
+	path := capture(t, &NewWorktreeBranchCmd{Name: "squashed", Path: true})
+	git(t, "-C", path, "commit", "--allow-empty", "-m", "work")
+
+	// The branch as pushed, then the PR squash-merged into main under a
+	// different commit and the branch caught up to it. Nobody ran
+	// `git fetch --prune`, so the remote-tracking ref is left behind.
+	// The remote needs its refspec for git to resolve the upstream at all.
+	git(t, "remote", "add", "origin", repo)
+	git(t, "update-ref", "refs/remotes/origin/worktree-squashed", "refs/heads/worktree-squashed")
+	git(t, "config", "branch.worktree-squashed.remote", "origin")
+	git(t, "config", "branch.worktree-squashed.merge", "refs/heads/worktree-squashed")
+	git(t, "commit", "--allow-empty", "-m", "squashed work (#1)")
+	git(t, "-C", path, "reset", "--hard", "main")
+
+	if err := (&RemoveCmd{Name: "squashed"}).Run(); err != nil {
+		t.Fatalf("removing a squash-merged worktree: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("worktree %s still exists (%v)", path, err)
+	}
+	if gitutil.BranchExists("worktree-squashed") {
+		t.Error("worktree removed but the branch was stranded")
+	}
+}
+
 // initRepo makes a git repo with one commit on main and chdirs into it.
 func initRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
 	t.Chdir(repo)
 	git(t, "init", "-b", "main")
+	git(t, "config", "core.hooksPath", "/dev/null") // ignore the user's global hooks
 	git(t, "commit", "--allow-empty", "-m", "init")
 	return repo
 }

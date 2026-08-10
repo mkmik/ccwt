@@ -128,17 +128,16 @@ func PruneWorktrees() error {
 	return nil
 }
 
-// DeleteBranch deletes a local branch. Without force, `git branch -d` is
-// used, which refuses to delete an unmerged branch; with force, `-D`
-// force-deletes. A branch that doesn't exist is treated as success so the
+// DeleteBranch deletes a local branch with `git branch -D`. The safety valve
+// is the caller's: `-d` would apply its own, *different* one — for a branch
+// with an upstream it asks "merged into the upstream?", not "merged into
+// main?", so a squash-merged branch whose stale origin/<branch> is still
+// around (nobody ran `git fetch --prune`) refuses to go, even though it is
+// contained in main. A branch that doesn't exist is treated as success so the
 // caller can re-invoke after a partial deletion without surfacing an error.
-func DeleteBranch(branch string, force bool) error {
-	flag := "-d"
-	if force {
-		flag = "-D"
-	}
+func DeleteBranch(branch string) error {
 	var buf bytes.Buffer
-	cmd := exec.Command("git", "branch", flag, branch)
+	cmd := exec.Command("git", "branch", "-D", branch)
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	if err := cmd.Run(); err != nil {
