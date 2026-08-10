@@ -42,5 +42,11 @@ cwd="$(json_str "$pane" foreground_cwd)"
 path="$(cd "$cwd" && "$ccwt" new --force-create --path)" ||
   fail "ccwt new failed" "in $cwd — is ccwt on PATH and $cwd a git repo?"
 
-"$herdr" worktree open --cwd "$cwd" --path "$path" --label "$(basename "$path")" --focus ||
+# herdr only spawns worktree workspaces from the repo's parent workspace — a
+# cwd inside a linked worktree gets rejected with `linked_worktree_source`. So
+# hand it the enclosing repo root (`ccwt ..` strips .claude/worktrees/<name>),
+# which is where ccwt put the new worktree anyway.
+root="$(cd "$cwd" && "$ccwt" ..)" || fail "no repo root" "for $cwd"
+
+"$herdr" worktree open --cwd "$root" --path "$path" --label "$(basename "$path")" --focus ||
   fail "worktree open failed" "$path"
