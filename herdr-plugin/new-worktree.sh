@@ -48,5 +48,8 @@ path="$(cd "$cwd" && "$ccwt" new --force-create --path)" ||
 # which is where ccwt put the new worktree anyway.
 root="$(cd "$cwd" && "$ccwt" ..)" || fail "no repo root" "for $cwd"
 
-"$herdr" worktree open --cwd "$root" --path "$path" --label "$(basename "$path")" --focus ||
+# No --label: herdr names a workspace after its root pane's directory, which is
+# already the worktree name. Passing one would pin a custom override instead,
+# so a later reopen would rename a workspace the user had renamed themselves.
+"$herdr" worktree open --cwd "$root" --path "$path" --focus ||
   fail "worktree open failed" "$path"

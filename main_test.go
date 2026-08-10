@@ -264,10 +264,95 @@ func TestGitDivergence(t *testing.T) {
 // is short (pad) or long (cut) — otherwise it wraps and shoves the table up.
 func TestStatusBarIsExactlyOneLineWide(t *testing.T) {
 	for _, msg := range []string{"", "ok", strings.Repeat("x", 200)} {
-		bar := statusBar(40, msg)
-		bar = strings.TrimSuffix(strings.TrimPrefix(bar, "\x1b[7m"), "\x1b[0m")
-		if got := len([]rune(bar)); got != 40 {
-			t.Errorf("statusBar(40, %.10q) is %d cols wide, want 40", msg, got)
+		for _, sel := range []string{"", "some-worktree"} {
+			bar := statusBar(40, msg, sel)
+			bar = strings.TrimSuffix(strings.TrimPrefix(bar, "\x1b[7m"), "\x1b[0m")
+			if got := len([]rune(bar)); got != 40 {
+				t.Errorf("statusBar(40, %.10q, %q) is %d cols wide, want 40", msg, sel, got)
+			}
+		}
+	}
+}
+
+// The selection is kept by name, so it has to survive the list changing under
+// it: rows reordering (a commit lands elsewhere) must not move it, and the
+// selected worktree disappearing must not wedge the arrows.
+func TestSelectionFollowsTheWorktree(t *testing.T) {
+	u := ui{names: []string{"alpha", "bravo", "charlie"}}
+	u.move(1) // nothing selected yet: start at the top
+	u.move(1)
+	if u.sel != "bravo" {
+		t.Fatalf("after two downs sel = %q, want bravo", u.sel)
+	}
+
+	// A commit reorders the list: the selection stays on bravo, and the next
+	// arrow moves relative to where bravo sits now.
+	u.names = []string{"bravo", "charlie", "alpha"}
+	u.move(1)
+	if u.sel != "charlie" {
+		t.Errorf("after the rows reordered, sel = %q, want charlie", u.sel)
+	}
+
+	u.names = []string{"alpha"} // bravo removed out from under us
+	u.sel = "bravo"
+	u.move(1)
+	if u.sel != "alpha" {
+		t.Errorf("after the selected worktree vanished, sel = %q, want alpha", u.sel)
+	}
+
+	u.names = nil
+	u.move(-1) // must not panic on an empty list
+}
+
+// A click is turned into a worktree by counting screen lines, so the frame's
+// row i must really be names[i] — off by the one header line, and clicking a
+// row would open (or `r` would remove) its neighbour.
+func TestFrameRowsMatchNames(t *testing.T) {
+	initRepo(t)
+	for _, name := range []string{"alpha", "bravo", "charlie"} {
+		path := capture(t, &NewWorktreeBranchCmd{Name: name, Path: true})
+		git(t, "-C", path, "commit", "--allow-empty", "-m", "subject-"+name)
+	}
+
+	// The first frame is what fills in the row names — as in the tui, where a
+	// frame is always painted before any key is read.
+	var u ui
+	if _, err := u.frame(); err != nil {
+		t.Fatal(err)
+	}
+	u.move(1) // selects the first row
+	lines, err := u.frame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, name := range u.names {
+		if !strings.Contains(lines[i+1], name) {
+			t.Errorf("names[%d] = %q, but line %d is %q", i, name, i+1, lines[i+1])
+		}
+	}
+	if !strings.HasPrefix(lines[1], "\x1b[7m") {
+		t.Errorf("selected row %q is not highlighted", lines[1])
+	}
+	if strings.HasPrefix(lines[2], "\x1b[7m") {
+		t.Errorf("unselected row %q is highlighted", lines[2])
+	}
+}
+
+// Only a left-button press opens a worktree: releases, wheel ticks and plain
+// keystrokes all have to fall through to the ordinary key handling.
+func TestMouseRow(t *testing.T) {
+	for k, want := range map[string]int{
+		"\x1b[<0;12;5M":  5,   // left press on screen row 5
+		"\x1b[<0;12;5m":  0,   // …its release
+		"\x1b[<64;12;5M": 0,   // wheel up
+		"\x1b[A":         0,   // arrow up
+		"r":              0,   // a key
+		"\x1b[<0;12;xM":  0,   // malformed row
+		"\x1b[<0;12M":    0,   // truncated
+		"\x1b[<0;1;999M": 999, // past the bottom of any screen; the caller bounds-checks
+	} {
+		if got := mouseRow(k); got != want {
+			t.Errorf("mouseRow(%q) = %d, want %d", k, got, want)
 		}
 	}
 }
