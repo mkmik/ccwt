@@ -378,11 +378,19 @@ func (c *ListCmd) Run() error {
 // unreliable because the official installer leaves the process showing up
 // as its version number (e.g. "2.1.139") rather than "claude".
 //
+// The two -c patterns (OR'd with each other, AND'ed with -d by -a) are only
+// a cheap prefilter on that command name: without them lsof enumerates the
+// mapped files of every process on the machine, which dominates the runtime
+// of `ccwt list` (~200ms vs ~70ms here). The txt check below still decides.
+//
 // On any lsof failure we return an empty set rather than erroring out:
 // the worst case is that the CLAUDE column reads "no" everywhere.
 func claudeCwds() map[string]bool {
 	cwds := map[string]bool{}
-	out, err := exec.Command("lsof", "-d", "cwd,txt", "-Fcn").Output()
+	out, err := exec.Command("lsof", "-a",
+		"-c", "/claude/i", // named after the binary…
+		"-c", `/^[0-9]+(\.[0-9]+)+$/`, // …or after the version, as the installer leaves it
+		"-d", "cwd,txt", "-Fcn").Output()
 	if err != nil {
 		return cwds
 	}
