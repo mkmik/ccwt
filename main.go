@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -309,6 +310,13 @@ func marker(on bool, glyph string) string {
 var stdoutIsTTY = func() bool { return term.IsTerminal(int(os.Stdout.Fd())) }
 
 func (c *ListCmd) Run() error {
+	return renderList(os.Stdout, stdoutIsTTY())
+}
+
+// renderList writes the worktree table to w. tty selects the human-reader
+// decorations (markers, ✓); `ccwt tui` always asks for them, plain `list`
+// only when stdout is a terminal.
+func renderList(out io.Writer, tty bool) error {
 	root, err := gitutil.RepoRoot(true)
 	if err != nil {
 		return err
@@ -322,7 +330,6 @@ func (c *ListCmd) Run() error {
 	// that branch is already merged — but only for human readers: piped
 	// output stays parseable. Unmarked cells get the same two-space gutter
 	// so the columns line up.
-	tty := stdoutIsTTY()
 	var cur string
 	var merged map[string]bool
 	if tty {
@@ -377,7 +384,7 @@ func (c *ListCmd) Run() error {
 	if tty {
 		gutter = marker(false, "")
 	}
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, gutter+"NAME\t"+gutter+"BRANCH\tAGE\tCLAUDE\t"+gutter+"LAST COMMIT")
 	for _, r := range rows {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", r.name, r.branch, r.age, r.claude, r.subject)
@@ -536,6 +543,7 @@ var cli struct {
 	NewWorktreeBranch NewWorktreeBranchCmd `cmd:"" name:"new" help:"Create a new worktree under .claude/worktrees/<name> on a new branch worktree-<name>, and print <name>."`
 	Cd                CdCmd                `cmd:"" name:"cd" help:"cd into an existing worktree under .claude/worktrees/<name> (errors if it doesn't exist). Use \"..\" for the enclosing repo root, or \"-\" for the previous directory."`
 	List              ListCmd              `cmd:"" name:"list" aliases:"ls" help:"List Claude Code worktrees with branch, age, running-session, and last commit."`
+	Tui               TuiCmd               `cmd:"" name:"tui" help:"Show the worktree list full-screen, refreshing as things change. q quits, p runs git pull."`
 	Remove            RemoveCmd            `cmd:"" name:"remove" help:"Delete a worktree under .claude/worktrees/<name> and its branch (merged-only; -D to force unmerged, --keep-branch to remove only the worktree). Use \".\" for the current worktree; removing it cds to the repo root."`
 	RepoRoot          RepoRootCmd          `cmd:"" name:"repo-root" help:"Print the root directory of the current git repository."`
 	DotDot            DotDotCmd            `cmd:"" name:".." help:"Print the enclosing repo root, stripping any .claude/worktrees/<name> suffix (shorthand for repo-root --root-worktree)."`

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"os/exec"
@@ -191,6 +192,55 @@ func git(t *testing.T, args ...string) {
 	args = append([]string{"-c", "user.email=t@t", "-c", "user.name=t"}, args...)
 	if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// The whole point of paint() is repainting without a screen clear, which is
+// what would make `ccwt tui` flicker. It also must not end with a newline: on
+// the bottom row, where the status bar lives, that scrolls the screen.
+func TestPaintOverwritesWithoutClearing(t *testing.T) {
+	var buf bytes.Buffer
+	paint(&buf, []string{"one", "two"})
+	got := buf.String()
+	if want := "\x1b[H" + "one\x1b[K" + "\r\n" + "two\x1b[K" + "\x1b[J"; got != want {
+		t.Errorf("paint() = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "\x1b[2J") {
+		t.Error("paint() clears the screen")
+	}
+}
+
+// The ahead/behind pair is parsed out of rev-list's two-column output, so it
+// has to survive both the no-upstream case and a real divergence.
+func TestGitDivergence(t *testing.T) {
+	initRepo(t)
+	if got, want := gitDivergence(), "main  (no upstream)"; got != want {
+		t.Errorf("gitDivergence() = %q, want %q", got, want)
+	}
+
+	// A local branch as its own upstream is enough to exercise the counting.
+	git(t, "branch", "upstream")
+	git(t, "config", "branch.main.remote", ".")
+	git(t, "config", "branch.main.merge", "refs/heads/upstream")
+	if got, want := gitDivergence(), "main  in sync"; got != want {
+		t.Errorf("gitDivergence() = %q, want %q", got, want)
+	}
+
+	git(t, "commit", "--allow-empty", "-m", "ahead")
+	if got, want := gitDivergence(), "main  ↑1 ↓0"; got != want {
+		t.Errorf("gitDivergence() = %q, want %q", got, want)
+	}
+}
+
+// The status bar has to be exactly one screen line wide, whether the message
+// is short (pad) or long (cut) — otherwise it wraps and shoves the table up.
+func TestStatusBarIsExactlyOneLineWide(t *testing.T) {
+	for _, msg := range []string{"", "ok", strings.Repeat("x", 200)} {
+		bar := statusBar(40, msg)
+		bar = strings.TrimSuffix(strings.TrimPrefix(bar, "\x1b[7m"), "\x1b[0m")
+		if got := len([]rune(bar)); got != 40 {
+			t.Errorf("statusBar(40, %.10q) is %d cols wide, want 40", msg, got)
+		}
 	}
 }
 
