@@ -224,7 +224,7 @@ func emitOSC7(path string) {
 }
 
 type RemoveCmd struct {
-	Name  string `arg:"" help:"Worktree name to remove."`
+	Name  string `arg:"" help:"Worktree name to remove. Use \".\" for the worktree you're currently in."`
 	Force bool   `short:"D" help:"Force-delete the branch even when it is not merged."`
 }
 
@@ -234,12 +234,28 @@ func (c *RemoveCmd) Run() error {
 		return err
 	}
 
-	worktreePath := filepath.Join(root, ".claude", "worktrees", c.Name)
-	branch := "worktree-" + c.Name
+	name := c.Name
+	if name == "." {
+		if _, name, err = gitutil.CurrentClaudeWorktree(); err != nil {
+			return err
+		}
+		if name == "" {
+			return errors.New(`remove .: not inside a Claude Code worktree`)
+		}
+	}
 
+	worktreePath := filepath.Join(root, ".claude", "worktrees", name)
+	branch := "worktree-" + name
+
+	// Removing the worktree we're standing in leaves the process in a deleted
+	// directory, which makes every subsequent git fork fail — so hop out to the
+	// repo root first, and cd the shell there afterwards (same as `ccwt cd ..`).
 	cwdTop, _ := gitutil.RepoRoot(false)
-	if cwdTop == worktreePath {
-		return fmt.Errorf("refusing to remove %s: current directory is inside it (cd elsewhere first)", c.Name)
+	inside := cwdTop == worktreePath
+	if inside {
+		if err := os.Chdir(root); err != nil {
+			return err
+		}
 	}
 
 	if _, err := os.Stat(worktreePath); err == nil {
@@ -254,7 +270,14 @@ func (c *RemoveCmd) Run() error {
 		return err
 	}
 
-	return gitutil.DeleteBranch(branch, c.Force)
+	if err := gitutil.DeleteBranch(branch, c.Force); err != nil {
+		return err
+	}
+
+	if inside {
+		return (&DotDotCmd{}).Run()
+	}
+	return nil
 }
 
 type ListCmd struct{}
@@ -473,7 +496,7 @@ var cli struct {
 	NewWorktreeBranch NewWorktreeBranchCmd `cmd:"" name:"new" help:"Create a new worktree under .claude/worktrees/<name> on a new branch worktree-<name>, and print <name>."`
 	Cd                CdCmd                `cmd:"" name:"cd" help:"cd into an existing worktree under .claude/worktrees/<name> (errors if it doesn't exist). Use \"..\" for the enclosing repo root, or \"-\" for the previous directory."`
 	List              ListCmd              `cmd:"" name:"list" aliases:"ls" help:"List Claude Code worktrees with branch, age, running-session, and last commit."`
-	Remove            RemoveCmd            `cmd:"" name:"remove" help:"Delete a worktree under .claude/worktrees/<name> and its branch (merged-only; -D to force unmerged)."`
+	Remove            RemoveCmd            `cmd:"" name:"remove" help:"Delete a worktree under .claude/worktrees/<name> and its branch (merged-only; -D to force unmerged). Use \".\" for the current worktree; removing it cds to the repo root."`
 	RepoRoot          RepoRootCmd          `cmd:"" name:"repo-root" help:"Print the root directory of the current git repository."`
 	DotDot            DotDotCmd            `cmd:"" name:".." help:"Print the enclosing repo root, stripping any .claude/worktrees/<name> suffix (shorthand for repo-root --root-worktree)."`
 	Init              InitCmd              `cmd:"" name:"init" help:"Emit a shell integration snippet to source from your rc file (e.g. source <(ccwt init zsh), or for fish: ccwt init fish | source)."`
