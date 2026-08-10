@@ -4,6 +4,7 @@ package gitutil
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -35,6 +36,11 @@ func RepoRoot(stripClaudeWorktree bool) (string, error) {
 	return path, nil
 }
 
+// LockReason is the reason ccwt-created worktrees are locked with, so
+// `git worktree prune` never reclaims one whose directory is temporarily
+// unavailable, and so removal can tell ccwt's own lock from a hand-made one.
+const LockReason = "ccwt"
+
 // AddWorktree creates a new linked worktree at `path` on a freshly-created
 // branch `branch`, via `git worktree add -b <branch> <path>`. On success the
 // command is silent — git's progress chatter ("Preparing worktree…",
@@ -54,7 +60,8 @@ func AddWorktreeOnBranch(path, branch string) error {
 
 func addWorktree(args ...string) error {
 	var buf bytes.Buffer
-	cmd := exec.Command("git", append([]string{"worktree", "add"}, args...)...)
+	args = append([]string{"worktree", "add", "--lock", "--reason", LockReason}, args...)
+	cmd := exec.Command("git", args...)
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	if err := cmd.Run(); err != nil {
@@ -66,10 +73,19 @@ func addWorktree(args ...string) error {
 
 // RemoveWorktree removes the linked worktree at path via
 // `git worktree remove --force <path>`. --force is used so a worktree
-// with local modifications still gets removed. If the path is not a
-// registered worktree (already gone), nil is returned — making the
-// operation idempotent.
+// with local modifications still gets removed. A worktree locked by ccwt
+// (see LockReason) is unlocked first; one locked by hand with a different
+// reason is left alone, so git refuses the removal and the user's lock
+// does what they meant it to. If the path is not a registered worktree
+// (already gone), nil is returned — making the operation idempotent.
 func RemoveWorktree(path string) error {
+	if lockReason(path) == LockReason {
+		if out, err := exec.Command("git", "worktree", "unlock", path).CombinedOutput(); err != nil {
+			os.Stderr.Write(out)
+			return err
+		}
+	}
+
 	var buf bytes.Buffer
 	cmd := exec.Command("git", "worktree", "remove", "--force", path)
 	cmd.Stdout = &buf
@@ -86,8 +102,21 @@ func RemoveWorktree(path string) error {
 }
 
 // PruneWorktrees runs `git worktree prune` to clean up stale registrations
-// (worktree entries whose on-disk directory no longer exists).
+// (worktree entries whose on-disk directory no longer exists). Prune skips
+// locked worktrees, so ccwt's own locks are released first for entries whose
+// directory is already gone — otherwise a hand-deleted worktree could never
+// be cleaned up. Locks set by hand with another reason are left in place.
 func PruneWorktrees() error {
+	wts, _ := ListWorktrees()
+	for _, wt := range wts {
+		if wt.LockReason != LockReason {
+			continue
+		}
+		if _, err := os.Stat(wt.Path); errors.Is(err, os.ErrNotExist) {
+			exec.Command("git", "worktree", "unlock", wt.Path).Run()
+		}
+	}
+
 	var buf bytes.Buffer
 	cmd := exec.Command("git", "worktree", "prune")
 	cmd.Stdout = &buf
@@ -125,8 +154,9 @@ func DeleteBranch(branch string, force bool) error {
 
 // Worktree is one entry from `git worktree list`.
 type Worktree struct {
-	Path   string
-	Branch string // empty when HEAD is detached
+	Path       string
+	Branch     string // empty when HEAD is detached
+	LockReason string // empty when unlocked, or locked without a reason
 }
 
 // ListWorktrees parses `git worktree list --porcelain` and returns all
@@ -150,10 +180,27 @@ func ListWorktrees() ([]Worktree, error) {
 			cur.Path = rest
 		} else if rest, ok := strings.CutPrefix(line, "branch "); ok {
 			cur.Branch = strings.TrimPrefix(rest, "refs/heads/")
+		} else if rest, ok := strings.CutPrefix(line, "locked "); ok {
+			cur.LockReason = rest
 		}
 	}
 	flush()
 	return wts, nil
+}
+
+// lockReason returns the reason the worktree at path is locked with, or ""
+// when it is unlocked, unregistered, or git could not be asked.
+func lockReason(path string) string {
+	wts, err := ListWorktrees()
+	if err != nil {
+		return ""
+	}
+	for _, wt := range wts {
+		if wt.Path == path {
+			return wt.LockReason
+		}
+	}
+	return ""
 }
 
 // Commit holds the bits of a git commit we display.
