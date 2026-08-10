@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mkmik/ccwt/internal/gitutil"
 )
@@ -354,6 +356,38 @@ func TestMouseRow(t *testing.T) {
 		if got := mouseRow(k); got != want {
 			t.Errorf("mouseRow(%q) = %d, want %d", k, got, want)
 		}
+	}
+}
+
+// The background fetch has to actually move origin/main, and it has to stop
+// when the tui does rather than outliving it.
+func TestFetchMain(t *testing.T) {
+	origin := initRepo(t)
+	clone := t.TempDir()
+	git(t, "clone", "--quiet", origin, clone)
+	git(t, "-C", origin, "commit", "--allow-empty", "-m", "remote work")
+	t.Chdir(clone)
+
+	want := gitLine("-C", origin, "rev-parse", "HEAD")
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); fetchMain(ctx, time.Hour) }() // an hour: only the first fetch is under test
+
+	for range 100 {
+		if gitLine("rev-parse", "origin/main") == want {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := gitLine("rev-parse", "origin/main"); got != want {
+		t.Errorf("origin/main = %s after the background fetch, want %s", got, want)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Error("fetchMain outlived its context")
 	}
 }
 
