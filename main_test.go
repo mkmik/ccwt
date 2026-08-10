@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mkmik/ccwt/internal/gitutil"
 )
 
 // TestNewPath covers `ccwt new --path`: the printed path must be absolute and
@@ -113,6 +115,32 @@ func TestListMarksMerged(t *testing.T) {
 				t.Errorf("tty=%v: merged glyph = %v, want %v: %q", tty, got, want, line)
 			}
 		}
+	}
+}
+
+// TestRemoveUnmerged: an unmerged branch blocks the removal outright, leaving
+// the worktree intact rather than stranding the branch — and --keep-branch
+// removes the worktree while keeping the branch.
+func TestRemoveUnmerged(t *testing.T) {
+	initRepo(t)
+	path := capture(t, &NewWorktreeBranchCmd{Name: "ahead", Path: true})
+	git(t, "-C", path, "commit", "--allow-empty", "-m", "ahead")
+
+	if err := (&RemoveCmd{Name: "ahead"}).Run(); err == nil {
+		t.Error("removing an unmerged worktree succeeded, want refusal")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("refused remove deleted the worktree anyway: %v", err)
+	}
+
+	if err := (&RemoveCmd{Name: "ahead", KeepBranch: true}).Run(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("worktree %s still exists (%v)", path, err)
+	}
+	if !gitutil.BranchExists("worktree-ahead") {
+		t.Error("--keep-branch deleted the branch")
 	}
 }
 

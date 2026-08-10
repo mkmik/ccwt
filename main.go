@@ -224,8 +224,9 @@ func emitOSC7(path string) {
 }
 
 type RemoveCmd struct {
-	Name  string `arg:"" help:"Worktree name to remove. Use \".\" for the worktree you're currently in."`
-	Force bool   `short:"D" help:"Force-delete the branch even when it is not merged."`
+	Name       string `arg:"" help:"Worktree name to remove. Use \".\" for the worktree you're currently in."`
+	Force      bool   `short:"D" help:"Force-delete the branch even when it is not merged."`
+	KeepBranch bool   `help:"Remove the worktree but keep its branch."`
 }
 
 func (c *RemoveCmd) Run() error {
@@ -246,6 +247,14 @@ func (c *RemoveCmd) Run() error {
 
 	worktreePath := filepath.Join(root, ".claude", "worktrees", name)
 	branch := "worktree-" + name
+
+	// A branch checked out in a worktree can only be deleted once that worktree
+	// is gone, so an unmerged branch used to leave the worktree removed and the
+	// branch stranded behind it. Settle it before anything is touched. A branch
+	// that doesn't exist (a worktree made by `new --switch`, say) can't strand.
+	if !c.KeepBranch && !c.Force && gitutil.BranchExists(branch) && !gitutil.MergedBranches()[branch] {
+		return fmt.Errorf("%s is not merged: re-run with -D to delete it anyway, or --keep-branch to remove only the worktree", branch)
+	}
 
 	// Removing the worktree we're standing in leaves the process in a deleted
 	// directory, which makes every subsequent git fork fail — so hop out to the
@@ -270,8 +279,10 @@ func (c *RemoveCmd) Run() error {
 		return err
 	}
 
-	if err := gitutil.DeleteBranch(branch, c.Force); err != nil {
-		return err
+	if !c.KeepBranch {
+		if err := gitutil.DeleteBranch(branch, c.Force); err != nil {
+			return err
+		}
 	}
 
 	if inside {
@@ -515,7 +526,7 @@ var cli struct {
 	NewWorktreeBranch NewWorktreeBranchCmd `cmd:"" name:"new" help:"Create a new worktree under .claude/worktrees/<name> on a new branch worktree-<name>, and print <name>."`
 	Cd                CdCmd                `cmd:"" name:"cd" help:"cd into an existing worktree under .claude/worktrees/<name> (errors if it doesn't exist). Use \"..\" for the enclosing repo root, or \"-\" for the previous directory."`
 	List              ListCmd              `cmd:"" name:"list" aliases:"ls" help:"List Claude Code worktrees with branch, age, running-session, and last commit."`
-	Remove            RemoveCmd            `cmd:"" name:"remove" help:"Delete a worktree under .claude/worktrees/<name> and its branch (merged-only; -D to force unmerged). Use \".\" for the current worktree; removing it cds to the repo root."`
+	Remove            RemoveCmd            `cmd:"" name:"remove" help:"Delete a worktree under .claude/worktrees/<name> and its branch (merged-only; -D to force unmerged, --keep-branch to remove only the worktree). Use \".\" for the current worktree; removing it cds to the repo root."`
 	RepoRoot          RepoRootCmd          `cmd:"" name:"repo-root" help:"Print the root directory of the current git repository."`
 	DotDot            DotDotCmd            `cmd:"" name:".." help:"Print the enclosing repo root, stripping any .claude/worktrees/<name> suffix (shorthand for repo-root --root-worktree)."`
 	Init              InitCmd              `cmd:"" name:"init" help:"Emit a shell integration snippet to source from your rc file (e.g. source <(ccwt init zsh), or for fish: ccwt init fish | source)."`
