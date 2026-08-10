@@ -29,12 +29,6 @@ func (c *TuiCmd) Run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// A resize invalidates the cached frame: what's on screen no longer
-	// matches the layout we last painted, so force a full repaint.
-	winch := make(chan os.Signal, 1)
-	signal.Notify(winch, syscall.SIGWINCH)
-	defer signal.Stop(winch)
-
 	// Raw mode so single keypresses arrive without waiting for a newline. If
 	// stdin isn't a terminal we just run without keys: the list still
 	// refreshes, and Ctrl-C still works because ISIG stays on. A nil channel
@@ -76,8 +70,6 @@ func (c *TuiCmd) Run() error {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-winch:
-			last = ""
 		case <-tick.C:
 			msg = ""
 		case k := <-keys:
@@ -118,6 +110,12 @@ func readKeys() <-chan byte {
 
 // frame renders the full screen: the worktree table, padding, and a status bar
 // pinned to the bottom row.
+//
+// The frame is sized to the terminal, which is also how a resize gets noticed:
+// different size, different frame, so the ordinary diff repaints it. That's
+// cheaper than a SIGWINCH handler — and portable, since SIGWINCH doesn't exist
+// on Windows. ponytail: costs up to one --interval of staleness after a
+// resize; wire up the signal (behind a build tag) if that ever grates.
 func frame(msg string) ([]string, error) {
 	var buf bytes.Buffer
 	if err := renderList(&buf, true); err != nil {

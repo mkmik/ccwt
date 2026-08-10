@@ -24,6 +24,13 @@ jobs:
       - name: Build
         run: go build -v ./...
 
+      # Release cross-compiles for windows and darwin, so a platform-specific
+      # symbol breaks the release long after the PR that introduced it is green.
+      - name: Cross-build
+        run: |
+          GOOS=windows go build ./...
+          GOOS=darwin go build ./...
+
       - name: Vet
         run: go vet ./...
 
