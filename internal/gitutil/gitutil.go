@@ -226,6 +226,14 @@ func LastCommit(repoPath string) (Commit, error) {
 	return Commit{Time: time.Unix(sec, 0), Subject: subject}, nil
 }
 
+// Dirty reports whether the worktree at repoPath has uncommitted changes,
+// untracked files included. A git failure reads as clean: this only decorates
+// a listing, and is not worth failing it over.
+func Dirty(repoPath string) bool {
+	out, err := exec.Command("git", "-C", repoPath, "status", "--porcelain").Output()
+	return err == nil && len(out) > 0
+}
+
 // CurrentClaudeWorktree returns the path and name of the Claude Code
 // worktree that contains the git toplevel of the current working
 // directory, or ("", "", nil) if the toplevel isn't shaped like
