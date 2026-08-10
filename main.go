@@ -311,20 +311,23 @@ func marker(on bool, glyph string) string {
 var stdoutIsTTY = func() bool { return term.IsTerminal(int(os.Stdout.Fd())) }
 
 func (c *ListCmd) Run() error {
-	return renderList(os.Stdout, stdoutIsTTY())
+	_, err := renderList(os.Stdout, stdoutIsTTY())
+	return err
 }
 
-// renderList writes the worktree table to w. tty selects the human-reader
-// decorations (markers, ✓); `ccwt tui` always asks for them, plain `list`
-// only when stdout is a terminal.
-func renderList(out io.Writer, tty bool) error {
+// renderList writes the worktree table to w and returns the worktree names in
+// the order their rows were printed, which is what lets `ccwt tui` map a
+// screen line back to a worktree. tty selects the human-reader decorations
+// (markers, ✓); the tui always asks for them, plain `list` only when stdout is
+// a terminal.
+func renderList(out io.Writer, tty bool) ([]string, error) {
 	root, err := gitutil.RepoRoot(true)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	wts, err := gitutil.ListWorktrees()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// The worktree we're running in gets a "* " on its name, one on its last
 	// commit when it has uncommitted changes, and a "✓ " on its branch when
@@ -338,6 +341,7 @@ func renderList(out io.Writer, tty bool) error {
 
 	type row struct {
 		name, branch, age, claude, subject string
+		plain                              string // name without the tty marker
 		dirty                              bool
 		sortTime                           time.Time
 	}
@@ -362,7 +366,8 @@ func renderList(out io.Writer, tty bool) error {
 	for i, wt := range claudeWts {
 		wg.Go(func() {
 			r := &rows[i]
-			r.name = filepath.Base(wt.Path)
+			r.plain = filepath.Base(wt.Path)
+			r.name = r.plain
 			r.branch = wt.Branch
 			if r.branch == "" {
 				r.branch = "(detached)"
@@ -407,10 +412,12 @@ func renderList(out io.Writer, tty bool) error {
 	}
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, gutter+"NAME\t"+gutter+"BRANCH\tAGE\tCLAUDE\t"+gutter+"LAST COMMIT")
-	for _, r := range rows {
+	names := make([]string, len(rows))
+	for i, r := range rows {
+		names[i] = r.plain
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", r.name, r.branch, r.age, r.claude, r.subject)
 	}
-	return w.Flush()
+	return names, w.Flush()
 }
 
 // claudeCwds returns the set of working directories of currently-running
@@ -564,7 +571,7 @@ var cli struct {
 	NewWorktreeBranch NewWorktreeBranchCmd `cmd:"" name:"new" help:"Create a new worktree under .claude/worktrees/<name> on a new branch worktree-<name>, and print <name>."`
 	Cd                CdCmd                `cmd:"" name:"cd" help:"cd into an existing worktree under .claude/worktrees/<name> (errors if it doesn't exist). Use \"..\" for the enclosing repo root, or \"-\" for the previous directory."`
 	List              ListCmd              `cmd:"" name:"list" aliases:"ls" help:"List Claude Code worktrees with branch, age, running-session, and last commit."`
-	Tui               TuiCmd               `cmd:"" name:"tui" help:"Show the worktree list full-screen, refreshing as things change. q quits, p runs git pull."`
+	Tui               TuiCmd               `cmd:"" name:"tui" help:"Show the worktree list full-screen, refreshing as things change. q quits, p runs git pull, arrows select a worktree, enter (or a click) opens it in herdr, r removes it."`
 	Remove            RemoveCmd            `cmd:"" name:"remove" help:"Delete a worktree under .claude/worktrees/<name> and its branch (merged-only; -D to force unmerged, --keep-branch to remove only the worktree). Use \".\" for the current worktree; removing it cds to the repo root."`
 	RepoRoot          RepoRootCmd          `cmd:"" name:"repo-root" help:"Print the root directory of the current git repository."`
 	DotDot            DotDotCmd            `cmd:"" name:".." help:"Print the enclosing repo root, stripping any .claude/worktrees/<name> suffix (shorthand for repo-root --root-worktree)."`
