@@ -95,19 +95,43 @@ func TestRemoveCurrent(t *testing.T) {
 	}
 }
 
+// TestListMarksMerged: a branch already contained in main gets the "✓" glyph,
+// one with commits of its own doesn't. Tty-only, like the other markers.
+func TestListMarksMerged(t *testing.T) {
+	initRepo(t)
+	capture(t, &NewWorktreeBranchCmd{Name: "merged"})
+	ahead := capture(t, &NewWorktreeBranchCmd{Name: "ahead", Path: true})
+	git(t, "-C", ahead, "commit", "--allow-empty", "-m", "ahead")
+
+	defer func(orig func() bool) { stdoutIsTTY = orig }(stdoutIsTTY)
+	for _, tty := range []bool{true, false} {
+		stdoutIsTTY = func() bool { return tty }
+		for _, line := range strings.Split(capture(t, &ListCmd{}), "\n") {
+			name, rest, _ := strings.Cut(strings.TrimPrefix(line, "  "), " ")
+			want := tty && name == "merged"
+			if got := strings.Contains(rest, "✓ worktree-"+name); got != want {
+				t.Errorf("tty=%v: merged glyph = %v, want %v: %q", tty, got, want, line)
+			}
+		}
+	}
+}
+
+// initRepo makes a git repo with one commit on main and chdirs into it.
 func initRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
 	t.Chdir(repo)
-	for _, args := range [][]string{
-		{"init", "-b", "main"},
-		{"-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "init"},
-	} {
-		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
+	git(t, "init", "-b", "main")
+	git(t, "commit", "--allow-empty", "-m", "init")
 	return repo
+}
+
+func git(t *testing.T, args ...string) {
+	t.Helper()
+	args = append([]string{"-c", "user.email=t@t", "-c", "user.name=t"}, args...)
+	if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
 }
 
 // capture runs cmd with stdout redirected and returns what it printed.

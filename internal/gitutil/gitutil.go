@@ -226,6 +226,29 @@ func LastCommit(repoPath string) (Commit, error) {
 	return Commit{Time: time.Unix(sec, 0), Subject: subject}, nil
 }
 
+// MergedBranches returns the set of local branches already contained in the
+// repo's main branch ("main", or "master" when there is no "main"). A git
+// failure yields an empty set: this only decorates a listing.
+//
+// ponytail: local main only — a branch merged upstream but not pulled yet
+// reads as unmerged. Compare against origin/main too if that bites.
+func MergedBranches() map[string]bool {
+	merged := map[string]bool{}
+	for _, base := range []string{"main", "master"} {
+		out, err := exec.Command("git", "branch", "--merged", base, "--format=%(refname:short)").Output()
+		if err != nil {
+			continue
+		}
+		for b := range strings.SplitSeq(string(out), "\n") {
+			if b != "" {
+				merged[b] = true
+			}
+		}
+		break
+	}
+	return merged
+}
+
 // Dirty reports whether the worktree at repoPath has uncommitted changes,
 // untracked files included. A git failure reads as clean: this only decorates
 // a listing, and is not worth failing it over.
