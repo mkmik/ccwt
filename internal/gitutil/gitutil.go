@@ -249,6 +249,11 @@ func MergedBranches() map[string]bool {
 	return merged
 }
 
+// BranchExists reports whether refs/heads/<branch> resolves.
+func BranchExists(branch string) bool {
+	return exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/"+branch).Run() == nil
+}
+
 // Dirty reports whether the worktree at repoPath has uncommitted changes,
 // untracked files included. A git failure reads as clean: this only decorates
 // a listing, and is not worth failing it over.
