@@ -411,6 +411,93 @@ func TestFetchMain(t *testing.T) {
 	}
 }
 
+// The table has to fit the terminal at any width: one column too many and
+// every row wraps, which wrecks the alignment and, in the tui, the cursor
+// arithmetic. Long names, long branches and long commits all compete for the
+// same space, so give it all three.
+func TestListFitsTerminalWidth(t *testing.T) {
+	initRepo(t)
+	for _, name := range []string{"exceedingly-verbose-worktree-name-one", "exceedingly-verbose-worktree-name-two"} {
+		path := capture(t, &NewWorktreeBranchCmd{Name: name, Path: true})
+		git(t, "-C", path, "commit", "--allow-empty", "-m", "a commit subject that runs on well past any sensible column width (#1234)")
+	}
+
+	for _, width := range []int{20, 50, 60, 80, 100, 200} {
+		var buf bytes.Buffer
+		if _, err := renderList(&buf, true, width); err != nil {
+			t.Fatal(err)
+		}
+		// Every column bottoms out at minCol, so a terminal narrower than that
+		// floor gets the floor rather than an ever-thinner table.
+		floor := 4*minCol + len("AGE") + len("CLAUDE") + 2*(len(columns)-1)
+		for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
+			if got := len([]rune(line)); got > max(width, floor) {
+				t.Errorf("width=%d: line is %d columns wide: %q", width, got, line)
+			}
+		}
+	}
+}
+
+// Cutting the middle out of a branch or a commit subject has to leave the last
+// word — the part that says which branch, or which PR — attached.
+func TestElide(t *testing.T) {
+	for _, tc := range []struct {
+		s     string
+		limit int
+		want  string
+	}{
+		{"worktree-elegant-bouncing-cook", 23, "worktree-elegant-…-cook"},
+		{"Fix the windows build broken by tui (#32)", 28, "Fix the windows build… (#32)"},
+		{"already short", 20, "already short"},
+		// No last word worth keeping: fall back to a plain trailing ellipsis.
+		{"antidisestablishmentarianism", 10, "antidises…"},
+		{"tui: elaboratelyhyphenated-veryverylongfinalword", 20, "tui: elaboratelyhyp…"},
+	} {
+		if got := elide(tc.s, tc.limit); got != tc.want {
+			t.Errorf("elide(%q, %d) = %q, want %q", tc.s, tc.limit, got, tc.want)
+		} else if n := len([]rune(got)); n > tc.limit {
+			t.Errorf("elide(%q, %d) is %d characters wide", tc.s, tc.limit, n)
+		}
+	}
+}
+
+// The SESSION column reads a real Claude Code transcript, so pin what it
+// picks out of one: the last recap wins, and a session that never recapped
+// falls back to the first prompt the user typed — never to the noise around
+// it (hook attachments, tool results, slash commands), and never to more than
+// one line.
+func TestSummarizeTranscript(t *testing.T) {
+	const (
+		attachment = `{"type":"attachment","attachment":{"content":"a hook that talks about away_summary"}}`
+		meta       = `{"type":"user","isMeta":true,"message":{"role":"user","content":"Caveat: the messages below…"}}`
+		slash      = `{"type":"user","message":{"role":"user","content":"<command-name>/recap</command-name>"}}`
+		toolResult = `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"ok"}]}}`
+		prompt     = `{"type":"user","message":{"role":"user","content":"Proposal\n\n  add --path to new"}}`
+		recap1     = `{"type":"system","subtype":"away_summary","content":"Goal was the first thing. (disable recaps in /config)"}`
+		recap2     = `{"type":"system","subtype":"away_summary","content":"Goal was the last thing. (disable recaps in /config)"}`
+	)
+
+	for _, tc := range []struct {
+		name  string
+		lines []string
+		want  string
+	}{
+		{"recap wins", []string{attachment, meta, prompt, recap1, toolResult, recap2}, "Goal was the last thing."},
+		{"falls back to the first prompt", []string{attachment, meta, slash, prompt, toolResult}, "Proposal add --path to new"},
+		{"nothing to say", []string{attachment, meta, slash, toolResult}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "session.jsonl")
+			if err := os.WriteFile(path, []byte(strings.Join(tc.lines, "\n")+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if got := summarizeTranscript(path); got != tc.want {
+				t.Errorf("summarizeTranscript() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // capture runs cmd with stdout redirected and returns what it printed.
 func capture(t *testing.T, cmd interface{ Run() error }) string {
 	t.Helper()
