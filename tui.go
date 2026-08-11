@@ -41,7 +41,7 @@ func (c *TuiCmd) Run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	go fetchMain(ctx, c.Fetch)
+	go fetchMain(ctx, c.Fetch, projects)
 
 	// Raw mode so single keypresses arrive without waiting for a newline. If
 	// stdin isn't a terminal we just run without keys: the list still
@@ -128,7 +128,7 @@ func (c *TuiCmd) Run() error {
 			case k == "q", k == "\x03": // \x03 = Ctrl-C, which raw mode delivers as a keystroke
 				return nil
 			case k == "p":
-				if err := act("pulling…", gitPull); err != nil {
+				if err := act("pulling…", func() string { return gitPull(u.gitDir()) }); err != nil {
 					return err
 				}
 			case k == "x" && underHerdr():
@@ -214,12 +214,29 @@ func (u *ui) toggle() {
 
 // root is the repo an action applies to: the selected row's project, or the
 // repo the tui is running in when nothing is selected. Outside -g they're all
-// the same repo.
+// the same repo. Under -g there is no such fallback — the repos in view are the
+// configured ones, and the directory ccwt was started in isn't one of them.
+
 func (u *ui) root() (string, error) {
 	if u.sel.project != "" {
 		return u.sel.project, nil
 	}
+	if u.projects != nil {
+		return "", errors.New("no worktree selected")
+	}
 	return gitutil.RepoRoot("", true)
+}
+
+// gitDir is the repo the whole-repo actions work on — the pull key, and the
+// branch the status bar reports the drift of. "." outside -g: the directory
+// ccwt was started in. Under -g the selected row's project instead, and ""
+// (do nothing, report nothing) until something is selected, since with a dozen
+// repos on screen the current directory is not the one the keys should reach.
+func (u *ui) gitDir() string {
+	if u.projects == nil {
+		return "."
+	}
+	return u.sel.project
 }
 
 // dropSelected moves the selection off the selected worktree, as it has to once
@@ -276,7 +293,7 @@ func (u *ui) frame() ([]string, error) {
 	for len(lines) < body {
 		lines = append(lines, "")
 	}
-	return append(lines[:body], statusBar(cols, u.msg, u.sel)), nil
+	return append(lines[:body], statusBar(cols, u.msg, u.sel, u.gitDir())), nil
 }
 
 // highlight reverse-videos a row edge to edge, so the selection reads as a bar
@@ -340,7 +357,7 @@ func readKeys() <-chan string {
 // and the herdr ones only when there's a herdr to open a workspace in. On a
 // section header ↵ means the other thing it does, and there's nothing there to
 // remove.
-func statusBar(cols int, msg string, sel listRow) string {
+func statusBar(cols int, msg string, sel listRow, dir string) string {
 	herdr := underHerdr()
 	keys := " ccwt  q:quit  p:pull"
 	if herdr {
@@ -356,23 +373,23 @@ func statusBar(cols int, msg string, sel listRow) string {
 		keys += "  ↵:fold"
 	}
 	if msg == "" {
-		msg = gitDivergence()
+		msg = gitDivergence(dir)
 	}
 	return highlight(keys+" │ "+msg+" ", cols)
 }
 
-// gitDivergence reports the branch and how far it has drifted from its
+// gitDivergence reports dir's branch and how far it has drifted from its
 // upstream, e.g. "main ↑2 ↓1". rev-list gives both numbers in one shot and,
 // unlike `git status`, doesn't refresh the index — which matters when this
 // runs every couple of seconds in a background pane.
-func gitDivergence() string {
-	branch := gitLine("rev-parse", "--abbrev-ref", "HEAD")
+func gitDivergence(dir string) string {
+	branch := gitLine(dir, "rev-parse", "--abbrev-ref", "HEAD")
 	if branch == "" {
 		return ""
 	}
 	// HEAD...@{u}: left count is commits we have and upstream doesn't (ahead),
 	// right count is the reverse (behind). Fails when there's no upstream.
-	counts := strings.Fields(gitLine("rev-list", "--left-right", "--count", "HEAD...@{u}"))
+	counts := strings.Fields(gitLine(dir, "rev-list", "--left-right", "--count", "HEAD...@{u}"))
 	switch {
 	case len(counts) != 2:
 		return branch + "  (no upstream)"
@@ -383,9 +400,15 @@ func gitDivergence() string {
 	}
 }
 
-// gitLine runs git and returns its first line, or "" if it failed.
-func gitLine(args ...string) string {
-	out, err := exec.Command("git", args...).Output()
+// gitLine runs git in dir and returns its first line, or "" if it failed — as
+// an empty dir does, which is how "there is no repo to ask" reaches the bar.
+func gitLine(dir string, args ...string) string {
+	if dir == "" {
+		return ""
+	}
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
 	if err != nil {
 		return ""
 	}
@@ -403,17 +426,27 @@ func gitLine(args ...string) string {
 // a background fetch didn't work. The sleep comes after the fetch rather than
 // from a ticker, which is also what keeps a slow fetch off the next one's heels.
 //
+// dirs are the repos to fetch — the configured projects under -g, and nil for
+// the one the tui is running in.
+//
 // ponytail: "main" literally, so a master-branch repo fetches nothing at all.
 // Ask git for the remote's HEAD if that ever comes up.
-func fetchMain(ctx context.Context, every time.Duration) {
+func fetchMain(ctx context.Context, every time.Duration, dirs []string) {
 	if every <= 0 {
 		return
+	}
+	if dirs == nil {
+		dirs = []string{"."}
 	}
 	for {
 		// origin main, not origin main:refs/remotes/origin/main: with the
 		// refspec a clone already has, git updates the remote-tracking branch
 		// on its own, and without forcing it past a rewritten history.
-		_ = exec.CommandContext(ctx, "git", "fetch", "--quiet", "origin", "main").Run()
+		for _, dir := range dirs {
+			cmd := exec.CommandContext(ctx, "git", "fetch", "--quiet", "origin", "main")
+			cmd.Dir = dir
+			_ = cmd.Run()
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -422,11 +455,16 @@ func fetchMain(ctx context.Context, every time.Duration) {
 	}
 }
 
-// gitPull runs a pull and boils its chatter down to the one line the bar has
-// room for: on success the first line says what happened ("Already up to
+// gitPull runs a pull in dir and boils its chatter down to the one line the bar
+// has room for: on success the first line says what happened ("Already up to
 // date.", "Updating a1b2..c3d4"), on failure the last line is git's reason.
-func gitPull() string {
-	out, err := exec.Command("git", "pull").CombinedOutput()
+func gitPull(dir string) string {
+	if dir == "" {
+		return "no worktree selected"
+	}
+	cmd := exec.Command("git", "pull")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	if err != nil {
 		return "pull failed: " + strings.TrimSpace(lines[len(lines)-1])
