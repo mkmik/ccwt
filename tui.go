@@ -121,7 +121,7 @@ func (c *TuiCmd) Run() error {
 		if path == "" || !underHerdr() {
 			return nil
 		}
-		return act("opening "+filepath.Base(path)+"…", func() string { return herdrOpen(path) })
+		return act("opening "+filepath.Base(path)+"…", func() string { return herdrOpen(path, "") })
 	}
 	// activate is what ↵ — and a click, which is the same gesture with a
 	// selection bundled in — does to whatever the selection landed on: fold a
@@ -602,7 +602,7 @@ func (u *ui) newWorktree() string {
 	if err != nil {
 		return "new failed: " + err.Error()
 	}
-	return herdrOpen(path)
+	return herdrOpen(path, filepath.Base(path))
 }
 
 // herdrOpen opens the worktree at path as its own herdr workspace, the same way
@@ -610,17 +610,21 @@ func (u *ui) newWorktree() string {
 // enclosing repo root as --cwd, since herdr refuses to spawn a workspace from
 // inside a linked worktree.
 //
-// No --label: herdr derives a workspace's name from its root pane's directory,
-// which for a worktree is already <name>, and a --label would instead pin a
-// custom override — renaming the workspace out from under someone who had
-// named it themselves, every time they reopened it.
-func herdrOpen(path string) string {
+// label names the workspace, and belongs only to the call that brings it into
+// existence: herdr shows a worktree workspace under its repo by branch, so
+// without one the sidebar reads "worktree-<name>" (or whatever branch_prefix
+// says) instead of <name>. On a reopen it is "" — a --label there would pin a
+// custom name over whatever the user had renamed the workspace to since.
+func herdrOpen(path, label string) string {
 	root, ok := gitutil.ClaudeWorktreeRepoRoot(path)
 	if !ok {
 		return "open failed: " + path + " is not a Claude Code worktree"
 	}
-	out, err := exec.Command(herdrBin(), "worktree", "open",
-		"--cwd", root, "--path", path, "--focus").CombinedOutput()
+	args := []string{"worktree", "open", "--cwd", root, "--path", path, "--focus"}
+	if label != "" {
+		args = append(args, "--label", label)
+	}
+	out, err := exec.Command(herdrBin(), args...).CombinedOutput()
 	if err != nil {
 		return "open failed: " + lastLine(out, err)
 	}
