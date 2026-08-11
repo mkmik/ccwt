@@ -226,6 +226,47 @@ func TestRemoveMergedUpstream(t *testing.T) {
 	}
 }
 
+// TestGc: only worktrees that are both merged and idle are collected — an
+// unmerged one and one with a session running in it stay put — and what `gc`
+// removes, it removes the way `remove` does, branch and all.
+func TestGc(t *testing.T) {
+	initRepo(t)
+	merged := capture(t, &NewWorktreeBranchCmd{Name: "merged", Path: true})
+	busy := capture(t, &NewWorktreeBranchCmd{Name: "busy", Path: true})
+	ahead := capture(t, &NewWorktreeBranchCmd{Name: "ahead", Path: true})
+	git(t, "-C", ahead, "commit", "--allow-empty", "-m", "ahead")
+
+	root, err := gitutil.RepoRoot("", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A session sitting in a subdirectory of "busy" still counts as running there.
+	got, err := gcCandidates(root, map[string]bool{filepath.Join(busy, "internal"): true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, []string{"merged"}) {
+		t.Fatalf("candidates = %v, want [merged]", got)
+	}
+
+	// No Claude runs in a temp repo, so the full command sees "merged" and
+	// "busy" both idle and takes them; "ahead" is unmerged and stays.
+	if err := (&GcCmd{Yes: true}).Run(); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{merged, busy} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("worktree %s still exists (%v)", path, err)
+		}
+	}
+	if gitutil.BranchExists("", "worktree-merged") {
+		t.Error("worktree removed but the branch was stranded")
+	}
+	if _, err := os.Stat(ahead); err != nil {
+		t.Errorf("gc removed the unmerged worktree %s: %v", ahead, err)
+	}
+}
+
 // initRepo makes a git repo with one commit on main and chdirs into it.
 func initRepo(t *testing.T) string {
 	t.Helper()
