@@ -123,7 +123,7 @@ func (c *TuiCmd) Run() error {
 		}
 		return act("opening "+filepath.Base(path)+"…", func() string { return herdrOpen(path, "") })
 	}
-	// activate is what ↵ — and a click, which is the same gesture with a
+	// activate is what space — and a click, which is the same gesture with a
 	// selection bundled in — does to whatever the selection landed on: fold a
 	// project section shut, or open a worktree as a workspace.
 	activate := func() error {
@@ -161,12 +161,10 @@ func (c *TuiCmd) Run() error {
 				u.move(-1)
 			case k == "\x1b[B", k == "j":
 				u.move(1)
-			case k == "\r", k == "\n":
+			case k == " ":
 				if err := activate(); err != nil {
 					return err
 				}
-			case k == " ": // folds a section, and does nothing on a worktree
-				u.toggle()
 			case k == "r":
 				if path := u.sel.path; path != "" {
 					if err := act("removing "+filepath.Base(path)+"…", func() string {
@@ -239,7 +237,7 @@ func (u *ui) at(n int) listRow {
 
 // move walks the selection by d rows, starting from the top when nothing is
 // selected (or when the selected row has since disappeared). Section headers
-// are rows like any other: they're what ↵ folds, so the keyboard has to be able
+// are rows like any other: they're what space folds, so the keyboard has to be able
 // to land on one.
 func (u *ui) move(d int) {
 	if len(u.rows) == 0 {
@@ -466,7 +464,7 @@ func splitKeys(s string) []string {
 // drifted from its upstream, cut or padded to exactly the terminal width. The
 // per-worktree actions only appear once there's a worktree to apply them to,
 // and the herdr ones only when there's a herdr to open a workspace in. On a
-// section header ↵ means the other thing it does, and there's nothing there to
+// section header space means the other thing it does, and there's nothing there to
 // remove.
 func statusBar(cols int, msg string, sel listRow, div string) string {
 	herdr := underHerdr()
@@ -477,11 +475,11 @@ func statusBar(cols int, msg string, sel listRow, div string) string {
 	switch {
 	case sel.path != "":
 		if herdr {
-			keys += "  ↵:open"
+			keys += "  space:open"
 		}
 		keys += "  r:remove"
 	case sel.project != "":
-		keys += "  ↵:fold"
+		keys += "  space:fold"
 	}
 	if msg == "" {
 		msg = div
