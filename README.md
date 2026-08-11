@@ -126,18 +126,25 @@ bar and their keys do nothing.
 ## Several projects at once
 
 `-g` makes `ccwt list` and `ccwt tui` span every project you've configured instead of just
-the repo you're standing in, newest-first across all of them, with a PROJECT column saying
-where each row came from:
+the repo you're standing in, a section per project, each holding that project's worktrees
+newest-first:
 
 ```
-PROJECT   NAME                      BRANCH                    AGE  CLAUDE    LAST COMMIT
-ccwt      dreamy-foraging-hickey    worktree-dreamy-…-hickey  2h   yes     * Add the widget
-platform  calm-baking-otter       ✓ worktree-calm-bak…-otter  1d   no        Fix the flux capacitor
+  NAME                        BRANCH                    AGE  CLAUDE    LAST COMMIT
+▾ ccwt (2)
+  dreamy-foraging-hickey      worktree-dreamy-…-hickey  2h   yes     * Add the widget
+  calm-baking-otter         ✓ worktree-calm-bak…-otter  1d   no        Fix the flux capacitor
+▸ platform (14)
 ```
 
-It works from anywhere — including outside a git repository — and in the tui every action
-applies to the project the selected row belongs to: `r` removes from that repo, `↵` opens
-that worktree, `x` creates one in that project. (`p` still pulls the repo you launched it
+In the tui the sections fold: select one and press `↵`, or click it, and it collapses to
+the header line — the count stays, so you can see what's tucked away. `platform` above is
+folded shut.
+
+It works from anywhere — including outside a git repository — and every action applies to
+the project the selected row belongs to: `r` removes from that repo, `↵` opens that
+worktree, `x` creates one in that project — on a section header too, which is how you make
+the first worktree in a project that has none. (`p` still pulls the repo you launched it
 in, as does the branch state in the status bar.)
 
 The projects come from `$XDG_CONFIG_HOME/ccwt/config.toml` (`~/.config/ccwt/config.toml`
@@ -231,8 +238,8 @@ swallow stderr, or you'll lose the cwd report.
 | --- | --- |
 | `ccwt new [name]` | Create a worktree under `.claude/worktrees/<name>` on a new branch `worktree-<name>`, and print `<name>`. Generates a name if omitted; reuses an existing worktree of the same name. `--switch <branch>` checks the worktree out on an existing branch instead of creating one (`ccwt new` + `git switch <branch>`). When run inside a worktree it returns the enclosing one instead of creating a new one (override with `--force-create`). `--path` prints the worktree's absolute path instead of `<name>`. |
 | `ccwt cd <name>` | `cd` into an existing worktree under `.claude/worktrees/<name>` (with shell integration) — never creates it, errors if it doesn't exist, and the name is required. `ccwt cd ..` is shorthand for `ccwt ..`, and `ccwt cd -` jumps to the previous directory (`$OLDPWD`), like the shell's `cd -`. |
-| `ccwt list` | List the repo's Claude Code worktrees with branch, age, running-session status, and last commit, sorted newest-first. `-g` lists every project in `$XDG_CONFIG_HOME/ccwt/config.toml` instead, with a PROJECT column. |
-| `ccwt tui` | Show the `ccwt list` table full-screen, refreshing in place without flicker, over a status bar showing how far the current branch is ahead/behind its upstream. `q` (or Ctrl-C) quits, `p` runs `git pull`. Arrow keys (or `j`/`k`) select a worktree; `↵` opens it as a Herdr workspace, a click on its row does the same, and `r` removes it (merged-only, like `ccwt remove`). `-g` spans the configured projects, each action applying to the selected row's project. `--interval` (default `2s`) sets the refresh rate, `--fetch` (default `1m`) how often `origin/main` is fetched in the background. |
+| `ccwt list` | List the repo's Claude Code worktrees with branch, age, running-session status, and last commit, sorted newest-first. `-g` lists every project in `$XDG_CONFIG_HOME/ccwt/config.toml` instead, a section per project. |
+| `ccwt tui` | Show the `ccwt list` table full-screen, refreshing in place without flicker, over a status bar showing how far the current branch is ahead/behind its upstream. `q` (or Ctrl-C) quits, `p` runs `git pull`. Arrow keys (or `j`/`k`) select a worktree; `↵` opens it as a Herdr workspace, a click on its row does the same, and `r` removes it (merged-only, like `ccwt remove`). `-g` spans the configured projects as a foldable section each (`↵`, or a click on the header, folds one shut), every action applying to the selected row's project. `--interval` (default `2s`) sets the refresh rate, `--fetch` (default `1m`) how often `origin/main` is fetched in the background. |
 | `ccwt remove <name>` | Remove the worktree at `.claude/worktrees/<name>` and delete its branch. `.` means the worktree you're currently in; removing the one you're in cds you to the repo root, like `ccwt ..`. The branch is deleted only if merged: an unmerged branch refuses the whole removal, worktree included, so nothing is stranded. Pass `-D` to force-delete the branch too, or `--keep-branch` to remove only the worktree. |
 | `ccwt new-worktree-name` | Print a generated worktree name (`adjective-verb-noun`) without creating anything. |
 | `ccwt repo-root` | Print the root of the current git repository. Add `--root-worktree` to print the *enclosing* repo root when you're inside a `.claude/worktrees/<name>` worktree. |
