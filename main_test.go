@@ -611,6 +611,98 @@ func TestMouseRow(t *testing.T) {
 	}
 }
 
+// One read of stdin is not one keystroke: hold an arrow down and it repeats
+// faster than a frame draws, so the tty hands over several sequences at once.
+// Every one of them has to come back out, or the list doesn't move while a key
+// is held — the whole chunk matches no binding and is dropped.
+func TestSplitKeys(t *testing.T) {
+	for in, want := range map[string][]string{
+		"j":                          {"j"},
+		"jjj":                        {"j", "j", "j"},
+		"\x1b[B":                     {"\x1b[B"},
+		"\x1b[B\x1b[B\x1b[A":         {"\x1b[B", "\x1b[B", "\x1b[A"},
+		"\x1b[<0;12;5M\x1b[<0;12;5m": {"\x1b[<0;12;5M", "\x1b[<0;12;5m"},
+		"j\x1b[Bq":                   {"j", "\x1b[B", "q"},
+		"\x1b":                       {"\x1b"},  // a bare escape
+		"\x1b[":                      {"\x1b["}, // a sequence cut in half by the read
+		"":                           nil,
+	} {
+		if got := splitKeys(in); !slices.Equal(got, want) {
+			t.Errorf("splitKeys(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A list taller than the terminal has to scroll, not just get cut: -g routinely
+// runs to several screenfuls, and rows below the fold were unreachable — the
+// arrows stopped at the bottom edge, and folding a section away doesn't help
+// when the section header is itself below it.
+func TestFrameScrollsToTheSelection(t *testing.T) {
+	initRepo(t)
+	for _, name := range []string{"alpha", "bravo", "charlie"} {
+		path := capture(t, &NewWorktreeBranchCmd{Name: name, Path: true})
+		git(t, "-C", path, "commit", "--allow-empty", "-m", "subject-"+name)
+	}
+	// Four lines: header, two rows, status bar. The third row only exists once
+	// the frame scrolls to it.
+	defer func(old func() (int, int)) { termSize = old }(termSize)
+	termSize = func() (int, int) { return 80, 4 }
+
+	var u ui
+	lines, err := u.frame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 4 {
+		t.Fatalf("frame is %d lines, want 4 — anything taller scrolls the screen", len(lines))
+	}
+	if len(u.rows) != 3 {
+		t.Fatalf("frame listed %d rows, want 3", len(u.rows))
+	}
+
+	// Walk to the bottom row. It is below the fold, so the frame has to scroll.
+	for range 3 {
+		u.move(1)
+	}
+	want := u.rows[2]
+	if u.sel != want {
+		t.Fatalf("three downs left the selection on %q, want the last row %q", u.sel.path, want.path)
+	}
+	if lines, err = u.frame(); err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 4 {
+		t.Fatalf("scrolled frame is %d lines, want 4", len(lines))
+	}
+	if u.top != 1 {
+		t.Errorf("frame scrolled to row %d, want 1 — just far enough to show the selection", u.top)
+	}
+	if name := filepath.Base(want.path); !strings.Contains(lines[2], name) {
+		t.Errorf("last line of the table is %q, want the selected %q on it", lines[2], name)
+	}
+	if !strings.HasPrefix(lines[2], "\x1b[7m") {
+		t.Errorf("the selected row %q is not highlighted", lines[2])
+	}
+
+	// A click counts screen lines, so it has to count them through the scroll.
+	if got := u.at(3); got != want {
+		t.Errorf("clicking the last table line selected %q, want %q", got.path, want.path)
+	}
+	if got := u.at(1); got != (listRow{}) { // the header
+		t.Errorf("clicking the header selected %q, want nothing", got.path)
+	}
+
+	// Walking back up scrolls the other way.
+	u.move(-1)
+	u.move(-1)
+	if _, err = u.frame(); err != nil {
+		t.Fatal(err)
+	}
+	if u.top != 0 {
+		t.Errorf("after walking back to the top, frame starts at row %d, want 0", u.top)
+	}
+}
+
 // The background fetch has to actually move origin/main, and it has to stop
 // when the tui does rather than outliving it. Twice over: nil is the repo the
 // tui runs in, and under -g it's the configured projects — from a directory
