@@ -446,6 +446,53 @@ func TestGcKeepsCurrentWorktree(t *testing.T) {
 	}
 }
 
+// TestAgentWorkingIsNotSafeToRemove: a worktree an agent is working in is off
+// limits even though git has nothing against it — the branch is merged (it has
+// no commits of its own yet) and the tree is clean. It gets the session glyph
+// where the "✓" would go, `remove` refuses it until -D, and `gc` walks past it.
+func TestAgentWorkingIsNotSafeToRemove(t *testing.T) {
+	initRepo(t)
+	busy := capture(t, &NewWorktreeBranchCmd{Name: "busy", Path: true})
+	idle := capture(t, &NewWorktreeBranchCmd{Name: "idle", Path: true})
+
+	defer func(orig func() map[string]bool) { herdrBusy = orig }(herdrBusy)
+	// A subdirectory: where an agent that cd'd deeper into the worktree reports from.
+	herdrBusy = func() map[string]bool { return map[string]bool{filepath.Join(busy, "internal"): true} }
+
+	defer func(orig func() bool) { stdoutIsTTY = orig }(stdoutIsTTY)
+	stdoutIsTTY = func() bool { return true }
+	for _, line := range strings.Split(capture(t, &ListCmd{}), "\n") {
+		name, rest, _ := strings.Cut(strings.TrimPrefix(line, "  "), " ")
+		want := map[string]string{"busy": sessionGlyph, "idle": "✓"}[name]
+		if want == "" {
+			continue // header, or the blank last line
+		}
+		if !strings.Contains(rest, want+" worktree-"+name) {
+			t.Errorf("%s: want %q on the branch: %q", name, want, line)
+		}
+	}
+
+	root, err := gitutil.RepoRoot("", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (&RemoveCmd{Name: "busy"}).remove(root); err == nil {
+		t.Error("removed a worktree with an agent working in it, want refusal")
+	}
+	if err := (&GcCmd{Yes: true}).Run(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(busy); err != nil {
+		t.Errorf("gc collected the worktree an agent is working in: %v", err)
+	}
+	if _, err := os.Stat(idle); !os.IsNotExist(err) {
+		t.Errorf("gc left the idle worktree %s behind (%v)", idle, err)
+	}
+	if err := (&RemoveCmd{Name: "busy", Force: true}).remove(root); err != nil {
+		t.Errorf("remove -D of a worktree with an agent working in it: %v", err)
+	}
+}
+
 // initRepo makes a git repo with one commit on main and chdirs into it.
 func initRepo(t *testing.T) string {
 	t.Helper()

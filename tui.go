@@ -815,6 +815,53 @@ func herdrBin() string {
 	return "herdr"
 }
 
+// herdrBusy is the set of cwds herdr has an agent mid-task in: "working", or
+// "blocked" on a question it is waiting for an answer to. Both mean live work
+// that no git check can see — a branch made a minute ago, nothing committed to
+// it yet, looks pristine right up until the removal pulls the floor out from
+// under the agent. Asking herdr rather than the agent means it holds for
+// whatever herdr is running there, not just Claude Code.
+//
+// Our own workspace doesn't count: when the agent itself runs `ccwt done`, it
+// is the working agent, and counting it would leave it unable to clean up
+// after itself. No herdr, or none running, is nobody working.
+//
+// ponytail: package var so tests can fake the herdr answer.
+var herdrBusy = func() map[string]bool {
+	busy := map[string]bool{}
+	out, err := exec.Command(herdrBin(), "agent", "list").Output()
+	if err != nil {
+		return busy
+	}
+	var resp struct {
+		Result struct {
+			Agents []struct {
+				Status     string `json:"agent_status"`
+				Cwd        string `json:"cwd"`
+				Foreground string `json:"foreground_cwd"`
+				Workspace  string `json:"workspace_id"`
+			} `json:"agents"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return busy
+	}
+	self := os.Getenv("HERDR_WORKSPACE_ID")
+	for _, a := range resp.Result.Agents {
+		if a.Status != "working" && a.Status != "blocked" {
+			continue
+		}
+		if self != "" && a.Workspace == self {
+			continue
+		}
+		// Both cwds: an agent started at the repo root and cd'd into a worktree
+		// is only in the pane's cwd as the foreground process's.
+		busy[a.Cwd], busy[a.Foreground] = true, true
+	}
+	delete(busy, "")
+	return busy
+}
+
 // herdrClose closes the workspace herdr has open on the worktree at path —
 // which is what ends the agent running in it — so that removing the directory
 // doesn't leave a workspace sitting in a hole. A worktree nobody has open is a

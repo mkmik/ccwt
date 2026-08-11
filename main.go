@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/url"
 	"os"
 	"os/exec"
@@ -290,6 +291,14 @@ func (c *RemoveCmd) remove(root string) error {
 		return fmt.Errorf("%s has uncommitted changes: commit them, or re-run with -D to throw them away", name)
 	}
 
+	// An agent mid-task is the third way a worktree isn't safe to remove, and
+	// the only one git can't see: a branch it made a minute ago and hasn't
+	// committed to is both merged and clean. Removing it closes the workspace
+	// out from under the agent, so ask first — the same way out as the others.
+	if !c.Force && activeIn(worktreePath, herdrBusy()) {
+		return fmt.Errorf("%s has an agent working in it: let it finish, or re-run with -D to remove it anyway", name)
+	}
+
 	// Under herdr the worktree is usually an open workspace with an agent living
 	// in it; close it before the directory it sits in disappears.
 	if underHerdr() {
@@ -385,14 +394,16 @@ type GcCmd struct {
 }
 
 // Run collects the worktrees that are done with — branch already merged, no
-// Claude Code session running in them — and removes each exactly as
-// `ccwt remove` would, branch included.
+// Claude Code session running in them and no agent herdr says is working in
+// them — and removes each exactly as `ccwt remove` would, branch included.
 func (c *GcCmd) Run() error {
 	root, err := gitutil.RepoRoot("", true)
 	if err != nil {
 		return err
 	}
-	names, err := gcCandidates(root, claudeCwds())
+	active := claudeCwds()
+	maps.Copy(active, herdrBusy())
+	names, err := gcCandidates(root, active)
 	if err != nil {
 		return err
 	}
@@ -446,7 +457,7 @@ func gcCandidates(root string, active map[string]bool) ([]string, error) {
 	prefix := filepath.Join(root, ".claude", "worktrees") + string(filepath.Separator)
 	var names []string
 	for _, wt := range wts {
-		if strings.HasPrefix(wt.Path, prefix) && merged[wt.Branch] && !gitutil.Dirty(wt.Path) && !isClaudeActiveIn(wt.Path, active) {
+		if strings.HasPrefix(wt.Path, prefix) && merged[wt.Branch] && !gitutil.Dirty(wt.Path) && !activeIn(wt.Path, active) {
 			names = append(names, filepath.Base(wt.Path))
 		}
 	}
@@ -550,6 +561,11 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	if tty && !global {
 		wg.Go(func() { cur, _, _ = gitutil.CurrentClaudeWorktree() })
 	}
+	// Needed by the second round rather than after it, so it goes in the first.
+	var busy map[string]bool
+	if tty {
+		wg.Go(func() { busy = herdrBusy() })
+	}
 	for i, dir := range projects {
 		wg.Go(func() {
 			wts, err := gitutil.ListWorktrees(dir)
@@ -594,9 +610,12 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	// The worktree we're running in gets a "* " on its name, and its branch
 	// gets a "✓ " when it's already merged — or a "* " when the worktree has
 	// uncommitted changes, which beats the "✓": whatever git says about the
-	// branch, there's unsaved work here and it isn't safe to delete. Human
-	// readers only: piped output stays parseable. Unmarked cells get the same
-	// two-space gutter so the columns line up.
+	// branch, there's unsaved work here and it isn't safe to delete. An agent
+	// working in it beats both, with the "✳ " of a live session: git sees a
+	// fresh branch with nothing on it, which is precisely what an agent that
+	// has just started looks like. Human readers only: piped output stays
+	// parseable. Unmarked cells get the same two-space gutter so the columns
+	// line up.
 	rows := make([]row, len(refs))
 	for i, rf := range refs {
 		wg.Go(func() {
@@ -623,6 +642,9 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 				if gitutil.Dirty(rf.wt.Path) {
 					glyph, on = "*", true
 				}
+				if activeIn(rf.wt.Path, busy) {
+					glyph, on = sessionGlyph, true
+				}
 				r.branch = marker(on, glyph) + r.branch
 			}
 		})
@@ -633,7 +655,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	lsof.Wait()
 	for i := range rows {
 		rows[i].claude = "no"
-		if isClaudeActiveIn(rows[i].path, claudeCwdSet) {
+		if activeIn(rows[i].path, claudeCwdSet) {
 			rows[i].claude = "yes"
 		}
 	}
@@ -700,7 +722,9 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 }
 
 // The glyphs TOPIC is prefixed with, saying where the line came from: Claude
-// Code's own asterisk for a session, a branch for a commit subject.
+// Code's own asterisk for a session, a branch for a commit subject. The
+// session one does second duty in the BRANCH column, where it marks the
+// worktree an agent is working in right now.
 const (
 	sessionGlyph = "✳"
 	commitGlyph  = "⎇"
@@ -917,7 +941,11 @@ func isClaudeBinaryPath(path string) bool {
 		strings.Contains(lower, "/claude-code/")
 }
 
-func isClaudeActiveIn(worktreePath string, cwds map[string]bool) bool {
+// activeIn reports whether any of cwds is the worktree at worktreePath or sits
+// inside it — an agent that cd'd into a subdirectory is still working here.
+// The cwds are whatever the caller counts as active: running Claude Code
+// processes (claudeCwds), agents herdr says are mid-task (herdrBusy), or both.
+func activeIn(worktreePath string, cwds map[string]bool) bool {
 	if cwds[worktreePath] {
 		return true
 	}
@@ -1132,10 +1160,10 @@ var cli struct {
 	Cd                CdCmd                `cmd:"" name:"cd" help:"cd into an existing worktree under .claude/worktrees/<name> (errors if it doesn't exist). Use \"..\" for the enclosing repo root, or \"-\" for the previous directory."`
 	List              ListCmd              `cmd:"" name:"list" aliases:"ls" help:"List Claude Code worktrees with branch, age, running-session, and what each one is about: the last Claude Code session there, or its last commit."`
 	Tui               TuiCmd               `cmd:"" name:"tui" help:"Show the worktree list full-screen, refreshing as things change. q quits, p runs git pull, arrows select a worktree, r removes it. Under herdr, x creates a worktree and opens it, and space (or a click) opens the selected one."`
-	Remove            RemoveCmd            `cmd:"" name:"remove" help:"Delete a worktree under .claude/worktrees/<name> and its branch (merged and clean only; -D to remove anyway, --keep-branch to remove only the worktree). Under herdr its workspace is closed first. Use \".\" for the current worktree; removing it cds to the repo root."`
+	Remove            RemoveCmd            `cmd:"" name:"remove" help:"Delete a worktree under .claude/worktrees/<name> and its branch (merged, clean and no agent working in it; -D to remove anyway, --keep-branch to remove only the worktree). Under herdr its workspace is closed first. Use \".\" for the current worktree; removing it cds to the repo root."`
 	Done              DoneCmd              `cmd:"" name:"done" help:"Finish with the worktree you're in: remove it and its branch (same checks and flags as \"remove .\"), then under herdr close the workspace you're sitting in."`
 	Lock              LockCmd              `cmd:"" name:"lock" help:"Lock a worktree the way \"ccwt new\" does, so \"git worktree prune\" can't reclaim it while its directory is unavailable. Use \".\" for the worktree you're currently in."`
-	Gc                GcCmd                `cmd:"" name:"gc" help:"Remove every worktree whose branch is already merged, with nothing uncommitted and no Claude Code session running in it, branches included — except the one you're in. Prints what it found and asks first, unless -y."`
+	Gc                GcCmd                `cmd:"" name:"gc" help:"Remove every worktree whose branch is already merged, with nothing uncommitted, no agent working in it and no Claude Code session running in it, branches included — except the one you're in. Prints what it found and asks first, unless -y."`
 	RepoRoot          RepoRootCmd          `cmd:"" name:"repo-root" help:"Print the root directory of the current git repository."`
 	DotDot            DotDotCmd            `cmd:"" name:".." help:"Print the enclosing repo root, stripping any .claude/worktrees/<name> suffix (shorthand for repo-root --root-worktree)."`
 	Init              InitCmd              `cmd:"" name:"init" help:"Emit a shell integration snippet to source from your rc file (e.g. source <(ccwt init zsh), or for fish: ccwt init fish | source)."`
