@@ -69,15 +69,16 @@ whether a Claude Code session is currently running in each, and what the most re
 session there was about:
 
 ```
-  NAME                      BRANCH                    AGE  CLAUDE    LAST COMMIT             SESSION
-* dreamy-foraging-hickey    worktree-dreamy-…-hickey  2h   yes     * Add the widget          Goal was a widget on the dashboard; it's built and…
-  calm-baking-otter       ✓ worktree-calm-bak…-otter  1d   no        Fix the flux capacitor  the flux capacitor drifts by a second an hour, fix…
+  NAME                      BRANCH                    AGE  CLAUDE  LAST COMMIT             SESSION
+* dreamy-foraging-hickey  * worktree-dreamy-…-hickey  2h   yes     Add the widget          Goal was a widget on the dashboard; it's built and…
+  calm-baking-otter       ✓ worktree-calm-bak…-otter  1d   no      Fix the flux capacitor  the flux capacitor drifts by a second an hour, fix…
 ```
 
-A `*` before the name marks the worktree you're currently in; a `*` before the last commit
-means that worktree has uncommitted changes; a `✓` before the branch means it's already
-merged into `main` (or `master`), so the worktree is safe to `ccwt remove`. All three are
-omitted when stdout isn't a terminal, so piped output stays parseable.
+A `*` before the name marks the worktree you're currently in. A `✓` before the branch means
+it's already merged into `main` (or `master`), so the worktree is safe to `ccwt remove`; a
+`*` there instead means the worktree has uncommitted changes, which isn't safe to remove
+whatever git makes of the branch. Both are omitted when stdout isn't a terminal, so piped
+output stays parseable.
 
 SESSION comes from the newest Claude Code transcript for that worktree: the last recap the
 session produced (`/recap`, or one Claude wrote on its own), falling back to the first
@@ -91,18 +92,18 @@ column is widest at the time, and branches and commit subjects lose their middle
 than their tail — the last word is usually what tells them apart:
 
 ```
-  NAME                       BRANCH                   AGE  CLAUDE    LAST COMMIT              SESSION
-* dreamy-foraging-hickey     worktree-dreamy-…-hickey 2h   yes     * Add the widget           Goal was a widget on the…
-  calm-baking-otter        ✓ worktree-calm-b…-otter   1d   no        Fix the flux ca… (#41)   the flux capacitor drift…
+  NAME                       BRANCH                   AGE  CLAUDE  LAST COMMIT              SESSION
+* dreamy-foraging-hickey   * worktree-dreamy-…-hickey 2h   yes     Add the widget           Goal was a widget on the…
+  calm-baking-otter        ✓ worktree-calm-b…-otter   1d   no      Fix the flux ca… (#41)   the flux capacitor drift…
 ```
 
 `ccwt tui` shows that same table full-screen and keeps it up to date, repainting in place
 so it doesn't flicker, with a status bar along the bottom:
 
 ```
-  NAME                      BRANCH                    AGE  CLAUDE    LAST COMMIT             SESSION
-* dreamy-foraging-hickey    worktree-dreamy-…-hickey  2h   yes     * Add the widget          Goal was a widget on the dashboard; it's built and…
-  calm-baking-otter       ✓ worktree-calm-bak…-otter  1d   no        Fix the flux capacitor  the flux capacitor drifts by a second an hour, fix…
+  NAME                      BRANCH                    AGE  CLAUDE  LAST COMMIT             SESSION
+* dreamy-foraging-hickey  * worktree-dreamy-…-hickey  2h   yes     Add the widget          Goal was a widget on the dashboard; it's built and…
+  calm-baking-otter       ✓ worktree-calm-bak…-otter  1d   no      Fix the flux capacitor  the flux capacitor drifts by a second an hour, fix…
 
  ccwt  q:quit  p:pull  x:new  ↵:open  r:remove │ main  ↑1 ↓2
 ```
@@ -131,10 +132,10 @@ the repo you're standing in, a section per project, each holding that project's 
 newest-first:
 
 ```
-  NAME                        BRANCH                    AGE  CLAUDE    LAST COMMIT
+  NAME                        BRANCH                    AGE  CLAUDE  LAST COMMIT
 ▾ ccwt (2)
-  dreamy-foraging-hickey      worktree-dreamy-…-hickey  2h   yes     * Add the widget
-  calm-baking-otter         ✓ worktree-calm-bak…-otter  1d   no        Fix the flux capacitor
+  dreamy-foraging-hickey    * worktree-dreamy-…-hickey  2h   yes     Add the widget
+  calm-baking-otter         ✓ worktree-calm-bak…-otter  1d   no      Fix the flux capacitor
 ▸ platform (14)
 ```
 

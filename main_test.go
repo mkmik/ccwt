@@ -39,8 +39,9 @@ func TestNewPath(t *testing.T) {
 }
 
 // TestListMarksCurrent covers both "*" markers — the current worktree's name
-// and a dirty worktree's last commit. Each must appear on its row only, and
-// only when stdout is a tty.
+// and a dirty worktree's branch, where the "*" also has to beat the "✓" the
+// branch would otherwise get for being merged. Each must appear on its row
+// only, and only when stdout is a tty.
 func TestListMarksCurrent(t *testing.T) {
 	initRepo(t)
 	here := capture(t, &NewWorktreeBranchCmd{})
@@ -56,12 +57,15 @@ func TestListMarksCurrent(t *testing.T) {
 		switch {
 		case line == "" || strings.HasPrefix(line, "  NAME"):
 		case strings.HasPrefix(line, "* "+here+" "):
-			if !strings.Contains(line, "* init") {
-				t.Errorf("dirty worktree missing commit marker: %q", line)
+			if !strings.Contains(line, "* worktree-") {
+				t.Errorf("dirty worktree missing branch marker: %q", line)
+			}
+			if strings.Contains(line, "✓") {
+				t.Errorf("dirty worktree marked merged: %q", line)
 			}
 		case strings.HasPrefix(line, "  "+other+" "):
 			if strings.Contains(line, "*") {
-				t.Errorf("clean worktree has a commit marker: %q", line)
+				t.Errorf("clean worktree has a dirty marker: %q", line)
 			}
 		default:
 			t.Errorf("unexpected line %q", line)
