@@ -320,7 +320,7 @@ func TestGlobalModeIgnoresTheCurrentDirectory(t *testing.T) {
 func TestStatusBarIsExactlyOneLineWide(t *testing.T) {
 	for _, msg := range []string{"", "ok", strings.Repeat("x", 200)} {
 		for _, sel := range []listRow{{}, {path: "some-worktree"}, {project: "some-project"}} {
-			bar := statusBar(40, msg, sel, ".")
+			bar := statusBar(40, msg, sel, "main  in sync")
 			bar = strings.TrimSuffix(strings.TrimPrefix(bar, "\x1b[7m"), "\x1b[0m")
 			if got := len([]rune(bar)); got != 40 {
 				t.Errorf("statusBar(40, %.10q, %v) is %d cols wide, want 40", msg, sel, got)
@@ -337,7 +337,7 @@ func TestStatusBarShowsHerdrActionsOnlyUnderHerdr(t *testing.T) {
 		want bool
 	}{{"", false}, {"1", true}} {
 		t.Setenv("HERDR_ENV", tc.env)
-		bar := statusBar(200, "", listRow{path: "some-worktree"}, ".")
+		bar := statusBar(200, "", listRow{path: "some-worktree"}, "")
 		for _, key := range []string{"x:new", "↵:open"} {
 			if strings.Contains(bar, key) != tc.want {
 				t.Errorf("HERDR_ENV=%q: %q in the bar = %v, want %v", tc.env, key, !tc.want, tc.want)
@@ -441,6 +441,37 @@ func TestFrameRowsMatchNames(t *testing.T) {
 	}
 	if strings.HasPrefix(lines[2], "\x1b[7m") {
 		t.Errorf("unselected row %q is highlighted", lines[2])
+	}
+}
+
+// Moving the selection changes which row is highlighted and nothing else, so
+// it must not re-run the git and lsof scan behind the list — on a big repo
+// that's half a second per keypress. Only the interval tick (and anything that
+// changes the list) re-reads it.
+func TestMoveReusesTheList(t *testing.T) {
+	initRepo(t)
+	capture(t, &NewWorktreeBranchCmd{Name: "alpha", Path: true})
+
+	var u ui
+	if _, err := u.frame(); err != nil {
+		t.Fatal(err)
+	}
+	capture(t, &NewWorktreeBranchCmd{Name: "bravo", Path: true}) // appears only on a re-read
+
+	u.move(1)
+	if _, err := u.frame(); err != nil {
+		t.Fatal(err)
+	}
+	if len(u.rows) != 1 {
+		t.Errorf("moving re-read the list: %d rows, want the 1 the cache had", len(u.rows))
+	}
+
+	u.stale()
+	if _, err := u.frame(); err != nil {
+		t.Fatal(err)
+	}
+	if len(u.rows) != 2 {
+		t.Errorf("after stale() the list has %d rows, want both worktrees", len(u.rows))
 	}
 }
 

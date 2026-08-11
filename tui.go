@@ -93,6 +93,7 @@ func (c *TuiCmd) Run() error {
 		}
 		u.msg = do()
 		last = ""
+		u.stale() // the command may well have changed the list
 		return nil
 	}
 	open := func() error {
@@ -123,6 +124,7 @@ func (c *TuiCmd) Run() error {
 			return nil
 		case <-tick.C:
 			u.msg = ""
+			u.stale() // the tick is what re-reads the list
 		case k := <-keys:
 			switch {
 			case k == "q", k == "\x03": // \x03 = Ctrl-C, which raw mode delivers as a keystroke
@@ -186,7 +188,20 @@ type ui struct {
 	projects  []string
 	collapsed map[string]bool // project root -> section folded shut
 	msg       string
+
+	// The last list read, kept so that moving the selection — which changes
+	// nothing but which row is reverse-videoed — doesn't re-run the git and
+	// lsof scan behind it (half a second on a big repo, once per keypress).
+	// stale() drops it whenever something that would change the list happens;
+	// otherwise it's the interval tick that refreshes it.
+	body []string          // rendered table, header line included
+	all  []listRow         // one per body line after the header
+	cols int               // the width body was rendered at
+	div  map[string]string // repo -> its status-bar divergence, same lifetime
 }
+
+// stale drops the cached list, so the next frame reads it again.
+func (u *ui) stale() { u.body = nil }
 
 // move walks the selection by d rows, starting from the top when nothing is
 // selected (or when the selected row has since disappeared). Section headers
@@ -210,6 +225,7 @@ func (u *ui) toggle() {
 		u.collapsed = map[string]bool{}
 	}
 	u.collapsed[u.sel.project] = !u.collapsed[u.sel.project]
+	u.stale()
 }
 
 // root is the repo an action applies to: the selected row's project, or the
@@ -266,13 +282,20 @@ func (u *ui) frame() ([]string, error) {
 		cols, rows = 80, 24
 	}
 
-	var buf bytes.Buffer
-	listRows, err := renderList(&buf, true, cols, u.projects, u.collapsed)
-	if err != nil {
-		return nil, err
+	// Re-read only when the cache was dropped or the terminal got wider or
+	// narrower, since the table is laid out to the width.
+	if u.body == nil || cols != u.cols {
+		var buf bytes.Buffer
+		listRows, err := renderList(&buf, true, cols, u.projects, u.collapsed)
+		if err != nil {
+			return nil, err
+		}
+		u.body = strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+		u.all, u.cols, u.div = listRows, cols, nil
 	}
 
-	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	lines := slices.Clone(u.body) // the highlight below writes into it
+	listRows := u.all
 	body := max(rows-1, 1)
 
 	// The frame doesn't scroll: a list taller than the terminal is simply cut,
@@ -293,7 +316,22 @@ func (u *ui) frame() ([]string, error) {
 	for len(lines) < body {
 		lines = append(lines, "")
 	}
-	return append(lines[:body], statusBar(cols, u.msg, u.sel, u.gitDir())), nil
+	return append(lines[:body], statusBar(cols, u.msg, u.sel, u.divergence())), nil
+}
+
+// divergence is gitDivergence for whichever repo the selection points at, kept
+// alongside the list so that walking the rows doesn't shell out to git twice
+// per keypress. Keyed by repo because under -g each row may have its own.
+func (u *ui) divergence() string {
+	dir := u.gitDir()
+	if d, ok := u.div[dir]; ok {
+		return d
+	}
+	if u.div == nil {
+		u.div = map[string]string{}
+	}
+	u.div[dir] = gitDivergence(dir)
+	return u.div[dir]
 }
 
 // highlight reverse-videos a row edge to edge, so the selection reads as a bar
@@ -351,13 +389,13 @@ func readKeys() <-chan string {
 }
 
 // statusBar is one reverse-video line: what the keys do, then either a
-// transient message (the result of a pull) or how far the branch has drifted
-// from its upstream, cut or padded to exactly the terminal width. The
+// transient message (the result of a pull) or div, how far the branch has
+// drifted from its upstream, cut or padded to exactly the terminal width. The
 // per-worktree actions only appear once there's a worktree to apply them to,
 // and the herdr ones only when there's a herdr to open a workspace in. On a
 // section header ↵ means the other thing it does, and there's nothing there to
 // remove.
-func statusBar(cols int, msg string, sel listRow, dir string) string {
+func statusBar(cols int, msg string, sel listRow, div string) string {
 	herdr := underHerdr()
 	keys := " ccwt  q:quit  p:pull"
 	if herdr {
@@ -373,7 +411,7 @@ func statusBar(cols int, msg string, sel listRow, dir string) string {
 		keys += "  ↵:fold"
 	}
 	if msg == "" {
-		msg = gitDivergence(dir)
+		msg = div
 	}
 	return highlight(keys+" │ "+msg+" ", cols)
 }
