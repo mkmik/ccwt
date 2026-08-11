@@ -617,6 +617,72 @@ func TestStatusBarShowsHerdrActionsOnlyUnderHerdr(t *testing.T) {
 	}
 }
 
+// A tui left open for days goes on running the code it started with, so an
+// upgrade underneath it has to reach the status bar — but only a real one: an
+// unreadable stamp (the file is being replaced right now, or was never
+// stattable) must not stick a notice up that nothing can take back down.
+func TestUpgradeNoticeNeedsTwoReadableStamps(t *testing.T) {
+	var now string
+	defer func(old func() string) { selfStamp = old }(selfStamp)
+	selfStamp = func() string { return now }
+
+	for _, tc := range []struct {
+		name        string
+		start, then string
+		want        bool
+	}{
+		{"unchanged", "1@1", "1@1", false},
+		{"replaced", "1@1", "2@2", true},
+		{"unreadable at startup", "", "2@2", false},
+		{"unreadable now", "1@1", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			u := ui{stamp: tc.start}
+			now = tc.then
+			u.checkUpgrade()
+			if got := u.restart != ""; got != tc.want {
+				t.Errorf("after %q -> %q the bar says %q, want a notice = %v", tc.start, tc.then, u.restart, tc.want)
+			}
+		})
+	}
+
+	// And once it's up it stays up: only restarting clears it, so a later tick
+	// that reads the new binary as unchanged mustn't wipe the notice.
+	u := ui{stamp: "1@1"}
+	now = "2@2"
+	u.checkUpgrade()
+	said := u.restart
+	u.stamp, now = "2@2", "2@2"
+	u.checkUpgrade()
+	if u.restart != said {
+		t.Errorf("the notice changed to %q on a later tick, want it to stay %q", u.restart, said)
+	}
+}
+
+// The notice is no use if nothing shows it. It outlives the transient messages
+// — which the next tick wipes — but steps aside while one is on screen.
+func TestFrameShowsTheRestartNotice(t *testing.T) {
+	initRepo(t)
+	defer func(old func() (int, int)) { termSize = old }(termSize)
+	termSize = func() (int, int) { return 200, 6 }
+
+	u := ui{restart: "upgraded to v9.9.9 — restart ccwt"}
+	bar := func() string {
+		lines, err := u.frame()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return lines[len(lines)-1]
+	}
+	if got := bar(); !strings.Contains(got, u.restart) {
+		t.Errorf("status bar is %q, want the restart notice on it", got)
+	}
+	u.msg = "pulling…"
+	if got := bar(); !strings.Contains(got, "pulling…") {
+		t.Errorf("status bar is %q, want the transient message while it's up", got)
+	}
+}
+
 // worktreeRows is what a frame hands back for a list of plain worktree rows.
 func worktreeRows(paths ...string) []listRow {
 	rows := make([]listRow, len(paths))

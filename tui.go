@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -90,7 +91,7 @@ func (c *TuiCmd) Run() error {
 	tick := time.NewTicker(c.Interval)
 	defer tick.Stop()
 
-	u := ui{projects: projects}
+	u := ui{projects: projects, stamp: selfStamp()}
 	var last string
 	redraw := func() error {
 		lines, err := u.frame()
@@ -147,6 +148,7 @@ func (c *TuiCmd) Run() error {
 		case <-tick.C:
 			u.msg = ""
 			u.stale() // the tick is what re-reads the list
+			u.checkUpgrade()
 		case k := <-keys:
 			switch {
 			// While the search prompt is up every keystroke is text, so this
@@ -231,6 +233,11 @@ type ui struct {
 	saved  search // what the open prompt replaced, put back if it's abandoned
 	anchor listRow
 	typing bool // the prompt is up and taking keystrokes
+
+	// What the binary on disk looked like when this tui started, and the notice
+	// that goes in the bar once it stops looking like that — see checkUpgrade.
+	stamp   string
+	restart string
 
 	// The last list read, kept so that moving the selection — which changes
 	// nothing but which row is reverse-videoed — doesn't re-run the git and
@@ -498,7 +505,9 @@ func (u *ui) frame() ([]string, error) {
 	}
 	// While the prompt is up it takes the whole bar, as it does in vim: the key
 	// hints have nothing to say about a line you're typing into.
-	bar := statusBar(cols, u.msg, u.sel, u.divergence())
+	// The restart notice outlasts the transient messages but yields to them
+	// while one is up: they're a second old, and it will still be true after.
+	bar := statusBar(cols, cmp.Or(u.msg, u.restart), u.sel, u.divergence())
 	if u.typing {
 		p := "/"
 		if u.dir < 0 {
@@ -507,6 +516,65 @@ func (u *ui) frame() ([]string, error) {
 		bar = highlight(p+u.query, cols)
 	}
 	return append(lines[:body], bar), nil
+}
+
+// checkUpgrade notices that the binary this process was started from has been
+// replaced under it — go install, brew upgrade, a downloaded release — and
+// parks a notice in the status bar, since the tui someone leaves open for days
+// would otherwise go on running the old code with nothing to say about it.
+//
+// The notice sticks once shown: the only thing that clears it is the restart.
+// A stamp that can't be read (at startup or now) means we can't tell, and the
+// bar stays quiet rather than crying upgrade at the window during an install
+// where the path is momentarily missing.
+func (u *ui) checkUpgrade() {
+	if u.restart != "" || u.stamp == "" {
+		return
+	}
+	if s := selfStamp(); s == "" || s == u.stamp {
+		return
+	}
+	u.restart = "upgraded — restart ccwt"
+	if v := selfVersion(); v != "" {
+		u.restart = "upgraded to " + v + " — restart ccwt"
+	}
+}
+
+// selfStamp identifies the file behind os.Executable(): its size and mtime,
+// which between them change for any upgrade worth restarting for. Empty when
+// there's nothing to stat. ponytail: package var so tests can move the binary
+// without installing one; a content hash would be surer, but this runs every
+// interval and no upgrade lands on the same size and nanosecond.
+var selfStamp = func() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	fi, err := os.Stat(exe)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%d@%d", fi.Size(), fi.ModTime().UnixNano())
+}
+
+// selfVersion asks the new binary what version it is, which is the half of
+// "restart me" worth reading: it names what you'd be restarting into. Anything
+// that isn't a first line of plausible length is dropped — this is the freshly
+// installed file talking, and the bar has one line to give it. The timeout is
+// for a binary that's mid-install and does something stranger than fail.
+func selfVersion() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, exe, "--version").Output()
+	if err != nil {
+		return ""
+	}
+	line, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
+	return truncate(line, 40)
 }
 
 // divergence is gitDivergence for whichever repo the selection points at, kept
