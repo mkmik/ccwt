@@ -135,10 +135,13 @@ ccwt      dreamy-foraging-hickey    worktree-dreamy-…-hickey  2h   yes     * A
 platform  calm-baking-otter       ✓ worktree-calm-bak…-otter  1d   no        Fix the flux capacitor
 ```
 
-It works from anywhere — including outside a git repository — and in the tui every action
-applies to the project the selected row belongs to: `r` removes from that repo, `↵` opens
-that worktree, `x` creates one in that project. (`p` still pulls the repo you launched it
-in, as does the branch state in the status bar.)
+It works from anywhere — including outside a git repository — and the directory you launch
+it in takes no part in it: under `-g` the repos are the configured ones and nothing else.
+In the tui every action applies to the project the selected row belongs to: `r` removes
+from that repo, `↵` opens that worktree, `x` creates one in that project, `p` pulls it, and
+the status bar shows that project's branch state. With nothing selected yet there's no repo
+to act on, so those keys say so instead of reaching for the current directory. The
+background `--fetch` covers every configured project.
 
 The projects come from `$XDG_CONFIG_HOME/ccwt/config.toml` (`~/.config/ccwt/config.toml`
 when that variable isn't set) — each entry the main checkout of a repo, the one whose
@@ -232,7 +235,7 @@ swallow stderr, or you'll lose the cwd report.
 | `ccwt new [name]` | Create a worktree under `.claude/worktrees/<name>` on a new branch `worktree-<name>`, and print `<name>`. Generates a name if omitted; reuses an existing worktree of the same name. `--switch <branch>` checks the worktree out on an existing branch instead of creating one (`ccwt new` + `git switch <branch>`). When run inside a worktree it returns the enclosing one instead of creating a new one (override with `--force-create`). `--path` prints the worktree's absolute path instead of `<name>`. |
 | `ccwt cd <name>` | `cd` into an existing worktree under `.claude/worktrees/<name>` (with shell integration) — never creates it, errors if it doesn't exist, and the name is required. `ccwt cd ..` is shorthand for `ccwt ..`, and `ccwt cd -` jumps to the previous directory (`$OLDPWD`), like the shell's `cd -`. |
 | `ccwt list` | List the repo's Claude Code worktrees with branch, age, running-session status, and last commit, sorted newest-first. `-g` lists every project in `$XDG_CONFIG_HOME/ccwt/config.toml` instead, with a PROJECT column. |
-| `ccwt tui` | Show the `ccwt list` table full-screen, refreshing in place without flicker, over a status bar showing how far the current branch is ahead/behind its upstream. `q` (or Ctrl-C) quits, `p` runs `git pull`. Arrow keys (or `j`/`k`) select a worktree; `↵` opens it as a Herdr workspace, a click on its row does the same, and `r` removes it (merged-only, like `ccwt remove`). `-g` spans the configured projects, each action applying to the selected row's project. `--interval` (default `2s`) sets the refresh rate, `--fetch` (default `1m`) how often `origin/main` is fetched in the background. |
+| `ccwt tui` | Show the `ccwt list` table full-screen, refreshing in place without flicker, over a status bar showing how far the current branch is ahead/behind its upstream. `q` (or Ctrl-C) quits, `p` runs `git pull`. Arrow keys (or `j`/`k`) select a worktree; `↵` opens it as a Herdr workspace, a click on its row does the same, and `r` removes it (merged-only, like `ccwt remove`). `-g` spans the configured projects and ignores the current directory entirely, each action (`p` included) applying to the selected row's project. `--interval` (default `2s`) sets the refresh rate, `--fetch` (default `1m`) how often `origin/main` is fetched in the background. |
 | `ccwt remove <name>` | Remove the worktree at `.claude/worktrees/<name>` and delete its branch. `.` means the worktree you're currently in; removing the one you're in cds you to the repo root, like `ccwt ..`. The branch is deleted only if merged: an unmerged branch refuses the whole removal, worktree included, so nothing is stranded. Pass `-D` to force-delete the branch too, or `--keep-branch` to remove only the worktree. |
 | `ccwt new-worktree-name` | Print a generated worktree name (`adjective-verb-noun`) without creating anything. |
 | `ccwt repo-root` | Print the root of the current git repository. Add `--root-worktree` to print the *enclosing* repo root when you're inside a `.claude/worktrees/<name>` worktree. |

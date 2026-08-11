@@ -264,7 +264,7 @@ func TestPaintOverwritesWithoutClearing(t *testing.T) {
 // has to survive both the no-upstream case and a real divergence.
 func TestGitDivergence(t *testing.T) {
 	initRepo(t)
-	if got, want := gitDivergence(), "main  (no upstream)"; got != want {
+	if got, want := gitDivergence("."), "main  (no upstream)"; got != want {
 		t.Errorf("gitDivergence() = %q, want %q", got, want)
 	}
 
@@ -272,13 +272,51 @@ func TestGitDivergence(t *testing.T) {
 	git(t, "branch", "upstream")
 	git(t, "config", "branch.main.remote", ".")
 	git(t, "config", "branch.main.merge", "refs/heads/upstream")
-	if got, want := gitDivergence(), "main  in sync"; got != want {
+	if got, want := gitDivergence("."), "main  in sync"; got != want {
 		t.Errorf("gitDivergence() = %q, want %q", got, want)
 	}
 
 	git(t, "commit", "--allow-empty", "-m", "ahead")
-	if got, want := gitDivergence(), "main  ↑1 ↓0"; got != want {
+	if got, want := gitDivergence("."), "main  ↑1 ↓0"; got != want {
 		t.Errorf("gitDivergence() = %q, want %q", got, want)
+	}
+
+	// No repo to ask — which is what -g hands it until a row is selected.
+	if got := gitDivergence(""); got != "" {
+		t.Errorf("gitDivergence(\"\") = %q, want empty", got)
+	}
+}
+
+// Under -g the current directory is not one of the repos in view, so the keys
+// and the status bar have to reach the selected worktree's project instead —
+// and nothing at all while there's no selection.
+func TestGlobalModeIgnoresTheCurrentDirectory(t *testing.T) {
+	// EvalSymlinks: on macOS t.TempDir() hands out /var/..., git reports /private/var/...
+	root, err := filepath.EvalSymlinks(initRepo(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wt := capture(t, &NewWorktreeBranchCmd{Name: "somewhere", Path: true})
+
+	global := ui{projects: []string{root}}
+	if got := global.gitDir(); got != "" {
+		t.Errorf("gitDir() with nothing selected = %q, want empty", got)
+	}
+	if _, err := global.root(); err == nil {
+		t.Error("root() with nothing selected fell back to the current directory")
+	}
+	global.sel = wt
+	if got := global.gitDir(); got != root {
+		t.Errorf("gitDir() = %q, want the selected worktree's project %q", got, root)
+	}
+
+	// Outside -g the current directory is still the answer.
+	local := ui{}
+	if got := local.gitDir(); got != "." {
+		t.Errorf("gitDir() outside -g = %q, want \".\"", got)
+	}
+	if _, err := local.root(); err != nil {
+		t.Errorf("root() outside -g: %v", err)
 	}
 }
 
@@ -287,7 +325,7 @@ func TestGitDivergence(t *testing.T) {
 func TestStatusBarIsExactlyOneLineWide(t *testing.T) {
 	for _, msg := range []string{"", "ok", strings.Repeat("x", 200)} {
 		for _, sel := range []string{"", "some-worktree"} {
-			bar := statusBar(40, msg, sel)
+			bar := statusBar(40, msg, sel, ".")
 			bar = strings.TrimSuffix(strings.TrimPrefix(bar, "\x1b[7m"), "\x1b[0m")
 			if got := len([]rune(bar)); got != 40 {
 				t.Errorf("statusBar(40, %.10q, %q) is %d cols wide, want 40", msg, sel, got)
@@ -304,7 +342,7 @@ func TestStatusBarShowsHerdrActionsOnlyUnderHerdr(t *testing.T) {
 		want bool
 	}{{"", false}, {"1", true}} {
 		t.Setenv("HERDR_ENV", tc.env)
-		bar := statusBar(200, "", "some-worktree")
+		bar := statusBar(200, "", "some-worktree", ".")
 		for _, key := range []string{"x:new", "↵:open"} {
 			if strings.Contains(bar, key) != tc.want {
 				t.Errorf("HERDR_ENV=%q: %q in the bar = %v, want %v", tc.env, key, !tc.want, tc.want)
@@ -422,34 +460,50 @@ func TestMouseRow(t *testing.T) {
 }
 
 // The background fetch has to actually move origin/main, and it has to stop
-// when the tui does rather than outliving it.
+// when the tui does rather than outliving it. Twice over: nil is the repo the
+// tui runs in, and under -g it's the configured projects — from a directory
+// that is deliberately not a repo at all.
 func TestFetchMain(t *testing.T) {
-	origin := initRepo(t)
-	clone := t.TempDir()
-	git(t, "clone", "--quiet", origin, clone)
-	git(t, "-C", origin, "commit", "--allow-empty", "-m", "remote work")
-	t.Chdir(clone)
+	for _, tc := range []struct {
+		name   string
+		global bool
+	}{{"cwd", false}, {"global", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			origin := initRepo(t)
+			clone := t.TempDir()
+			git(t, "clone", "--quiet", origin, clone)
+			git(t, "-C", origin, "commit", "--allow-empty", "-m", "remote work")
 
-	want := gitLine("-C", origin, "rev-parse", "HEAD")
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan struct{})
-	go func() { defer close(done); fetchMain(ctx, time.Hour) }() // an hour: only the first fetch is under test
+			var dirs []string
+			if tc.global {
+				dirs = []string{clone}
+				t.Chdir(t.TempDir())
+			} else {
+				t.Chdir(clone)
+			}
 
-	for range 100 {
-		if gitLine("rev-parse", "origin/main") == want {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if got := gitLine("rev-parse", "origin/main"); got != want {
-		t.Errorf("origin/main = %s after the background fetch, want %s", got, want)
-	}
+			want := gitLine(origin, "rev-parse", "HEAD")
+			ctx, cancel := context.WithCancel(t.Context())
+			done := make(chan struct{})
+			go func() { defer close(done); fetchMain(ctx, time.Hour, dirs) }() // an hour: only the first fetch is under test
 
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Error("fetchMain outlived its context")
+			for range 100 {
+				if gitLine(clone, "rev-parse", "origin/main") == want {
+					break
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			if got := gitLine(clone, "rev-parse", "origin/main"); got != want {
+				t.Errorf("origin/main = %s after the background fetch, want %s", got, want)
+			}
+
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Error("fetchMain outlived its context")
+			}
+		})
 	}
 }
 
