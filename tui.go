@@ -606,10 +606,12 @@ var termSize = func() (cols, rows int) {
 	return cols, rows
 }
 
-// rowBar is the background the selection sits on: bright black, which every
-// terminal draws as a gray. Reverse video would be the portable choice, but a
-// whole row of it is a black slab, and this one moves under the arrows.
-const rowBar = "\x1b[100m"
+// rowBar is the background the selection sits on: gruvbox's selection teal,
+// with a light foreground so the row stays legible on it. Reverse video would
+// be the portable choice, but a whole row of it is a black slab, and this one
+// moves under the arrows. ponytail: truecolor, no 256-color fallback — every
+// terminal worth running a TUI in has had it for a decade.
+const rowBar = "\x1b[48;2;44;100;118m\x1b[38;2;251;241;199m"
 
 // draw is one line as it goes on the screen: cut to the terminal width, every
 // match of re picked out, and — when bar is set — laid on that background edge
