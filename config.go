@@ -22,6 +22,9 @@ type Config struct {
 	// BranchPrefix goes in front of a worktree's name to make its branch.
 	// Repos that want their branches namespaced ("mkm/") set it here.
 	BranchPrefix string `toml:"branch_prefix"`
+	// Columns are the table columns `list` and `tui` show, in the order they
+	// are named here. Unset (or empty) means all of them.
+	Columns []string `toml:"columns"`
 }
 
 // defaultBranchPrefix is what a branch is called when the config says nothing:

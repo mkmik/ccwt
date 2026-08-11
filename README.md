@@ -214,6 +214,15 @@ It applies from the moment you set it: worktrees created under an older prefix k
 branches, and `ccwt remove` on one of them leaves that branch behind rather than deleting
 it — remove it with `git branch -D` if you want it gone.
 
+`columns` picks which columns `ccwt list` and `ccwt tui` draw, in the order you name them
+— `name`, `branch`, `age`, `claude`, `topic`, all of them when unset:
+
+```toml
+columns = ["name", "age", "topic"]
+```
+
+The `*`/`✓`/`✳` markers ride on `name`, so leaving it out leaves them out too.
+
 `ccwt config view` prints that file and `ccwt config edit` opens it in `$EDITOR`, either one
 creating an empty file first when you don't have one yet.
 
@@ -302,7 +311,7 @@ swallow stderr, or you'll lose the cwd report.
 | `ccwt repo-root` | Print the root of the current git repository. Add `--root-worktree` to print the *enclosing* repo root when you're inside a `.claude/worktrees/<name>` worktree. |
 | `ccwt ..` | Shorthand for `repo-root --root-worktree`: print (and, with shell integration, `cd` to) the enclosing repository root. |
 | `ccwt init <shell>` | Emit the shell-integration snippet to source from your rc file. For `zsh` the snippet carries completion too: commands, and worktree names for `cd`, `remove` and `lock`. |
-| `ccwt config view` / `ccwt config edit` | Print the config file, or open it in `$EDITOR` (`vi` if unset). Both create an empty one if there isn't any. The file holds the `[[projects]]` `-g` spans and `branch_prefix`, what `ccwt new` puts in front of a worktree's name to make its branch (`worktree-` when unset). |
+| `ccwt config view` / `ccwt config edit` | Print the config file, or open it in `$EDITOR` (`vi` if unset). Both create an empty one if there isn't any. The file holds the `[[projects]]` `-g` spans, `branch_prefix` — what `ccwt new` puts in front of a worktree's name to make its branch (`worktree-` when unset) — and `columns`, which columns the table draws. |
 | `ccwt --version` | Print version information. |
 
 ### Layout
