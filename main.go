@@ -464,9 +464,10 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	}
 
 	type row struct {
-		project, name, branch, age, claude, subject, summary string
-		path                                                 string // the row's identity, for the tui
-		sortTime                                             time.Time
+		project, name, branch, age, claude, topic string
+		subject                                   string // the last commit, TOPIC's fallback
+		path                                      string // the row's identity, for the tui
+		sortTime                                  time.Time
 	}
 
 	// Every lookup below shells out to git or lsof, and within a round none of
@@ -563,7 +564,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 				r.age = "?"
 				r.subject = "(no commits)"
 			}
-			r.summary = sessionSummary(rf.wt.Path)
+			r.topic = topic(sessionSummary(rf.wt.Path), r.subject)
 			if tty {
 				r.name = marker(rf.wt.Path == cur, "*") + r.name
 				glyph, on := "✓", rf.merged[rf.wt.Branch]
@@ -597,11 +598,11 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	if tty {
 		gutter = marker(false, "")
 	}
-	table := [][]string{{gutter + "NAME", gutter + "BRANCH", "AGE", "CLAUDE", "LAST COMMIT", "SESSION"}}
+	table := [][]string{{gutter + "NAME", gutter + "BRANCH", "AGE", "CLAUDE", "TOPIC"}}
 	var lines []listRow
 	emit := func(r row) {
 		lines = append(lines, listRow{r.project, r.path})
-		table = append(table, []string{r.name, r.branch, r.age, r.claude, r.subject, r.summary})
+		table = append(table, []string{r.name, r.branch, r.age, r.claude, r.topic})
 	}
 	if !global {
 		for _, r := range rows {
@@ -628,7 +629,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 				}
 			}
 			lines = append(lines, listRow{project: root})
-			table = append(table, []string{section(root, len(mine), collapsed[root]), "", "", "", "", ""})
+			table = append(table, []string{section(root, len(mine), collapsed[root]), "", "", "", ""})
 			if collapsed[root] {
 				continue
 			}
@@ -644,6 +645,35 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 		fmt.Fprintln(w, strings.Join(r, "\t"))
 	}
 	return lines, w.Flush()
+}
+
+// The glyphs TOPIC is prefixed with, saying where the line came from: Claude
+// Code's own asterisk for a session, a branch for a commit subject.
+const (
+	sessionGlyph = "✳"
+	commitGlyph  = "⎇"
+)
+
+// topic is what the worktree is about in one line: what the last Claude Code
+// session there was doing, or — for a worktree nobody has run one in — the last
+// commit. Two sources in one column because neither fills it on its own: a
+// worktree with a session has a commit subject that only repeats it at best,
+// and one without leaves a blank cell.
+func topic(summary, subject string) string {
+	if summary != "" {
+		return sessionGlyph + " " + summary
+	}
+	return commitGlyph + " " + subject
+}
+
+// topicCut shortens a TOPIC cell the way its source wants shortening — the
+// glyph says which. A commit subject loses its middle (see listColumns), a
+// session summary is a sentence and reads better cut off at the end.
+func topicCut(s string, limit int) string {
+	if strings.HasPrefix(s, commitGlyph) {
+		return elide(s, limit)
+	}
+	return truncate(s, limit)
 }
 
 // section is a project's header line: a disclosure triangle, the repo's
@@ -685,23 +715,21 @@ type column struct {
 // CLAUDE are never longer than their own headers, so there is nothing to cut
 // there.
 //
-// BRANCH and LAST COMMIT lose their middle rather than their end: what tells
-// "worktree-elegant-…-cook" from "worktree-elegant-…-otter", or one commit
-// from the next ("… tui` (#32)"), tends to be the last word.
+// BRANCH, and a TOPIC showing a commit, lose their middle rather than their
+// end: what tells "worktree-elegant-…-cook" from "worktree-elegant-…-otter",
+// or one commit from the next ("… tui` (#32)"), tends to be the last word.
 //
-// BRANCH and LAST COMMIT are capped even when there's room for them. A branch
-// is usually the worktree's own name with a "worktree-" bolted on the front,
-// and a commit subject only has to say which commit it is, so the widest
-// either ever needs to be is much narrower than the widest it could be — and
-// every column they give up goes to SESSION.
+// BRANCH is capped even when there's room for it — it's usually the worktree's
+// own name with a "worktree-" bolted on the front, so the widest it ever needs
+// to be is much narrower than the widest it could be, and everything it gives
+// up goes to TOPIC.
 func listColumns() []column {
 	return []column{
 		{truncate, 0, 0},
 		{elide, 26, 0},
 		{nil, 0, 0},
 		{nil, 0, 0},
-		{elide, 40, 0},
-		{truncate, 0, 60},
+		{topicCut, 0, 60},
 	}
 }
 
@@ -1050,7 +1078,7 @@ var cli struct {
 	NewWorktreeName   NewWorktreeNameCmd   `cmd:"" name:"new-worktree-name" help:"Generate a Claude Code-style worktree name (adjective-verb-noun)."`
 	NewWorktreeBranch NewWorktreeBranchCmd `cmd:"" name:"new" help:"Create a new worktree under .claude/worktrees/<name> on a new branch worktree-<name>, and print <name>."`
 	Cd                CdCmd                `cmd:"" name:"cd" help:"cd into an existing worktree under .claude/worktrees/<name> (errors if it doesn't exist). Use \"..\" for the enclosing repo root, or \"-\" for the previous directory."`
-	List              ListCmd              `cmd:"" name:"list" aliases:"ls" help:"List Claude Code worktrees with branch, age, running-session, last commit, and what the last Claude Code session there was about."`
+	List              ListCmd              `cmd:"" name:"list" aliases:"ls" help:"List Claude Code worktrees with branch, age, running-session, and what each one is about: the last Claude Code session there, or its last commit."`
 	Tui               TuiCmd               `cmd:"" name:"tui" help:"Show the worktree list full-screen, refreshing as things change. q quits, p runs git pull, arrows select a worktree, r removes it. Under herdr, x creates a worktree and opens it, and enter (or a click) opens the selected one."`
 	Remove            RemoveCmd            `cmd:"" name:"remove" help:"Delete a worktree under .claude/worktrees/<name> and its branch (merged and clean only; -D to remove anyway, --keep-branch to remove only the worktree). Under herdr its workspace is closed first. Use \".\" for the current worktree; removing it cds to the repo root."`
 	Gc                GcCmd                `cmd:"" name:"gc" help:"Remove every worktree whose branch is already merged, with nothing uncommitted and no Claude Code session running in it, branches included — except the one you're in. Prints what it found and asks first, unless -y."`

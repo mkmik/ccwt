@@ -677,7 +677,7 @@ func TestListFitsTerminalWidth(t *testing.T) {
 		}
 		// Every column bottoms out at minCol, so a terminal narrower than that
 		// floor gets the floor rather than an ever-thinner table.
-		floor := 4*minCol + len("AGE") + len("CLAUDE") + 2*(len(listColumns())-1)
+		floor := 3*minCol + len("AGE") + len("CLAUDE") + 2*(len(listColumns())-1)
 		for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
 			if got := len([]rune(line)); got > max(width, floor) {
 				t.Errorf("width=%d: line is %d columns wide: %q", width, got, line)
@@ -686,16 +686,30 @@ func TestListFitsTerminalWidth(t *testing.T) {
 	}
 }
 
-// BRANCH and LAST COMMIT are capped even on a terminal with room to spare, so
-// the space they don't need goes to SESSION.
-func TestFitTableCapsBranchAndCommit(t *testing.T) {
+// BRANCH is capped even on a terminal with room to spare, so the space it
+// doesn't need goes to TOPIC — which keeps all of it.
+func TestFitTableCapsBranch(t *testing.T) {
 	cols := listColumns()
-	row := []string{"a-name", "worktree-exceedingly-verbose-branch-name", "2h", "yes",
-		"a commit subject that runs on well past any sensible column width (#1234)", "a session summary"}
+	long := topic("", "a commit subject that runs on well past any sensible column width (#1234)")
+	row := []string{"a-name", "worktree-exceedingly-verbose-branch-name", "2h", "yes", long}
 	fitTable([][]string{row}, 500, cols)
-	for _, i := range []int{1, 4} {
-		if got := len([]rune(row[i])); got != cols[i].max {
-			t.Errorf("column %d is %d wide, want %d: %q", i, got, cols[i].max, row[i])
+	if got := len([]rune(row[1])); got != cols[1].max {
+		t.Errorf("BRANCH is %d wide, want %d: %q", got, cols[1].max, row[1])
+	}
+	if row[4] != long {
+		t.Errorf("TOPIC = %q, want it uncut: %q", row[4], long)
+	}
+}
+
+// TOPIC carries two kinds of line, and each is cut the way it wants to be: a
+// commit subject keeps its last word, a session summary just stops.
+func TestTopicCut(t *testing.T) {
+	for _, tc := range []struct{ s, want string }{
+		{topic("", "Fix the windows build broken by tui (#32)"), commitGlyph + " Fix the windows bui… (#32)"},
+		{topic("Goal was a widget on the dashboard", ""), sessionGlyph + " Goal was a widget on the …"},
+	} {
+		if got := topicCut(tc.s, 28); got != tc.want {
+			t.Errorf("topicCut(%q) = %q, want %q", tc.s, got, tc.want)
 		}
 	}
 }
@@ -723,7 +737,7 @@ func TestElide(t *testing.T) {
 	}
 }
 
-// The SESSION column reads a real Claude Code transcript, so pin what it
+// TOPIC's session line reads a real Claude Code transcript, so pin what it
 // picks out of one: the last recap wins, and a session that never recapped
 // falls back to the first prompt the user typed — never to the noise around
 // it (hook attachments, tool results, slash commands), and never to more than
