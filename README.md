@@ -41,6 +41,7 @@ ccwt list -g        # ... or in every project in ~/.config/ccwt/config.toml
 ccwt ..             # jump back to the repository root
 ccwt remove <name>  # delete a worktree and its branch when you're done
 ccwt remove .       # ... or the one you're in: deletes it and cds you out
+ccwt gc             # ... or all the finished ones at once, after confirming
 ```
 
 `ccwt new` creates a worktree at `.claude/worktrees/<name>` on a new branch
@@ -244,6 +245,7 @@ swallow stderr, or you'll lose the cwd report.
 | `ccwt list` | List the repo's Claude Code worktrees with branch, age, running-session status, and last commit, sorted newest-first. `-g` lists every project in `$XDG_CONFIG_HOME/ccwt/config.toml` instead, a section per project. |
 | `ccwt tui` | Show the `ccwt list` table full-screen, refreshing in place without flicker, over a status bar showing how far the current branch is ahead/behind its upstream. `q` (or Ctrl-C) quits, `p` runs `git pull`. Arrow keys (or `j`/`k`) select a worktree; `↵` opens it as a Herdr workspace, a click on its row does the same, and `r` removes it (merged-only, like `ccwt remove`). `-g` spans the configured projects as a foldable section each (`↵`, or a click on the header, folds one shut) and ignores the current directory entirely, every action (`p` included) applying to the selected row's project. `--interval` (default `2s`) sets the refresh rate, `--fetch` (default `1m`) how often `origin/main` is fetched in the background. |
 | `ccwt remove <name>` | Remove the worktree at `.claude/worktrees/<name>` and delete its branch. `.` means the worktree you're currently in; removing the one you're in cds you to the repo root, like `ccwt ..`. The branch is deleted only if merged: an unmerged branch refuses the whole removal, worktree included, so nothing is stranded. Pass `-D` to force-delete the branch too, or `--keep-branch` to remove only the worktree. |
+| `ccwt gc` | Remove every worktree that's finished with: branch already merged (the `✓` of `ccwt list`) and no Claude Code session running in it (a `no` in the `CLAUDE` column). Prints the list it found and asks before touching anything — `-y`/`--yes` skips the question. Each removal is exactly what `ccwt remove <name>` does, branch included. |
 | `ccwt new-worktree-name` | Print a generated worktree name (`adjective-verb-noun`) without creating anything. |
 | `ccwt repo-root` | Print the root of the current git repository. Add `--root-worktree` to print the *enclosing* repo root when you're inside a `.claude/worktrees/<name>` worktree. |
 | `ccwt ..` | Shorthand for `repo-root --root-worktree`: print (and, with shell integration, `cd` to) the enclosing repository root. |
