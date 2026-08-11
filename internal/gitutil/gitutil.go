@@ -226,24 +226,30 @@ func LastCommit(repoPath string) (Commit, error) {
 }
 
 // MergedBranches returns the set of local branches already contained in the
-// repo's main branch ("main", or "master" when there is no "main"). A git
-// failure yields an empty set: this only decorates a listing.
-//
-// ponytail: local main only — a branch merged upstream but not pulled yet
-// reads as unmerged. Compare against origin/main too if that bites.
+// repo's main branch ("main", or "master" when there is no "main") — local or
+// remote-tracking, whichever contains them. A branch merged into origin/main
+// is safe to delete even when nobody has pulled main yet, and a local-only
+// merge is safe even when it hasn't been pushed, so take the union of the two.
+// A git failure yields an empty set: this only decorates a listing.
 func MergedBranches() map[string]bool {
 	merged := map[string]bool{}
 	for _, base := range []string{"main", "master"} {
-		out, err := exec.Command("git", "branch", "--merged", base, "--format=%(refname:short)").Output()
-		if err != nil {
-			continue
-		}
-		for b := range strings.SplitSeq(string(out), "\n") {
-			if b != "" {
-				merged[b] = true
+		var found bool
+		for _, ref := range []string{base, "origin/" + base} {
+			out, err := exec.Command("git", "branch", "--merged", ref, "--format=%(refname:short)").Output()
+			if err != nil {
+				continue // ref doesn't resolve: no remote, or the other base name
+			}
+			found = true
+			for b := range strings.SplitSeq(string(out), "\n") {
+				if b != "" {
+					merged[b] = true
+				}
 			}
 		}
-		break
+		if found {
+			break
+		}
 	}
 	return merged
 }

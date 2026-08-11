@@ -206,6 +206,25 @@ func TestRemoveSquashMerged(t *testing.T) {
 	}
 }
 
+// TestRemoveMergedUpstream: a branch merged into origin/main is removable even
+// when local main hasn't been pulled and so doesn't contain it yet.
+func TestRemoveMergedUpstream(t *testing.T) {
+	initRepo(t)
+	path := capture(t, &NewWorktreeBranchCmd{Name: "upstreamed", Path: true})
+	git(t, "-C", path, "commit", "--allow-empty", "-m", "work")
+
+	// The PR merged: origin/main moved on to contain the branch, local main
+	// still sits where it was because nobody pulled.
+	git(t, "update-ref", "refs/remotes/origin/main", "refs/heads/worktree-upstreamed")
+
+	if err := (&RemoveCmd{Name: "upstreamed"}).Run(); err != nil {
+		t.Fatalf("removing a branch merged into origin/main: %v", err)
+	}
+	if gitutil.BranchExists("worktree-upstreamed") {
+		t.Error("worktree removed but the branch was stranded")
+	}
+}
+
 // initRepo makes a git repo with one commit on main and chdirs into it.
 func initRepo(t *testing.T) string {
 	t.Helper()
