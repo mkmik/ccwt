@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"text/tabwriter"
 	"time"
+	"unicode/utf8"
 
 	"github.com/alecthomas/kong"
 	"golang.org/x/term"
@@ -319,7 +321,14 @@ func marker(on bool, glyph string) string {
 var stdoutIsTTY = func() bool { return term.IsTerminal(int(os.Stdout.Fd())) }
 
 func (c *ListCmd) Run() error {
-	_, err := renderList(os.Stdout, stdoutIsTTY())
+	tty := stdoutIsTTY()
+	// Fit the table to the terminal only when there is one — and GetSize
+	// returns 0 when there isn't, which is exactly what "don't fit" means here.
+	width := 0
+	if tty {
+		width, _, _ = term.GetSize(int(os.Stdout.Fd()))
+	}
+	_, err := renderList(os.Stdout, tty, width)
 	return err
 }
 
@@ -327,8 +336,9 @@ func (c *ListCmd) Run() error {
 // the order their rows were printed, which is what lets `ccwt tui` map a
 // screen line back to a worktree. tty selects the human-reader decorations
 // (markers, ✓); the tui always asks for them, plain `list` only when stdout is
-// a terminal.
-func renderList(out io.Writer, tty bool) ([]string, error) {
+// a terminal. width is the terminal the table has to fit inside, or 0 for "as
+// wide as it wants".
+func renderList(out io.Writer, tty bool, width int) ([]string, error) {
 	root, err := gitutil.RepoRoot(true)
 	if err != nil {
 		return nil, err
@@ -348,10 +358,10 @@ func renderList(out io.Writer, tty bool) ([]string, error) {
 	})
 
 	type row struct {
-		name, branch, age, claude, subject string
-		plain                              string // name without the tty marker
-		dirty                              bool
-		sortTime                           time.Time
+		name, branch, age, claude, subject, summary string
+		plain                                       string // name without the tty marker
+		dirty                                       bool
+		sortTime                                    time.Time
 	}
 
 	// Every lookup below shells out to git or lsof, and none of them depend on
@@ -382,12 +392,13 @@ func renderList(out io.Writer, tty bool) ([]string, error) {
 			}
 			if commit, err := gitutil.LastCommit(wt.Path); err == nil {
 				r.age = humanAge(time.Since(commit.Time))
-				r.subject = truncate(commit.Subject, 60)
+				r.subject = commit.Subject
 				r.sortTime = commit.Time
 			} else {
 				r.age = "?"
 				r.subject = "(no commits)"
 			}
+			r.summary = sessionSummary(wt.Path)
 			if tty {
 				r.dirty = gitutil.Dirty(wt.Path)
 			}
@@ -418,14 +429,98 @@ func renderList(out io.Writer, tty bool) ([]string, error) {
 	if tty {
 		gutter = marker(false, "")
 	}
-	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, gutter+"NAME\t"+gutter+"BRANCH\tAGE\tCLAUDE\t"+gutter+"LAST COMMIT")
+	table := [][]string{{gutter + "NAME", gutter + "BRANCH", "AGE", "CLAUDE", gutter + "LAST COMMIT", "SESSION"}}
 	names := make([]string, len(rows))
 	for i, r := range rows {
 		names[i] = r.plain
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", r.name, r.branch, r.age, r.claude, r.subject)
+		table = append(table, []string{r.name, r.branch, r.age, r.claude, r.subject, r.summary})
+	}
+	fitTable(table, width)
+
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	for _, r := range table {
+		fmt.Fprintln(w, strings.Join(r, "\t"))
 	}
 	return names, w.Flush()
+}
+
+// columns says how each column of the table may be shortened when it doesn't
+// all fit, and how wide it is allowed to get when it does. AGE and CLAUDE are
+// never longer than their own headers, so there is nothing to cut there.
+//
+// BRANCH and LAST COMMIT lose their middle rather than their end: what tells
+// "worktree-elegant-…-cook" from "worktree-elegant-…-otter", or one commit
+// from the next ("… tui` (#32)"), tends to be the last word.
+var columns = []struct {
+	cut func(string, int) string
+	max int // only used when there's no terminal width to fit to; 0 = no cap
+}{
+	{truncate, 0},
+	{elide, 0},
+	{nil, 0},
+	{nil, 0},
+	{elide, 60},
+	{truncate, 60},
+}
+
+// minCol is as narrow as a column ever gets: three characters and an ellipsis,
+// under the two-space gutter. Past that a column says nothing at all, so a
+// terminal too narrow to give every column that much (~43 columns) spills
+// instead — there is no useful table left to render at that size.
+const minCol = 6
+
+// fitTable shortens table's cells in place until every row fits within width
+// terminal columns — a row that doesn't wraps, and a wrapped row wrecks both
+// the alignment and the `tui`'s cursor arithmetic. Characters come off
+// whichever shrinkable column is currently the widest, so the space goes to
+// the columns that need it and a short one is never cut to subsidise a long
+// one. The headers are cut along with everything else, since a header wider
+// than its column would only pull the column back open.
+//
+// width <= 0 means there's no terminal to fit to — piped output, say — and
+// the fixed caps stand in for one, so a paragraph-long session summary can't
+// run off into the distance.
+func fitTable(table [][]string, width int) {
+	widths := make([]int, len(columns))
+	for _, row := range table {
+		for i, cell := range row {
+			widths[i] = max(widths[i], utf8.RuneCountInString(cell))
+		}
+	}
+	for i, c := range columns {
+		if width <= 0 && c.max > 0 {
+			widths[i] = min(widths[i], c.max)
+		}
+	}
+	// tabwriter pads every column but the last one by two spaces.
+	total := 2 * (len(columns) - 1)
+	for _, w := range widths {
+		total += w
+	}
+	for width > 0 && total > width {
+		widest := -1
+		for i, c := range columns {
+			if c.cut == nil || widths[i] <= minCol {
+				continue
+			}
+			if widest < 0 || widths[i] > widths[widest] {
+				widest = i
+			}
+		}
+		if widest < 0 {
+			break
+		}
+		widths[widest]--
+		total--
+	}
+
+	for _, row := range table {
+		for i, c := range columns {
+			if c.cut != nil {
+				row[i] = c.cut(row[i], widths[i])
+			}
+		}
+	}
 }
 
 // claudeCwds returns the set of working directories of currently-running
@@ -510,6 +605,107 @@ func isClaudeActiveIn(worktreePath string, cwds map[string]bool) bool {
 	return false
 }
 
+// sessionSummary describes in one line what the most recent Claude Code
+// session in worktreePath was about, or "" when that worktree has never had
+// one. Claude Code keeps its session transcripts as JSONL files under
+// ~/.claude/projects/<cwd with every non-alphanumeric character replaced by
+// "-">/, one per session, so "most recent" is simply the newest file there.
+func sessionSummary(worktreePath string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	slug := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return r
+		default:
+			return '-'
+		}
+	}, worktreePath)
+
+	entries, err := os.ReadDir(filepath.Join(home, ".claude", "projects", slug))
+	if err != nil {
+		return ""
+	}
+	var newest string
+	var newestMod time.Time
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(newestMod) {
+			newest, newestMod = e.Name(), info.ModTime()
+		}
+	}
+	if newest == "" {
+		return ""
+	}
+	return summarizeTranscript(filepath.Join(home, ".claude", "projects", slug, newest))
+}
+
+// summarizeTranscript boils one session transcript down to a single line: the
+// last recap the session produced — /recap, and the summaries Claude Code
+// writes on its own, both land as an "away_summary" entry — or, for a session
+// that never produced one, the first thing the user typed.
+//
+// Transcripts run to megabytes, so full JSON parsing is kept off the hot path:
+// only lines that mention away_summary are parsed looking for a recap (the
+// check below still decides), and the hunt for the first prompt stops as soon
+// as it finds one, a handful of lines in.
+func summarizeTranscript(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+
+	var recap, first string
+	for line := range strings.SplitSeq(string(data), "\n") {
+		if strings.Contains(line, "away_summary") {
+			var e struct {
+				Type    string `json:"type"`
+				Subtype string `json:"subtype"`
+				Content string `json:"content"`
+			}
+			if json.Unmarshal([]byte(line), &e) == nil && e.Type == "system" && e.Subtype == "away_summary" {
+				recap = e.Content
+			}
+			continue
+		}
+		if first != "" {
+			continue
+		}
+		var e struct {
+			Type    string `json:"type"`
+			IsMeta  bool   `json:"isMeta"`
+			Message struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal([]byte(line), &e) != nil || e.Type != "user" || e.IsMeta {
+			continue
+		}
+		// A typed prompt is a bare JSON string. Everything else the session
+		// feeds back as a "user" turn — tool results, pasted attachments —
+		// arrives as an array, and slash commands as a "<command-name>…" blob.
+		var text string
+		if json.Unmarshal(e.Message.Content, &text) == nil && !strings.HasPrefix(text, "<") {
+			first = text
+		}
+	}
+	if recap == "" {
+		recap = first
+	}
+	// Flatten: a recap carries the UI's own nudge on the end, and a first
+	// prompt can be paragraphs of text — either way a table cell gets one line.
+	recap = strings.Join(strings.Fields(recap), " ")
+	return strings.TrimSpace(strings.TrimSuffix(recap, "(disable recaps in /config)"))
+}
+
 type InitCmd struct {
 	Shell string `arg:"" enum:"bash,zsh,fish" help:"Shell to emit the integration snippet for (bash, zsh, or fish)."`
 }
@@ -567,18 +763,49 @@ func humanAge(d time.Duration) string {
 	}
 }
 
+// truncate cuts s to limit characters, ellipsis included. It counts runes
+// rather than bytes: session summaries are prose, and cutting one mid-rune
+// would print a replacement character.
 func truncate(s string, limit int) string {
 	if len(s) <= limit {
 		return s
 	}
-	return s[:limit-1] + "…"
+	r := []rune(s)
+	if len(r) <= limit {
+		return s
+	}
+	return string(r[:limit-1]) + "…"
+}
+
+// elide cuts s to limit characters too, but takes the characters out of the
+// middle so the last word survives: "worktree-elegant-…-cook". It falls back
+// to truncate when there is no last word to save, or when saving it would
+// leave nothing recognisable at the front.
+func elide(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= limit {
+		return s
+	}
+	// The tail is the last word together with the separator in front of it, so
+	// that the join reads the way the original did: "-cook", " (#32)".
+	if i := strings.LastIndexAny(s, " -_/"); i >= 0 {
+		tail := []rune(s[i:])
+		head := limit - 1 - len(tail)
+		if head >= 3 && len(tail) >= 2 && len(tail) < limit/2 {
+			return string(r[:head]) + "…" + string(tail)
+		}
+	}
+	return truncate(s, limit)
 }
 
 var cli struct {
 	NewWorktreeName   NewWorktreeNameCmd   `cmd:"" name:"new-worktree-name" help:"Generate a Claude Code-style worktree name (adjective-verb-noun)."`
 	NewWorktreeBranch NewWorktreeBranchCmd `cmd:"" name:"new" help:"Create a new worktree under .claude/worktrees/<name> on a new branch worktree-<name>, and print <name>."`
 	Cd                CdCmd                `cmd:"" name:"cd" help:"cd into an existing worktree under .claude/worktrees/<name> (errors if it doesn't exist). Use \"..\" for the enclosing repo root, or \"-\" for the previous directory."`
-	List              ListCmd              `cmd:"" name:"list" aliases:"ls" help:"List Claude Code worktrees with branch, age, running-session, and last commit."`
+	List              ListCmd              `cmd:"" name:"list" aliases:"ls" help:"List Claude Code worktrees with branch, age, running-session, last commit, and what the last Claude Code session there was about."`
 	Tui               TuiCmd               `cmd:"" name:"tui" help:"Show the worktree list full-screen, refreshing as things change. q quits, p runs git pull, arrows select a worktree, r removes it. Under herdr, x creates a worktree and opens it, and enter (or a click) opens the selected one."`
 	Remove            RemoveCmd            `cmd:"" name:"remove" help:"Delete a worktree under .claude/worktrees/<name> and its branch (merged-only; -D to force unmerged, --keep-branch to remove only the worktree). Use \".\" for the current worktree; removing it cds to the repo root."`
 	RepoRoot          RepoRootCmd          `cmd:"" name:"repo-root" help:"Print the root directory of the current git repository."`

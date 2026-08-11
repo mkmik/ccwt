@@ -63,12 +63,13 @@ ccwt new --path                   # /path/to/repo/.claude/worktrees/dreamy-forag
 ```
 
 `ccwt list` renders a table of the repo's worktrees with their branch, age, last commit,
-and whether a Claude Code session is currently running in each:
+whether a Claude Code session is currently running in each, and what the most recent
+session there was about:
 
 ```
-  NAME                      BRANCH                           AGE  CLAUDE    LAST COMMIT
-* dreamy-foraging-hickey    worktree-dreamy-foraging-hickey  2h   yes     * Add the widget
-  calm-baking-otter       ✓ worktree-calm-baking-otter       1d   no        Fix the flux capacitor
+  NAME                      BRANCH                           AGE  CLAUDE    LAST COMMIT             SESSION
+* dreamy-foraging-hickey    worktree-dreamy-foraging-hickey  2h   yes     * Add the widget          Goal was a widget on the dashboard; it's built and…
+  calm-baking-otter       ✓ worktree-calm-baking-otter       1d   no        Fix the flux capacitor  the flux capacitor drifts by a second an hour, fix…
 ```
 
 A `*` before the name marks the worktree you're currently in; a `*` before the last commit
@@ -76,13 +77,28 @@ means that worktree has uncommitted changes; a `✓` before the branch means it'
 merged into `main` (or `master`), so the worktree is safe to `ccwt remove`. All three are
 omitted when stdout isn't a terminal, so piped output stays parseable.
 
+SESSION comes from the newest Claude Code transcript for that worktree: the last recap the
+session produced (`/recap`, or one Claude wrote on its own), falling back to the first
+prompt you typed when it never recapped. It's blank for a worktree nobody has run a
+session in.
+
+The table is sized to your terminal, so it never wraps. When it has to give something up
+it takes it from whichever column is widest at the time, and branches and commit subjects
+lose their middle rather than their tail — the last word is usually what tells them apart:
+
+```
+  NAME                       BRANCH                   AGE  CLAUDE    LAST COMMIT              SESSION
+* dreamy-foraging-hickey     worktree-dreamy-…-hickey 2h   yes     * Add the widget           Goal was a widget on the…
+  calm-baking-otter        ✓ worktree-calm-b…-otter   1d   no        Fix the flux ca… (#41)   the flux capacitor drift…
+```
+
 `ccwt tui` shows that same table full-screen and keeps it up to date, repainting in place
 so it doesn't flicker, with a status bar along the bottom:
 
 ```
-  NAME                      BRANCH                           AGE  CLAUDE    LAST COMMIT
-* dreamy-foraging-hickey    worktree-dreamy-foraging-hickey  2h   yes     * Add the widget
-  calm-baking-otter       ✓ worktree-calm-baking-otter       1d   no        Fix the flux capacitor
+  NAME                      BRANCH                           AGE  CLAUDE    LAST COMMIT             SESSION
+* dreamy-foraging-hickey    worktree-dreamy-foraging-hickey  2h   yes     * Add the widget          Goal was a widget on the dashboard; it's built and…
+  calm-baking-otter       ✓ worktree-calm-baking-otter       1d   no        Fix the flux capacitor  the flux capacitor drifts by a second an hour, fix…
 
  ccwt  q:quit  p:pull  x:new  ↵:open  r:remove │ main  ↑1 ↓2
 ```

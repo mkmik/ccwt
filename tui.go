@@ -179,15 +179,17 @@ func (u *ui) move(d int) {
 // on Windows. ponytail: costs up to one --interval of staleness after a
 // resize; wire up the signal (behind a build tag) if that ever grates.
 func (u *ui) frame() ([]string, error) {
-	var buf bytes.Buffer
-	names, err := renderList(&buf, true)
-	if err != nil {
-		return nil, err
-	}
 	cols, rows, err := term.GetSize(int(os.Stdout.Fd()))
 	if err != nil {
 		cols, rows = 80, 24
 	}
+
+	var buf bytes.Buffer
+	names, err := renderList(&buf, true, cols)
+	if err != nil {
+		return nil, err
+	}
+
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
 	body := max(rows-1, 1)
 
