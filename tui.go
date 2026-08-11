@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -148,6 +149,10 @@ func (c *TuiCmd) Run() error {
 			u.stale() // the tick is what re-reads the list
 		case k := <-keys:
 			switch {
+			// While the search prompt is up every keystroke is text, so this
+			// comes first: `q` there is a letter, not the quit key.
+			case u.typing:
+				u.edit(k)
 			case k == "q", k == "\x03": // \x03 = Ctrl-C, which raw mode delivers as a keystroke
 				return nil
 			case k == "p":
@@ -162,6 +167,16 @@ func (c *TuiCmd) Run() error {
 				u.move(-1)
 			case k == "\x1b[B", k == "j":
 				u.move(1)
+			case k == "/":
+				u.prompt(1)
+			case k == "?":
+				u.prompt(-1)
+			case k == "n":
+				u.seek(u.dir)
+			case k == "N":
+				u.seek(-u.dir)
+			case k == "\x1b":
+				u.search = search{} // :nohlsearch, near enough
 			case k == " ": // opens a worktree, and does nothing on a section header
 				if err := open(); err != nil {
 					return err
@@ -212,6 +227,11 @@ type ui struct {
 	collapsed map[string]bool // project root -> section folded shut
 	msg       string
 
+	search        // the pattern in force, which n and N walk and the frame picks out
+	saved  search // what the open prompt replaced, put back if it's abandoned
+	anchor listRow
+	typing bool // the prompt is up and taking keystrokes
+
 	// The last list read, kept so that moving the selection — which changes
 	// nothing but which row is reverse-videoed — doesn't re-run the git and
 	// lsof scan behind it (half a second on a big repo, once per keypress).
@@ -248,6 +268,120 @@ func (u *ui) move(d int) {
 	}
 	i := min(max(slices.Index(u.rows, u.sel)+d, 0), len(u.rows)-1)
 	u.sel = u.rows[i]
+}
+
+// search is one / (or ?) pattern: the text of it and the direction n repeats
+// it in. Kept together because they're saved and restored together — abandoning
+// a `?` prompt has to put back the way the old pattern ran, not just its text.
+type search struct {
+	query string
+	dir   int // +1 for /, -1 for ?
+}
+
+// prompt opens the search prompt, running in direction d. It remembers both the
+// pattern it displaces, so escape can put it back, and the row to search from,
+// so that the match tracks the pattern being typed instead of walking further
+// down the list with every keystroke.
+func (u *ui) prompt(d int) {
+	u.saved, u.search = u.search, search{dir: d}
+	u.anchor, u.msg, u.typing = u.sel, "", true
+}
+
+// edit feeds one keystroke to the prompt: enter accepts the match, escape (and
+// Ctrl-C) abandons the whole search, backspace rubs out a rune, and anything
+// printable is appended — a multi-byte rune arrives as its bytes, in order,
+// which is what this appends. Escape sequences (arrows, mouse reports) are
+// ignored: they're several bytes but only the first is under 0x20, so they'd
+// otherwise land in the pattern as garbage.
+func (u *ui) edit(k string) {
+	switch k {
+	case "\r", "\n":
+		u.typing = false
+		u.report(u.preview())
+	case "\x1b", "\x03":
+		u.search, u.sel, u.typing = u.saved, u.anchor, false
+	case "\x7f", "\b":
+		if r := []rune(u.query); len(r) > 0 {
+			u.query = string(r[:len(r)-1])
+			u.preview()
+		}
+	default:
+		if len(k) == 1 && k[0] >= ' ' {
+			u.query += k
+			u.preview()
+		}
+	}
+}
+
+// preview is the search as run while it's being typed: always from the row the
+// prompt opened on, so that deleting a character walks the match back rather
+// than leaving the selection wherever the longer pattern had pushed it. A
+// pattern that matches nothing leaves the selection on the anchor, as vim does.
+func (u *ui) preview() bool {
+	u.sel = u.anchor
+	return u.query == "" || u.find(u.dir)
+}
+
+// seek is n and N: move the selection to the next match in direction d.
+func (u *ui) seek(d int) {
+	if u.query != "" {
+		u.report(u.find(d))
+	}
+}
+
+// report puts the outcome of a search on the bar — nothing at all when it
+// landed on something, and otherwise which of the two ways it failed.
+func (u *ui) report(ok bool) {
+	switch _, err := regexp.Compile(u.query); {
+	case ok:
+		u.msg = ""
+	case err != nil:
+		u.msg = "bad pattern: " + u.query
+	default:
+		u.msg = "not found: " + u.query
+	}
+}
+
+// find walks the rows from the selection in direction d, wrapping around the
+// ends the way vim's search does, and selects the first one the pattern matches.
+// It matches against the line as drawn — name, branch, age and topic at once —
+// because that's what the user is looking at; a per-column search would need a
+// syntax to say which column.
+func (u *ui) find(d int) bool {
+	re := u.re()
+	if re == nil || len(u.rows) == 0 {
+		return false
+	}
+	// Nothing selected: start just off the end we're heading away from, so the
+	// first row probed is the top one either way.
+	start := slices.Index(u.rows, u.sel)
+	if start < 0 {
+		start = -d
+	}
+	for i := 1; i <= len(u.rows); i++ {
+		j := ((start+d*i)%len(u.rows) + len(u.rows)) % len(u.rows)
+		// Line 0 of the cached table is the header, so row j is line j+1.
+		if j+1 < len(u.body) && re.MatchString(u.body[j+1]) {
+			u.sel = u.rows[j]
+			return true
+		}
+	}
+	return false
+}
+
+// re is the pattern as a regexp, always case-insensitive: these are worktree
+// names and commit subjects, and nobody hunting for one holds shift for it.
+// Anything that doesn't compile matches nothing, which is what a half-typed
+// "[wip" is on its way through — incremental search has to survive it.
+func (u *ui) re() *regexp.Regexp {
+	if u.query == "" {
+		return nil
+	}
+	re, err := regexp.Compile("(?i)" + u.query)
+	if err != nil {
+		return nil
+	}
+	return re
 }
 
 // toggle folds the selected project's section shut, or opens it back up. Only
@@ -351,14 +485,28 @@ func (u *ui) frame() ([]string, error) {
 	// the cache.
 	last := min(1+u.top+u.height, len(u.body))
 	lines := append([]string{u.body[0]}, u.body[min(1+u.top, last):last]...)
-	if i := sel - u.top; sel >= 0 && i+1 < len(lines) {
-		lines[i+1] = highlight(lines[i+1], cols)
+	// Every match on screen is picked out, not just the one the selection landed
+	// on — vim's hlsearch. In a list of near-identical generated names, a bar
+	// across one row doesn't say what about it matched.
+	re := u.re()
+	for i, line := range lines[1:] {
+		lines[i+1] = draw(line, cols, re, i == sel-u.top)
 	}
 
 	for len(lines) < body {
 		lines = append(lines, "")
 	}
-	return append(lines[:body], statusBar(cols, u.msg, u.sel, u.divergence())), nil
+	// While the prompt is up it takes the whole bar, as it does in vim: the key
+	// hints have nothing to say about a line you're typing into.
+	bar := statusBar(cols, u.msg, u.sel, u.divergence())
+	if u.typing {
+		p := "/"
+		if u.dir < 0 {
+			p = "?"
+		}
+		bar = highlight(p+u.query, cols)
+	}
+	return append(lines[:body], bar), nil
 }
 
 // divergence is gitDivergence for whichever repo the selection points at, kept
@@ -386,15 +534,41 @@ var termSize = func() (cols, rows int) {
 	return cols, rows
 }
 
-// highlight reverse-videos a row edge to edge, so the selection reads as a bar
-// across the screen rather than stopping at the last commit subject.
-func highlight(line string, cols int) string {
+// draw is one line as it goes on the screen: cut to the terminal width, every
+// match of re picked out, and — when it's the selected row — reverse-videoed
+// edge to edge, so the selection reads as a bar across the screen rather than
+// stopping at the last commit subject.
+//
+// A match is drawn inverted against whatever it sits on: reverse video on an
+// ordinary row, and a hole punched back out of the bar on the selected one.
+// Reverse being the only attribute in play, "off" is a plain reset either way,
+// which is a good deal more portable than SGR 27.
+//
+// The escapes go on after the cut, since they aren't printable width — and a
+// pattern that can match the empty string is left alone rather than wrapping
+// every position in an invisible pair of them.
+func draw(line string, cols int, re *regexp.Regexp, sel bool) string {
 	r := []rune(line)
 	if len(r) > cols {
 		r = r[:max(cols, 0)]
 	}
-	return "\x1b[7m" + string(r) + strings.Repeat(" ", max(cols-len(r), 0)) + "\x1b[0m"
+	on, off := "\x1b[7m", "\x1b[0m"
+	if sel {
+		on, off = off, on
+	}
+	line = string(r)
+	if re != nil && !re.MatchString("") {
+		line = re.ReplaceAllString(line, on+"$0"+off)
+	}
+	if !sel {
+		return line
+	}
+	return "\x1b[7m" + line + strings.Repeat(" ", max(cols-len(r), 0)) + "\x1b[0m"
 }
+
+// highlight is draw for the lines that are a bar in their own right — the
+// status line, which has no rows and no matches on it.
+func highlight(line string, cols int) string { return draw(line, cols, nil, true) }
 
 // mouseRow returns the 1-based screen row of a left-button press in the SGR
 // mouse report k (ESC [ < button ; col ; row M), or 0 when k is anything else
@@ -471,7 +645,7 @@ func splitKeys(s string) []string {
 // that's all it takes.
 func statusBar(cols int, msg string, sel listRow, div string) string {
 	herdr := underHerdr()
-	keys := " ccwt  q:quit  p:pull"
+	keys := " ccwt  q:quit  p:pull  /:search"
 	if herdr {
 		keys += "  x:new"
 	}
