@@ -129,7 +129,13 @@ func (c *TuiCmd) Run() error {
 				}
 			case k == "r":
 				if name := u.sel; name != "" {
-					if err := act("removing "+name+"…", func() string { return removeWorktree(name) }); err != nil {
+					if err := act("removing "+name+"…", func() string {
+						msg, ok := removeWorktree(name)
+						if ok {
+							u.dropSelected()
+						}
+						return msg
+					}); err != nil {
 						return err
 					}
 				}
@@ -168,6 +174,19 @@ func (u *ui) move(d int) {
 	}
 	i := min(max(slices.Index(u.names, u.sel)+d, 0), len(u.names)-1)
 	u.sel = u.names[i]
+}
+
+// dropSelected moves the selection off the selected worktree, as it has to once
+// that worktree is removed: down a row, or up one when the removed row was the
+// last. The removed name is still in u.names — the list is only re-read on the
+// next frame — so this is the ordinary walk, and when it was the only row the
+// selection stays on the dead name and frame clears it.
+func (u *ui) dropSelected() {
+	gone := u.sel
+	u.move(1)
+	if u.sel == gone {
+		u.move(-1)
+	}
 }
 
 // frame renders the full screen: the worktree table, padding, and a status bar
@@ -411,11 +430,11 @@ func herdrOpen(name string) string {
 // removeWorktree is `ccwt remove <name>`, refusal and all: an unmerged branch
 // comes back as the same error it prints on the command line, so the tui never
 // deletes something the cli wouldn't.
-func removeWorktree(name string) string {
+func removeWorktree(name string) (string, bool) {
 	if err := (&RemoveCmd{Name: name}).Run(); err != nil {
-		return "remove failed: " + err.Error()
+		return "remove failed: " + err.Error(), false
 	}
-	return "removed " + name
+	return "removed " + name, true
 }
 
 // lastLine picks the line of a failed command's output most likely to say why,

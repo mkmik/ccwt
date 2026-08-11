@@ -326,6 +326,28 @@ func TestSelectionFollowsTheWorktree(t *testing.T) {
 	u.move(-1) // must not panic on an empty list
 }
 
+// Removing a worktree must not dump you back at nothing selected: `r` twice in
+// a row should remove two worktrees, not one.
+func TestSelectionSurvivesRemove(t *testing.T) {
+	u := ui{names: []string{"alpha", "bravo", "charlie"}, sel: "bravo"}
+	u.dropSelected()
+	if u.sel != "charlie" { // the row below
+		t.Errorf("after removing a middle row, sel = %q, want charlie", u.sel)
+	}
+
+	u.names = []string{"alpha", "charlie"}
+	u.dropSelected()
+	if u.sel != "alpha" { // last row: fall back to the one above
+		t.Errorf("after removing the last row, sel = %q, want alpha", u.sel)
+	}
+
+	u.names = []string{"alpha"}
+	u.dropSelected() // the only row: nothing left to select, frame clears it
+	if u.sel != "alpha" {
+		t.Errorf("after removing the only row, sel = %q, want alpha", u.sel)
+	}
+}
+
 // A click is turned into a worktree by counting screen lines, so the frame's
 // row i must really be names[i] — off by the one header line, and clicking a
 // row would open (or `r` would remove) its neighbour.
