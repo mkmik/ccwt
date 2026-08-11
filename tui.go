@@ -497,7 +497,11 @@ func (u *ui) frame() ([]string, error) {
 	// across one row doesn't say what about it matched.
 	re := u.re()
 	for i, line := range lines[1:] {
-		lines[i+1] = draw(line, cols, re, i == sel-u.top)
+		bg := ""
+		if i == sel-u.top {
+			bg = rowBar
+		}
+		lines[i+1] = draw(line, cols, re, bg)
 	}
 
 	for len(lines) < body {
@@ -602,41 +606,46 @@ var termSize = func() (cols, rows int) {
 	return cols, rows
 }
 
+// rowBar is the background the selection sits on: bright black, which every
+// terminal draws as a gray. Reverse video would be the portable choice, but a
+// whole row of it is a black slab, and this one moves under the arrows.
+const rowBar = "\x1b[100m"
+
 // draw is one line as it goes on the screen: cut to the terminal width, every
-// match of re picked out, and — when it's the selected row — reverse-videoed
-// edge to edge, so the selection reads as a bar across the screen rather than
+// match of re picked out, and — when bar is set — laid on that background edge
+// to edge, so the selection reads as a band across the screen rather than
 // stopping at the last commit subject.
 //
-// A match is drawn inverted against whatever it sits on: reverse video on an
-// ordinary row, and a hole punched back out of the bar on the selected one.
-// Reverse being the only attribute in play, "off" is a plain reset either way,
-// which is a good deal more portable than SGR 27.
+// A match is drawn against whatever it sits on: reverse video on a bare row,
+// and a hole punched back out of the band on a barred one. "Off" is a plain
+// reset either way, which is a good deal more portable than SGR 27/49.
 //
 // The escapes go on after the cut, since they aren't printable width — and a
 // pattern that can match the empty string is left alone rather than wrapping
 // every position in an invisible pair of them.
-func draw(line string, cols int, re *regexp.Regexp, sel bool) string {
+func draw(line string, cols int, re *regexp.Regexp, bar string) string {
 	r := []rune(line)
 	if len(r) > cols {
 		r = r[:max(cols, 0)]
 	}
 	on, off := "\x1b[7m", "\x1b[0m"
-	if sel {
-		on, off = off, on
+	if bar != "" {
+		on, off = off, bar
 	}
 	line = string(r)
 	if re != nil && !re.MatchString("") {
 		line = re.ReplaceAllString(line, on+"$0"+off)
 	}
-	if !sel {
+	if bar == "" {
 		return line
 	}
-	return "\x1b[7m" + line + strings.Repeat(" ", max(cols-len(r), 0)) + "\x1b[0m"
+	return bar + line + strings.Repeat(" ", max(cols-len(r), 0)) + "\x1b[0m"
 }
 
 // highlight is draw for the lines that are a bar in their own right — the
-// status line, which has no rows and no matches on it.
-func highlight(line string, cols int) string { return draw(line, cols, nil, true) }
+// status line, which has no rows and no matches on it. It stays reverse video:
+// it's a fixture at the bottom of the screen, not something the cursor lands on.
+func highlight(line string, cols int) string { return draw(line, cols, nil, "\x1b[7m") }
 
 // mouseRow returns the 1-based screen row of a left-button press in the SGR
 // mouse report k (ESC [ < button ; col ; row M), or 0 when k is anything else
