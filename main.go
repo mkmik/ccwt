@@ -513,11 +513,12 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 		}
 	}
 
-	// The worktree we're running in gets a "* " on its name, one on its last
-	// commit when it has uncommitted changes, and a "✓ " on its branch when
-	// that branch is already merged — but only for human readers: piped
-	// output stays parseable. Unmarked cells get the same two-space gutter
-	// so the columns line up.
+	// The worktree we're running in gets a "* " on its name, and its branch
+	// gets a "✓ " when it's already merged — or a "* " when the worktree has
+	// uncommitted changes, which beats the "✓": whatever git says about the
+	// branch, there's unsaved work here and it isn't safe to delete. Human
+	// readers only: piped output stays parseable. Unmarked cells get the same
+	// two-space gutter so the columns line up.
 	rows := make([]row, len(refs))
 	for i, rf := range refs {
 		wg.Go(func() {
@@ -540,8 +541,11 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 			r.summary = sessionSummary(rf.wt.Path)
 			if tty {
 				r.name = marker(rf.wt.Path == cur, "*") + r.name
-				r.branch = marker(rf.merged[rf.wt.Branch], "✓") + r.branch
-				r.subject = marker(gitutil.Dirty(rf.wt.Path), "*") + r.subject
+				glyph, on := "✓", rf.merged[rf.wt.Branch]
+				if gitutil.Dirty(rf.wt.Path) {
+					glyph, on = "*", true
+				}
+				r.branch = marker(on, glyph) + r.branch
 			}
 		})
 	}
@@ -568,7 +572,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	if tty {
 		gutter = marker(false, "")
 	}
-	table := [][]string{{gutter + "NAME", gutter + "BRANCH", "AGE", "CLAUDE", gutter + "LAST COMMIT", "SESSION"}}
+	table := [][]string{{gutter + "NAME", gutter + "BRANCH", "AGE", "CLAUDE", "LAST COMMIT", "SESSION"}}
 	var lines []listRow
 	emit := func(r row) {
 		lines = append(lines, listRow{r.project, r.path})
