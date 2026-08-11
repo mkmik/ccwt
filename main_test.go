@@ -730,6 +730,37 @@ func TestGlobalListSpansProjects(t *testing.T) {
 	}
 }
 
+// -g works from anywhere, a directory that isn't a git repository included: it
+// must list the configured projects without git muttering "fatal: not a git
+// repository" about the one place it wasn't asked about.
+func TestGlobalListOutsideAnyRepo(t *testing.T) {
+	root := initRepo(t)
+	capture(t, &NewWorktreeBranchCmd{Name: "shared"})
+	t.Chdir(t.TempDir())
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func(orig *os.File) { os.Stderr = orig }(os.Stderr)
+	os.Stderr = w
+
+	// tty: the markers are the only thing that ever looked at the current
+	// directory, so the complaint only shows up with them turned on.
+	var buf bytes.Buffer
+	_, err = renderList(&buf, true, 0, []string{root}, nil)
+	w.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg, _ := io.ReadAll(r); len(msg) > 0 {
+		t.Errorf("-g complained about the current directory: %s", msg)
+	}
+	if !strings.Contains(buf.String(), "shared") {
+		t.Errorf("no worktree listed:\n%s", buf.String())
+	}
+}
+
 // Under -g the tui acts on rows belonging to projects it isn't standing in, so
 // a removal has to name that project's repo throughout: miss one git command
 // and it removes the worktree but strands the branch in the other repo.

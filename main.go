@@ -465,7 +465,11 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	var lsof sync.WaitGroup
 	var claudeCwdSet map[string]bool
 	lsof.Go(func() { claudeCwdSet = claudeCwds() })
-	if tty {
+	// The "you are here" marker is the last thing that asked the current
+	// directory anything, so under -g it goes too: the repos are the configured
+	// ones, and where ccwt was started needn't be a repo at all — asking git
+	// there only earns a "fatal: not a git repository" on the user's stderr.
+	if tty && !global {
 		wg.Go(func() { cur, _, _ = gitutil.CurrentClaudeWorktree() })
 	}
 	for i, dir := range projects {
