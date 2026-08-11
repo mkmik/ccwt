@@ -480,6 +480,17 @@ func TestListFitsTerminalWidth(t *testing.T) {
 	}
 }
 
+// BRANCH is capped even on a terminal with room to spare, so the space it
+// doesn't need goes to SESSION.
+func TestFitTableCapsBranch(t *testing.T) {
+	cols := listColumns(false)
+	row := []string{"a-name", "worktree-exceedingly-verbose-branch-name", "2h", "yes", "a commit", "a session summary"}
+	fitTable([][]string{row}, 500, cols)
+	if got := len([]rune(row[1])); got != cols[1].max {
+		t.Errorf("branch column is %d wide, want %d: %q", got, cols[1].max, row[1])
+	}
+}
+
 // Cutting the middle out of a branch or a commit subject has to leave the last
 // word — the part that says which branch, or which PR — attached.
 func TestElide(t *testing.T) {

@@ -532,8 +532,9 @@ func gitError(dir string, err error) error {
 }
 
 type column struct {
-	cut func(string, int) string
-	max int // only used when there's no terminal width to fit to; 0 = no cap
+	cut  func(string, int) string
+	max  int // always applies; 0 = no cap
+	pipe int // extra cap when there's no terminal width to fit to; 0 = no cap
 }
 
 // listColumns says how each column of the table may be shortened when it
@@ -544,17 +545,23 @@ type column struct {
 // BRANCH and LAST COMMIT lose their middle rather than their end: what tells
 // "worktree-elegant-…-cook" from "worktree-elegant-…-otter", or one commit
 // from the next ("… tui` (#32)"), tends to be the last word.
+//
+// BRANCH is capped even when there's room for it: it's usually the worktree's
+// own name with a "worktree-" bolted on the front, so the widest it ever needs
+// to be is much narrower than the widest it could be, and every column it
+// gives up goes to SESSION. PROJECT, when -g brings it along, is a repo's
+// directory name and stays short on its own.
 func listColumns(global bool) []column {
 	cols := []column{
-		{truncate, 0},
-		{elide, 0},
-		{nil, 0},
-		{nil, 0},
-		{elide, 60},
-		{truncate, 60},
+		{truncate, 0, 0},
+		{elide, 26, 0},
+		{nil, 0, 0},
+		{nil, 0, 0},
+		{elide, 0, 60},
+		{truncate, 0, 60},
 	}
 	if global {
-		return append([]column{{truncate, 0}}, cols...) // PROJECT
+		return append([]column{{truncate, 0, 0}}, cols...) // PROJECT
 	}
 	return cols
 }
@@ -584,8 +591,11 @@ func fitTable(table [][]string, width int, columns []column) {
 		}
 	}
 	for i, c := range columns {
-		if width <= 0 && c.max > 0 {
+		if c.max > 0 {
 			widths[i] = min(widths[i], c.max)
+		}
+		if width <= 0 && c.pipe > 0 {
+			widths[i] = min(widths[i], c.pipe)
 		}
 	}
 	// tabwriter pads every column but the last one by two spaces.

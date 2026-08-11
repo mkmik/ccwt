@@ -68,9 +68,9 @@ whether a Claude Code session is currently running in each, and what the most re
 session there was about:
 
 ```
-  NAME                      BRANCH                           AGE  CLAUDE    LAST COMMIT             SESSION
-* dreamy-foraging-hickey    worktree-dreamy-foraging-hickey  2h   yes     * Add the widget          Goal was a widget on the dashboard; it's built and…
-  calm-baking-otter       ✓ worktree-calm-baking-otter       1d   no        Fix the flux capacitor  the flux capacitor drifts by a second an hour, fix…
+  NAME                      BRANCH                    AGE  CLAUDE    LAST COMMIT             SESSION
+* dreamy-foraging-hickey    worktree-dreamy-…-hickey  2h   yes     * Add the widget          Goal was a widget on the dashboard; it's built and…
+  calm-baking-otter       ✓ worktree-calm-bak…-otter  1d   no        Fix the flux capacitor  the flux capacitor drifts by a second an hour, fix…
 ```
 
 A `*` before the name marks the worktree you're currently in; a `*` before the last commit
@@ -83,9 +83,11 @@ session produced (`/recap`, or one Claude wrote on its own), falling back to the
 prompt you typed when it never recapped. It's blank for a worktree nobody has run a
 session in.
 
-The table is sized to your terminal, so it never wraps. When it has to give something up
-it takes it from whichever column is widest at the time, and branches and commit subjects
-lose their middle rather than their tail — the last word is usually what tells them apart:
+The table is sized to your terminal, so it never wraps. BRANCH is kept narrow even when
+there's room — it's usually the worktree's own name with a `worktree-` in front — and the
+space goes to SESSION. When the table has to give up more it takes it from whichever
+column is widest at the time, and branches and commit subjects lose their middle rather
+than their tail — the last word is usually what tells them apart:
 
 ```
   NAME                       BRANCH                   AGE  CLAUDE    LAST COMMIT              SESSION
@@ -97,9 +99,9 @@ lose their middle rather than their tail — the last word is usually what tells
 so it doesn't flicker, with a status bar along the bottom:
 
 ```
-  NAME                      BRANCH                           AGE  CLAUDE    LAST COMMIT             SESSION
-* dreamy-foraging-hickey    worktree-dreamy-foraging-hickey  2h   yes     * Add the widget          Goal was a widget on the dashboard; it's built and…
-  calm-baking-otter       ✓ worktree-calm-baking-otter       1d   no        Fix the flux capacitor  the flux capacitor drifts by a second an hour, fix…
+  NAME                      BRANCH                    AGE  CLAUDE    LAST COMMIT             SESSION
+* dreamy-foraging-hickey    worktree-dreamy-…-hickey  2h   yes     * Add the widget          Goal was a widget on the dashboard; it's built and…
+  calm-baking-otter       ✓ worktree-calm-bak…-otter  1d   no        Fix the flux capacitor  the flux capacitor drifts by a second an hour, fix…
 
  ccwt  q:quit  p:pull  x:new  ↵:open  r:remove │ main  ↑1 ↓2
 ```
@@ -128,9 +130,9 @@ the repo you're standing in, newest-first across all of them, with a PROJECT col
 where each row came from:
 
 ```
-PROJECT   NAME                      BRANCH                           AGE  CLAUDE    LAST COMMIT
-ccwt      dreamy-foraging-hickey    worktree-dreamy-foraging-hickey  2h   yes     * Add the widget
-platform  calm-baking-otter       ✓ worktree-calm-baking-otter       1d   no        Fix the flux capacitor
+PROJECT   NAME                      BRANCH                    AGE  CLAUDE    LAST COMMIT
+ccwt      dreamy-foraging-hickey    worktree-dreamy-…-hickey  2h   yes     * Add the widget
+platform  calm-baking-otter       ✓ worktree-calm-bak…-otter  1d   no        Fix the flux capacitor
 ```
 
 It works from anywhere — including outside a git repository — and in the tui every action
