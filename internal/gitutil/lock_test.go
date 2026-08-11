@@ -65,6 +65,28 @@ func TestLockLifecycle(t *testing.T) {
 		t.Errorf("hand-locked worktree was removed: %v", err)
 	}
 
+	// LockWorktree reaches ccwt's lock from every state a worktree can be in:
+	// hand-locked with another reason (wt is still locked with "mine" here),
+	// unlocked, locked with no reason at all, and already ours.
+	for _, pre := range [][][]string{
+		nil,
+		{{"worktree", "unlock", wt}},
+		{{"worktree", "unlock", wt}, {"worktree", "lock", wt}},
+		nil,
+	} {
+		for _, args := range pre {
+			if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v\n%s", args, err, out)
+			}
+		}
+		if err := LockWorktree("", wt); err != nil {
+			t.Fatalf("LockWorktree after %v: %v", pre, err)
+		}
+		if got := lockReason("", wt); got != LockReason {
+			t.Errorf("after %v: lockReason = %q, want %q", pre, got, LockReason)
+		}
+	}
+
 	// A locked-but-deleted directory is still prunable.
 	wt = add("gone")
 	if err := os.RemoveAll(wt); err != nil {

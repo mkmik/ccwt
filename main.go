@@ -335,6 +335,29 @@ func (c *RemoveCmd) remove(root string) error {
 	return nil
 }
 
+type LockCmd struct {
+	Name string `arg:"" help:"Worktree name to lock. Use \".\" for the worktree you're currently in."`
+}
+
+func (c *LockCmd) Run() error {
+	root, err := gitutil.RepoRoot("", true)
+	if err != nil {
+		return err
+	}
+	name := c.Name
+	if name == "." {
+		if _, name, err = gitutil.CurrentClaudeWorktree(); err != nil {
+			return err
+		}
+		if name == "" {
+			return errors.New(`lock .: not inside a Claude Code worktree`)
+		}
+	}
+	// A missing worktree needs no check of ours: git's own "not a working tree"
+	// error is the clearest thing to say, and LockWorktree passes it through.
+	return gitutil.LockWorktree(root, filepath.Join(root, ".claude", "worktrees", name))
+}
+
 type DoneCmd struct {
 	Force      bool `short:"D" help:"Remove anyway: delete the branch even when it is not merged, and the worktree even when it has uncommitted changes."`
 	KeepBranch bool `help:"Remove the worktree but keep its branch."`
@@ -1111,6 +1134,7 @@ var cli struct {
 	Tui               TuiCmd               `cmd:"" name:"tui" help:"Show the worktree list full-screen, refreshing as things change. q quits, p runs git pull, arrows select a worktree, r removes it. Under herdr, x creates a worktree and opens it, and space (or a click) opens the selected one."`
 	Remove            RemoveCmd            `cmd:"" name:"remove" help:"Delete a worktree under .claude/worktrees/<name> and its branch (merged and clean only; -D to remove anyway, --keep-branch to remove only the worktree). Under herdr its workspace is closed first. Use \".\" for the current worktree; removing it cds to the repo root."`
 	Done              DoneCmd              `cmd:"" name:"done" help:"Finish with the worktree you're in: remove it and its branch (same checks and flags as \"remove .\"), then under herdr close the workspace you're sitting in."`
+	Lock              LockCmd              `cmd:"" name:"lock" help:"Lock a worktree the way \"ccwt new\" does, so \"git worktree prune\" can't reclaim it while its directory is unavailable. Use \".\" for the worktree you're currently in."`
 	Gc                GcCmd                `cmd:"" name:"gc" help:"Remove every worktree whose branch is already merged, with nothing uncommitted and no Claude Code session running in it, branches included — except the one you're in. Prints what it found and asks first, unless -y."`
 	RepoRoot          RepoRootCmd          `cmd:"" name:"repo-root" help:"Print the root directory of the current git repository."`
 	DotDot            DotDotCmd            `cmd:"" name:".." help:"Print the enclosing repo root, stripping any .claude/worktrees/<name> suffix (shorthand for repo-root --root-worktree)."`
