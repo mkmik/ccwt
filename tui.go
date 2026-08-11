@@ -459,7 +459,7 @@ func (u *ui) frame() ([]string, error) {
 	// narrower, since the table is laid out to the width.
 	if u.body == nil || cols != u.cols {
 		var buf bytes.Buffer
-		listRows, err := renderList(&buf, true, cols, u.projects, u.collapsed)
+		listRows, err := renderList(&buf, true, cols, u.projects, u.collapsed, true)
 		if err != nil {
 			return nil, err
 		}
