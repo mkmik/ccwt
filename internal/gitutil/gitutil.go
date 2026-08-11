@@ -80,6 +80,26 @@ func addWorktree(dir string, args ...string) error {
 	return nil
 }
 
+// LockWorktree leaves the worktree at path locked with ccwt's own reason, the
+// same state AddWorktree creates one in — so a worktree made by hand, or one
+// whose lock was dropped, gets the protection from `git worktree prune` that
+// the rest of ccwt assumes. Already locked by ccwt is a no-op; a lock set with
+// any other reason is replaced, since asking for ccwt's lock asks for that.
+func LockWorktree(dir, path string) error {
+	if lockReason(dir, path) == LockReason {
+		return nil
+	}
+	// ponytail: the unlock's error is ignored — it fails only when the worktree
+	// wasn't locked, which is the state we want. It also covers a lock set with
+	// no reason at all, which lockReason can't tell apart from unlocked.
+	git(dir, "worktree", "unlock", path).Run()
+	if out, err := git(dir, "worktree", "lock", "--reason", LockReason, path).CombinedOutput(); err != nil {
+		os.Stderr.Write(out)
+		return err
+	}
+	return nil
+}
+
 // RemoveWorktree removes the linked worktree at path via
 // `git worktree remove --force <path>`. --force is used so a worktree
 // with local modifications still gets removed. A worktree locked by ccwt
