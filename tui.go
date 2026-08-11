@@ -42,6 +42,25 @@ func (c *TuiCmd) Run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// The cli helpers pass git's stderr straight through on purpose, so on the
+	// command line the user sees git's own reason for a refusal. On the tui's
+	// screen that same text lands in the middle of the frame, and in raw mode
+	// its newline scrolls everything up a line — the status bar walks off the
+	// bottom, and the cursor arithmetic every later frame relies on is wrong.
+	// `r` on a worktree git won't remove is enough to do it. So while the tui
+	// owns the screen, nothing else may write to it.
+	//
+	// ponytail: the whole var, rather than a quiet flag threaded through every
+	// gitutil helper — this way a new one can't reintroduce the problem. The
+	// cost is that the status bar reports a refusal as the bare "exit status
+	// 128" it always did; capture the stream instead of dropping it if git's
+	// reason is worth the plumbing.
+	if devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0); err == nil {
+		saved := os.Stderr
+		os.Stderr = devnull
+		defer func() { os.Stderr = saved; devnull.Close() }()
+	}
+
 	go fetchMain(ctx, c.Fetch, projects)
 
 	// Raw mode so single keypresses arrive without waiting for a newline. If
@@ -163,8 +182,8 @@ func (c *TuiCmd) Run() error {
 			default:
 				// A click selects the row it landed on and acts on it, which is
 				// the one thing you'd want a click in this list to do.
-				if row := mouseRow(k); row >= 2 && row-2 < len(u.rows) {
-					u.sel = u.rows[row-2]
+				if row := u.at(mouseRow(k)); row != (listRow{}) {
+					u.sel = row
 					if err := activate(); err != nil {
 						return err
 					}
@@ -174,10 +193,10 @@ func (c *TuiCmd) Run() error {
 	}
 }
 
-// ui is the whole model: which row is selected, the rows the last frame showed
-// (so a selection can be resolved back to a screen line), the projects the list
-// spans (nil for just the repo we're in), which of their sections are folded
-// shut, and the transient status-bar message.
+// ui is the whole model: which row is selected, the rows the last frame listed,
+// the window of them it had room to show, the projects the list spans (nil for
+// just the repo we're in), which of their sections are folded shut, and the
+// transient status-bar message.
 //
 // The selection is held as the row's identity rather than as an index because
 // the list is re-read and re-sorted every interval: an index would silently
@@ -186,6 +205,8 @@ func (c *TuiCmd) Run() error {
 type ui struct {
 	sel       listRow // selected row, the zero value when nothing is selected yet
 	rows      []listRow
+	top       int // rows[top] is the first row on screen
+	height    int // how many rows the frame has room for
 	projects  []string
 	collapsed map[string]bool // project root -> section folded shut
 	msg       string
@@ -203,6 +224,18 @@ type ui struct {
 
 // stale drops the cached list, so the next frame reads it again.
 func (u *ui) stale() { u.body = nil }
+
+// at returns the row on screen line n, counting the way a mouse report does:
+// line 1 is the table header, so line 2 is the first row of the window. The
+// zero row comes back for a line with nothing on it — the header, or the blank
+// space under a list too short to fill the screen.
+func (u *ui) at(n int) listRow {
+	i := u.top + n - 2
+	if n < 2 || n-2 >= u.height || i >= len(u.rows) {
+		return listRow{}
+	}
+	return u.rows[i]
+}
 
 // move walks the selection by d rows, starting from the top when nothing is
 // selected (or when the selected row has since disappeared). Section headers
@@ -278,10 +311,7 @@ func (u *ui) dropSelected() {
 // on Windows. ponytail: costs up to one --interval of staleness after a
 // resize; wire up the signal (behind a build tag) if that ever grates.
 func (u *ui) frame() ([]string, error) {
-	cols, rows, err := term.GetSize(int(os.Stdout.Fd()))
-	if err != nil {
-		cols, rows = 80, 24
-	}
+	cols, rows := termSize()
 
 	// Re-read only when the cache was dropped or the terminal got wider or
 	// narrower, since the table is laid out to the width.
@@ -295,22 +325,32 @@ func (u *ui) frame() ([]string, error) {
 		u.all, u.cols, u.div = listRows, cols, nil
 	}
 
-	lines := slices.Clone(u.body) // the highlight below writes into it
-	listRows := u.all
 	body := max(rows-1, 1)
 
-	// The frame doesn't scroll: a list taller than the terminal is simply cut,
-	// so only the rows on screen count as selectable. Keeping u.rows to those
-	// is what stops a click below the table from opening a worktree nobody can
-	// see. ponytail: add scrolling if a repo ever grows more worktrees than a
-	// window has lines — which -g makes rather easier to hit, folding sections
-	// away being the answer to it for now.
-	u.rows = listRows[:min(len(listRows), max(body-1, 0))]
-	// Row i of the table is line i+1: line 0 is the header.
-	i := slices.Index(u.rows, u.sel)
-	if i < 0 {
-		u.sel = listRow{} // the selected row is gone (removed, folded away, or scrolled off)
-	} else if i+1 < len(lines) {
+	// The list scrolls, but only as far as it takes to keep the selection on
+	// screen — the rows don't move while you're walking around inside the
+	// window. -g is what makes this necessary: four projects' worktrees run to
+	// several screenfuls, and a frame that simply cut the overflow left the
+	// rest not just invisible but unreachable, since the arrows stopped at the
+	// bottom edge and the section headers you'd fold to get past it were
+	// themselves below it.
+	u.rows = u.all
+	u.height = max(body-1, 0) // the header takes the frame's first line
+	sel := slices.Index(u.rows, u.sel)
+	if sel < 0 {
+		u.sel = listRow{} // the selected row is gone (removed, or folded away)
+	}
+	u.top = min(max(u.top, 0), max(len(u.rows)-u.height, 0))
+	if sel >= 0 {
+		u.top = min(max(u.top, sel-u.height+1), sel)
+	}
+
+	// Line 0 of the cached table is the header, so its row i is line i+1. The
+	// window is a fresh slice, which is what keeps the highlight below out of
+	// the cache.
+	last := min(1+u.top+u.height, len(u.body))
+	lines := append([]string{u.body[0]}, u.body[min(1+u.top, last):last]...)
+	if i := sel - u.top; sel >= 0 && i+1 < len(lines) {
 		lines[i+1] = highlight(lines[i+1], cols)
 	}
 
@@ -333,6 +373,16 @@ func (u *ui) divergence() string {
 	}
 	u.div[dir] = gitDivergence(dir)
 	return u.div[dir]
+}
+
+// termSize is the frame's canvas, falling back to a conventional terminal when
+// there is nothing to measure. ponytail: package var so tests can pick a size.
+var termSize = func() (cols, rows int) {
+	cols, rows, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil {
+		return 80, 24
+	}
+	return cols, rows
 }
 
 // highlight reverse-videos a row edge to edge, so the selection reads as a bar
@@ -364,28 +414,50 @@ func mouseRow(k string) int {
 	return row
 }
 
-// readKeys pumps stdin into a channel, one read per message: an arrow key or a
-// mouse report arrives as a several-byte escape sequence, and the terminal
-// hands the whole thing over in a single read. ponytail: a chunk holding two
-// keystrokes (only really possible when pasting) counts as one — matching no
-// binding, so it's ignored.
+// readKeys pumps stdin into a channel, one keystroke per message.
 //
 // ponytail: the goroutine is left blocked on Read at exit — it dies with the
 // process, and this is the whole program, not a library.
 func readKeys() <-chan string {
-	keys := make(chan string, 8)
+	keys := make(chan string, 64)
 	go func() {
-		buf := make([]byte, 64)
+		buf := make([]byte, 256)
 		for {
 			n, err := os.Stdin.Read(buf)
 			if err != nil {
 				return
 			}
-			if n > 0 {
-				keys <- string(buf[:n])
+			for _, k := range splitKeys(string(buf[:n])) {
+				keys <- k
 			}
 		}
 	}()
+	return keys
+}
+
+// splitKeys cuts one read into the keystrokes it holds: a CSI sequence
+// (ESC [ … final byte) is one keystroke, any other byte is one.
+//
+// A read is not a keystroke. Hold an arrow key down and it repeats faster than
+// a frame takes to draw, so the tty hands over several sequences at once — and
+// a chunk of three "ESC [ B"s matches no binding, so before this the list
+// didn't move at all while a key was held. -g made it worse rather than caused
+// it: four repos of worktrees take longer to re-read, so the window in which
+// keystrokes pile up is wider.
+func splitKeys(s string) []string {
+	var keys []string
+	for len(s) > 0 {
+		n := 1
+		if strings.HasPrefix(s, "\x1b[") {
+			// Parameter bytes run until the final byte, 0x40–0x7e: "\x1b[B" for
+			// an arrow, "\x1b[<0;12;5M" for a mouse report.
+			for n = 2; n < len(s) && (s[n] < 0x40 || s[n] > 0x7e); n++ {
+			}
+			n = min(n+1, len(s))
+		}
+		keys = append(keys, s[:n])
+		s = s[n:]
+	}
 	return keys
 }
 
