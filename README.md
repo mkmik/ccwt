@@ -152,6 +152,9 @@ path = "~/src/ccwt"
 path = "~/src/platform"
 ```
 
+`ccwt config view` prints that file and `ccwt config edit` opens it in `$EDITOR`, either one
+creating an empty file first when you don't have one yet.
+
 ## Using ccwt with Claude Code
 
 Claude Code has a built-in `--worktree` flag that runs a session in its own worktree.
@@ -235,6 +238,7 @@ swallow stderr, or you'll lose the cwd report.
 | `ccwt repo-root` | Print the root of the current git repository. Add `--root-worktree` to print the *enclosing* repo root when you're inside a `.claude/worktrees/<name>` worktree. |
 | `ccwt ..` | Shorthand for `repo-root --root-worktree`: print (and, with shell integration, `cd` to) the enclosing repository root. |
 | `ccwt init <shell>` | Emit the shell-integration snippet to source from your rc file. |
+| `ccwt config view` / `ccwt config edit` | Print the config file, or open it in `$EDITOR` (`vi` if unset). Both create an empty one if there isn't any. |
 | `ccwt --version` | Print version information. |
 
 ### Layout

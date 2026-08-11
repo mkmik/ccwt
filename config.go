@@ -1,10 +1,12 @@
 package main
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -75,6 +77,65 @@ func projectRoots(global bool) ([]string, error) {
 		roots[i] = expandHome(p.Path)
 	}
 	return roots, nil
+}
+
+type ConfigCmd struct {
+	View ConfigViewCmd `cmd:"" help:"Print the config file."`
+	Edit ConfigEditCmd `cmd:"" help:"Open the config file in $EDITOR (vi if unset)."`
+}
+
+type ConfigViewCmd struct{}
+
+type ConfigEditCmd struct{}
+
+// ensureConfig returns the config path, creating an empty file (and its
+// directory) when there isn't one yet, so both subcommands have something to
+// show or edit rather than an ENOENT.
+func ensureConfig() (string, error) {
+	path := configPath()
+	if path == "" {
+		return "", errors.New("cannot locate a config directory: set XDG_CONFIG_HOME")
+	}
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil && !errors.Is(err, fs.ErrExist) {
+		return "", err
+	}
+	if f != nil {
+		f.Close()
+	}
+	return path, nil
+}
+
+func (c *ConfigViewCmd) Run() error {
+	path, err := ensureConfig()
+	if err != nil {
+		return err
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	os.Stdout.Write(b)
+	return nil
+}
+
+func (c *ConfigEditCmd) Run() error {
+	path, err := ensureConfig()
+	if err != nil {
+		return err
+	}
+	// $EDITOR is split on spaces so that the "code -w" and "emacsclient -nw"
+	// people get their flags through; vi is the fallback POSIX guarantees.
+	argv := strings.Fields(cmp.Or(os.Getenv("EDITOR"), "vi"))
+	cmd := exec.Command(argv[0], append(argv[1:], path)...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	return cmd.Run()
 }
 
 // expandHome expands a leading ~/ the way a shell would, since a config file is

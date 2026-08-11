@@ -917,6 +917,7 @@ var cli struct {
 	RepoRoot          RepoRootCmd          `cmd:"" name:"repo-root" help:"Print the root directory of the current git repository."`
 	DotDot            DotDotCmd            `cmd:"" name:".." help:"Print the enclosing repo root, stripping any .claude/worktrees/<name> suffix (shorthand for repo-root --root-worktree)."`
 	Init              InitCmd              `cmd:"" name:"init" help:"Emit a shell integration snippet to source from your rc file (e.g. source <(ccwt init zsh), or for fish: ccwt init fish | source)."`
+	Config            ConfigCmd            `cmd:"" name:"config" help:"View or edit the config file listing the projects that -g spans, creating an empty one if there isn't any."`
 
 	Version kong.VersionFlag `name:"version" help:"Print version information and quit"`
 }

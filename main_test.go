@@ -645,6 +645,30 @@ func TestProjectRootsFromConfig(t *testing.T) {
 	}
 }
 
+// `config view` on a machine that has never had a config file: it creates an
+// empty one rather than failing, and prints what's there once there is
+// something to print.
+func TestConfigView(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	if out := capture(t, &ConfigViewCmd{}); out != "" {
+		t.Errorf("view with no config = %q, want empty", out)
+	}
+	if _, err := os.Stat(configPath()); err != nil {
+		t.Fatalf("view did not create the config file: %v", err)
+	}
+
+	cfg := "[[projects]]\npath = \"~/src/one\"\n"
+	if err := os.WriteFile(configPath(), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out := capture(t, &ConfigViewCmd{}); out != strings.TrimRight(cfg, "\n") {
+		t.Errorf("view = %q, want %q", out, cfg)
+	}
+}
+
 // capture runs cmd with stdout redirected and returns what it printed.
 func capture(t *testing.T, cmd interface{ Run() error }) string {
 	t.Helper()
