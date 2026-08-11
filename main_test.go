@@ -517,7 +517,7 @@ func TestStatusBarShowsHerdrActionsOnlyUnderHerdr(t *testing.T) {
 	}{{"", false}, {"1", true}} {
 		t.Setenv("HERDR_ENV", tc.env)
 		bar := statusBar(200, "", listRow{path: "some-worktree"}, "")
-		for _, key := range []string{"x:new", "↵:open"} {
+		for _, key := range []string{"x:new", "space:open"} {
 			if strings.Contains(bar, key) != tc.want {
 				t.Errorf("HERDR_ENV=%q: %q in the bar = %v, want %v", tc.env, key, !tc.want, tc.want)
 			}
@@ -979,7 +979,7 @@ func TestGlobalListSpansProjects(t *testing.T) {
 		t.Errorf("no %q section in:\n%s", header, buf.String())
 	}
 
-	// The tui reads that same list: the first row is a section, ↵ on it folds
+	// The tui reads that same list: the first row is a section, space on it folds
 	// the section away, and below it are the worktrees its actions resolve a
 	// project out of.
 	u := ui{projects: roots}
