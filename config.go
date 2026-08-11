@@ -19,6 +19,25 @@ import (
 // be on disk.
 type Config struct {
 	Projects []Project `toml:"projects"`
+	// BranchPrefix goes in front of a worktree's name to make its branch.
+	// Repos that want their branches namespaced ("mkm/") set it here.
+	BranchPrefix string `toml:"branch_prefix"`
+}
+
+// defaultBranchPrefix is what a branch is called when the config says nothing:
+// worktree-<name>, which is what every ccwt worktree was called before the
+// prefix was configurable.
+const defaultBranchPrefix = "worktree-"
+
+// branchName is the branch a worktree called name is checked out on. It reads
+// the config every time rather than caching: `new` and `remove` each run it
+// once per process, and a stale prefix would strand branches under the old one.
+func branchName(name string) (string, error) {
+	cfg, err := loadConfig()
+	if err != nil {
+		return "", err
+	}
+	return cmp.Or(cfg.BranchPrefix, defaultBranchPrefix) + name, nil
 }
 
 // Project is one repository the cross-project views cover: the main checkout,

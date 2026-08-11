@@ -45,8 +45,8 @@ ccwt gc             # ... or all the finished ones at once, after confirming
 ```
 
 `ccwt new` creates a worktree at `.claude/worktrees/<name>` on a new branch
-`worktree-<name>`. With no name it generates one (e.g. `dreamy-foraging-hickey`); pass a
-name to choose your own. Run from inside an existing worktree, `ccwt new` returns that
+`worktree-<name>` (the prefix is [configurable](#several-projects-at-once)). With no name it
+generates one (e.g. `dreamy-foraging-hickey`); pass a name to choose your own. Run from inside an existing worktree, `ccwt new` returns that
 worktree instead of nesting a new one.
 
 `--switch <branch>` checks the new worktree out on an **existing** branch instead of
@@ -123,6 +123,10 @@ branch or uncommitted changes, exactly like `ccwt remove`.
 Clicking a row opens it directly. `x` creates a worktree and opens it — the same thing the
 plugin's **New ccwt worktree** action does, without leaving the list.
 
+A workspace opened on a *new* worktree is named after the worktree: Herdr would otherwise
+list it under its repo by branch, prefix and all. Reopening one leaves its name alone, so a
+workspace you've renamed yourself stays renamed.
+
 The Herdr actions (`x`, `↵`, click-to-open) only exist when the tui is itself running in a
 Herdr pane; elsewhere there's no session to open a workspace in, so they're dropped from the
 bar and their keys do nothing.
@@ -165,6 +169,17 @@ path = "~/src/ccwt"
 [[projects]]
 path = "~/src/platform"
 ```
+
+`branch_prefix` sets what `ccwt new` puts in front of a worktree's name to make its branch
+(`worktree-` when unset), for repos that want their branches namespaced:
+
+```toml
+branch_prefix = "mkm/"
+```
+
+It applies from the moment you set it: worktrees created under an older prefix keep their
+branches, and `ccwt remove` on one of them leaves that branch behind rather than deleting
+it — remove it with `git branch -D` if you want it gone.
 
 `ccwt config view` prints that file and `ccwt config edit` opens it in `$EDITOR`, either one
 creating an empty file first when you don't have one yet.
@@ -253,7 +268,7 @@ swallow stderr, or you'll lose the cwd report.
 | `ccwt repo-root` | Print the root of the current git repository. Add `--root-worktree` to print the *enclosing* repo root when you're inside a `.claude/worktrees/<name>` worktree. |
 | `ccwt ..` | Shorthand for `repo-root --root-worktree`: print (and, with shell integration, `cd` to) the enclosing repository root. |
 | `ccwt init <shell>` | Emit the shell-integration snippet to source from your rc file. |
-| `ccwt config view` / `ccwt config edit` | Print the config file, or open it in `$EDITOR` (`vi` if unset). Both create an empty one if there isn't any. |
+| `ccwt config view` / `ccwt config edit` | Print the config file, or open it in `$EDITOR` (`vi` if unset). Both create an empty one if there isn't any. The file holds the `[[projects]]` `-g` spans and `branch_prefix`, what `ccwt new` puts in front of a worktree's name to make its branch (`worktree-` when unset). |
 | `ccwt --version` | Print version information. |
 
 ### Layout
@@ -261,7 +276,8 @@ swallow stderr, or you'll lose the cwd report.
 `ccwt` follows Claude Code's convention:
 
 - worktrees live at `<repo-root>/.claude/worktrees/<name>`
-- each is checked out on a branch named `worktree-<name>`
+- each is checked out on a branch named `worktree-<name>` (`branch_prefix` renames the
+  `worktree-` part)
 
 Because the layout matches, worktrees you create with `ccwt` are visible to Claude Code
 and vice versa.

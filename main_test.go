@@ -279,6 +279,67 @@ func TestRemoveUnderHerdr(t *testing.T) {
 	}
 }
 
+// TestBranchPrefixFromConfig: branch_prefix names the branch `new` creates, and
+// `remove` deletes that same branch rather than the "worktree-" one it never
+// made — which would leave the branch stranded.
+func TestBranchPrefixFromConfig(t *testing.T) {
+	initRepo(t)
+	if err := os.MkdirAll(filepath.Dir(configPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath(), []byte("branch_prefix = \"wt/\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	capture(t, &NewWorktreeBranchCmd{Name: "prefixed"})
+	if !gitutil.BranchExists("", "wt/prefixed") {
+		t.Fatal("new did not use the configured branch prefix")
+	}
+	if err := (&RemoveCmd{Name: "prefixed"}).Run(); err != nil {
+		t.Fatal(err)
+	}
+	if gitutil.BranchExists("", "wt/prefixed") {
+		t.Error("worktree removed but the prefixed branch was stranded")
+	}
+}
+
+// TestHerdrOpenLabelsNewWorkspacesOnly: herdr lists a worktree workspace under
+// its repo by branch, so a new one is opened with a --label to keep the prefix
+// out of the sidebar. Reopening passes none: that would rename a workspace the
+// user had renamed themselves.
+func TestHerdrOpenLabelsNewWorkspacesOnly(t *testing.T) {
+	initRepo(t)
+
+	dir := t.TempDir()
+	log := filepath.Join(dir, "calls")
+	herdr := filepath.Join(dir, "herdr")
+	if err := os.WriteFile(herdr, fmt.Appendf(nil, "#!/bin/sh\necho \"$@\" >> %q\n", log), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_BIN_PATH", herdr)
+
+	msg := (&ui{}).newWorktree()
+	name, ok := strings.CutPrefix(msg, "opened ")
+	if !ok {
+		t.Fatalf("newWorktree: %s", msg)
+	}
+	if got, _ := os.ReadFile(log); !strings.Contains(string(got), "--label "+name) {
+		t.Errorf("herdr calls = %q, want the new workspace labelled %q", got, name)
+	}
+
+	if err := os.Remove(log); err != nil {
+		t.Fatal(err)
+	}
+	path := capture(t, &NewWorktreeBranchCmd{Name: name, Path: true})
+	if msg := herdrOpen(path, ""); !strings.HasPrefix(msg, "opened ") {
+		t.Fatalf("herdrOpen: %s", msg)
+	}
+	if got, _ := os.ReadFile(log); strings.Contains(string(got), "--label") {
+		t.Errorf("herdr calls = %q, want a reopen to leave the workspace name alone", got)
+	}
+}
+
 // TestGc: only worktrees that are both merged and idle are collected — an
 // unmerged one and one with a session running in it stay put — and what `gc`
 // removes, it removes the way `remove` does, branch and all.
@@ -348,6 +409,7 @@ func initRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
 	t.Chdir(repo)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // ignore the user's own config (branch_prefix)
 	git(t, "init", "-b", "main")
 	git(t, "config", "core.hooksPath", "/dev/null") // ignore the user's global hooks
 	git(t, "commit", "--allow-empty", "-m", "init")

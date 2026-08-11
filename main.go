@@ -85,7 +85,7 @@ func (c *DotDotCmd) Run() error {
 
 type NewWorktreeBranchCmd struct {
 	Name        string `arg:"" optional:"" help:"Worktree name (auto-generated if omitted). Reused if a worktree with this name already exists."`
-	Switch      string `help:"Check the new worktree out on this existing branch instead of creating a new branch worktree-<name>."`
+	Switch      string `help:"Check the new worktree out on this existing branch instead of creating a new one."`
 	ForceCreate bool   `help:"Create a new worktree even when cwd is already inside one (otherwise the enclosing worktree's name is returned instead)."`
 	Path        bool   `help:"Print the worktree's absolute path instead of its name."`
 }
@@ -157,7 +157,11 @@ func (c *NewWorktreeBranchCmd) create(root string) (string, string, error) {
 		if c.Switch != "" {
 			addErr = gitutil.AddWorktreeOnBranch(root, worktreePath, c.Switch)
 		} else {
-			addErr = gitutil.AddWorktree(root, worktreePath, "worktree-"+name)
+			branch, err := branchName(name)
+			if err != nil {
+				return "", "", err
+			}
+			addErr = gitutil.AddWorktree(root, worktreePath, branch)
 		}
 		if addErr != nil {
 			return "", "", addErr
@@ -266,7 +270,10 @@ func (c *RemoveCmd) remove(root string) error {
 	}
 
 	worktreePath := filepath.Join(root, ".claude", "worktrees", name)
-	branch := "worktree-" + name
+	branch, err := branchName(name)
+	if err != nil {
+		return err
+	}
 
 	// A branch checked out in a worktree can only be deleted once that worktree
 	// is gone, so an unmerged branch used to leave the worktree removed and the
@@ -1076,7 +1083,7 @@ func elide(s string, limit int) string {
 
 var cli struct {
 	NewWorktreeName   NewWorktreeNameCmd   `cmd:"" name:"new-worktree-name" help:"Generate a Claude Code-style worktree name (adjective-verb-noun)."`
-	NewWorktreeBranch NewWorktreeBranchCmd `cmd:"" name:"new" help:"Create a new worktree under .claude/worktrees/<name> on a new branch worktree-<name>, and print <name>."`
+	NewWorktreeBranch NewWorktreeBranchCmd `cmd:"" name:"new" help:"Create a new worktree under .claude/worktrees/<name> on a new branch worktree-<name> (branch_prefix in the config file renames the \"worktree-\" part), and print <name>."`
 	Cd                CdCmd                `cmd:"" name:"cd" help:"cd into an existing worktree under .claude/worktrees/<name> (errors if it doesn't exist). Use \"..\" for the enclosing repo root, or \"-\" for the previous directory."`
 	List              ListCmd              `cmd:"" name:"list" aliases:"ls" help:"List Claude Code worktrees with branch, age, running-session, and what each one is about: the last Claude Code session there, or its last commit."`
 	Tui               TuiCmd               `cmd:"" name:"tui" help:"Show the worktree list full-screen, refreshing as things change. q quits, p runs git pull, arrows select a worktree, r removes it. Under herdr, x creates a worktree and opens it, and enter (or a click) opens the selected one."`
