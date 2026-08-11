@@ -1021,7 +1021,7 @@ func TestGlobalListSpansProjects(t *testing.T) {
 		t.Errorf("no %q section in:\n%s", header, buf.String())
 	}
 
-	// The tui reads that same list: the first row is a section, space on it folds
+	// The tui reads that same list: the first row is a section, ↵ on it folds
 	// the section away, and below it are the worktrees its actions resolve a
 	// project out of.
 	u := ui{projects: roots}
