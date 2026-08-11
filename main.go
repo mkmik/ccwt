@@ -335,6 +335,28 @@ func (c *RemoveCmd) remove(root string) error {
 	return nil
 }
 
+type DoneCmd struct {
+	Force      bool `short:"D" help:"Remove anyway: delete the branch even when it is not merged, and the worktree even when it has uncommitted changes."`
+	KeepBranch bool `help:"Remove the worktree but keep its branch."`
+}
+
+// Run is `remove .` and then, under herdr, closing the workspace we're standing
+// in — the one `remove` deliberately leaves alone, since closing it kills this
+// process. That's fine here because it is the last thing done.
+func (c *DoneCmd) Run() error {
+	if err := (&RemoveCmd{Name: ".", Force: c.Force, KeepBranch: c.KeepBranch}).Run(); err != nil {
+		return err
+	}
+	ws := os.Getenv("HERDR_WORKSPACE_ID")
+	if !underHerdr() || ws == "" {
+		return nil
+	}
+	if out, err := exec.Command(herdrBin(), "workspace", "close", ws).CombinedOutput(); err != nil {
+		return fmt.Errorf("herdr workspace close %s: %s", ws, lastLine(out, err))
+	}
+	return nil
+}
+
 type GcCmd struct {
 	Yes bool `short:"y" help:"Remove without asking for confirmation."`
 }
@@ -1088,6 +1110,7 @@ var cli struct {
 	List              ListCmd              `cmd:"" name:"list" aliases:"ls" help:"List Claude Code worktrees with branch, age, running-session, and what each one is about: the last Claude Code session there, or its last commit."`
 	Tui               TuiCmd               `cmd:"" name:"tui" help:"Show the worktree list full-screen, refreshing as things change. q quits, p runs git pull, arrows select a worktree, r removes it. Under herdr, x creates a worktree and opens it, and space (or a click) opens the selected one."`
 	Remove            RemoveCmd            `cmd:"" name:"remove" help:"Delete a worktree under .claude/worktrees/<name> and its branch (merged and clean only; -D to remove anyway, --keep-branch to remove only the worktree). Under herdr its workspace is closed first. Use \".\" for the current worktree; removing it cds to the repo root."`
+	Done              DoneCmd              `cmd:"" name:"done" help:"Finish with the worktree you're in: remove it and its branch (same checks and flags as \"remove .\"), then under herdr close the workspace you're sitting in."`
 	Gc                GcCmd                `cmd:"" name:"gc" help:"Remove every worktree whose branch is already merged, with nothing uncommitted and no Claude Code session running in it, branches included — except the one you're in. Prints what it found and asks first, unless -y."`
 	RepoRoot          RepoRootCmd          `cmd:"" name:"repo-root" help:"Print the root directory of the current git repository."`
 	DotDot            DotDotCmd            `cmd:"" name:".." help:"Print the enclosing repo root, stripping any .claude/worktrees/<name> suffix (shorthand for repo-root --root-worktree)."`
