@@ -320,6 +320,29 @@ func TestGc(t *testing.T) {
 	}
 }
 
+// TestGcKeepsCurrentWorktree: gc collects everything else, but the worktree the
+// process is standing in survives — removing it would leave the shell in a
+// deleted directory.
+func TestGcKeepsCurrentWorktree(t *testing.T) {
+	initRepo(t)
+	here := capture(t, &NewWorktreeBranchCmd{Name: "here", Path: true})
+	other := capture(t, &NewWorktreeBranchCmd{Name: "other", Path: true})
+	t.Chdir(here)
+
+	if err := (&GcCmd{Yes: true}).Run(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(here); err != nil {
+		t.Errorf("gc removed the worktree it was run from: %v", err)
+	}
+	if !gitutil.BranchExists(here, "worktree-here") {
+		t.Error("gc deleted the branch of the worktree it was run from")
+	}
+	if _, err := os.Stat(other); !os.IsNotExist(err) {
+		t.Errorf("worktree %s still exists (%v)", other, err)
+	}
+}
+
 // initRepo makes a git repo with one commit on main and chdirs into it.
 func initRepo(t *testing.T) string {
 	t.Helper()

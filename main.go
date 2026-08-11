@@ -344,6 +344,15 @@ func (c *GcCmd) Run() error {
 	if err != nil {
 		return err
 	}
+	// Collecting the worktree we're standing in would pull the ground out from
+	// under the shell, so say it's collectable and leave it: `ccwt remove .`
+	// from somewhere else is the way to actually get rid of it.
+	if _, cur, err := gitutil.CurrentClaudeWorktree(); err == nil && cur != "" {
+		if i := slices.Index(names, cur); i >= 0 {
+			fmt.Fprintf(os.Stderr, "%s: collectable, but it is the worktree you are in — keeping it\n", cur)
+			names = slices.Delete(names, i, i+1)
+		}
+	}
 	if len(names) == 0 {
 		fmt.Println("nothing to collect")
 		return nil
@@ -1044,7 +1053,7 @@ var cli struct {
 	List              ListCmd              `cmd:"" name:"list" aliases:"ls" help:"List Claude Code worktrees with branch, age, running-session, last commit, and what the last Claude Code session there was about."`
 	Tui               TuiCmd               `cmd:"" name:"tui" help:"Show the worktree list full-screen, refreshing as things change. q quits, p runs git pull, arrows select a worktree, r removes it. Under herdr, x creates a worktree and opens it, and enter (or a click) opens the selected one."`
 	Remove            RemoveCmd            `cmd:"" name:"remove" help:"Delete a worktree under .claude/worktrees/<name> and its branch (merged and clean only; -D to remove anyway, --keep-branch to remove only the worktree). Under herdr its workspace is closed first. Use \".\" for the current worktree; removing it cds to the repo root."`
-	Gc                GcCmd                `cmd:"" name:"gc" help:"Remove every worktree whose branch is already merged, with nothing uncommitted and no Claude Code session running in it, branches included. Prints what it found and asks first, unless -y."`
+	Gc                GcCmd                `cmd:"" name:"gc" help:"Remove every worktree whose branch is already merged, with nothing uncommitted and no Claude Code session running in it, branches included — except the one you're in. Prints what it found and asks first, unless -y."`
 	RepoRoot          RepoRootCmd          `cmd:"" name:"repo-root" help:"Print the root directory of the current git repository."`
 	DotDot            DotDotCmd            `cmd:"" name:".." help:"Print the enclosing repo root, stripping any .claude/worktrees/<name> suffix (shorthand for repo-root --root-worktree)."`
 	Init              InitCmd              `cmd:"" name:"init" help:"Emit a shell integration snippet to source from your rc file (e.g. source <(ccwt init zsh), or for fish: ccwt init fish | source)."`
