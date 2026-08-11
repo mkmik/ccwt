@@ -14,6 +14,15 @@ import (
 	"time"
 )
 
+// git builds a git command run inside dir, or inside the current working
+// directory when dir is "" — which is how every repo-scoped helper here takes
+// its "which repo?" argument.
+func git(dir string, args ...string) *exec.Cmd {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	return cmd
+}
+
 // RepoRoot runs `git rev-parse --show-toplevel` and returns the resulting
 // path with its trailing newline trimmed. Git's stderr is passed through to
 // the process stderr so the caller's user sees `fatal: not a git repository`
@@ -22,8 +31,8 @@ import (
 // If stripClaudeWorktree is true and the toplevel sits inside a Claude Code
 // worktree (`.claude/worktrees/<name>`), the enclosing repository root is
 // returned instead.
-func RepoRoot(stripClaudeWorktree bool) (string, error) {
-	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+func RepoRoot(dir string, stripClaudeWorktree bool) (string, error) {
+	cmd := git(dir, "rev-parse", "--show-toplevel")
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {
@@ -47,21 +56,21 @@ const LockReason = "ccwt"
 // "HEAD is now at…") is captured and discarded. On failure the captured
 // output is written verbatim to the process stderr so the user sees git's
 // own error message.
-func AddWorktree(path, branch string) error {
-	return addWorktree("-b", branch, path)
+func AddWorktree(dir, path, branch string) error {
+	return addWorktree(dir, "-b", branch, path)
 }
 
 // AddWorktreeOnBranch creates a new linked worktree at `path` checked out on
 // the *existing* branch `branch`, via `git worktree add <path> <branch>`.
 // Output handling matches AddWorktree.
-func AddWorktreeOnBranch(path, branch string) error {
-	return addWorktree(path, branch)
+func AddWorktreeOnBranch(dir, path, branch string) error {
+	return addWorktree(dir, path, branch)
 }
 
-func addWorktree(args ...string) error {
+func addWorktree(dir string, args ...string) error {
 	var buf bytes.Buffer
 	args = append([]string{"worktree", "add", "--lock", "--reason", LockReason}, args...)
-	cmd := exec.Command("git", args...)
+	cmd := git(dir, args...)
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	if err := cmd.Run(); err != nil {
@@ -78,16 +87,16 @@ func addWorktree(args ...string) error {
 // reason is left alone, so git refuses the removal and the user's lock
 // does what they meant it to. If the path is not a registered worktree
 // (already gone), nil is returned — making the operation idempotent.
-func RemoveWorktree(path string) error {
-	if lockReason(path) == LockReason {
-		if out, err := exec.Command("git", "worktree", "unlock", path).CombinedOutput(); err != nil {
+func RemoveWorktree(dir, path string) error {
+	if lockReason(dir, path) == LockReason {
+		if out, err := git(dir, "worktree", "unlock", path).CombinedOutput(); err != nil {
 			os.Stderr.Write(out)
 			return err
 		}
 	}
 
 	var buf bytes.Buffer
-	cmd := exec.Command("git", "worktree", "remove", "--force", path)
+	cmd := git(dir, "worktree", "remove", "--force", path)
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	if err := cmd.Run(); err != nil {
@@ -106,19 +115,19 @@ func RemoveWorktree(path string) error {
 // locked worktrees, so ccwt's own locks are released first for entries whose
 // directory is already gone — otherwise a hand-deleted worktree could never
 // be cleaned up. Locks set by hand with another reason are left in place.
-func PruneWorktrees() error {
-	wts, _ := ListWorktrees()
+func PruneWorktrees(dir string) error {
+	wts, _ := ListWorktrees(dir)
 	for _, wt := range wts {
 		if wt.LockReason != LockReason {
 			continue
 		}
 		if _, err := os.Stat(wt.Path); errors.Is(err, os.ErrNotExist) {
-			exec.Command("git", "worktree", "unlock", wt.Path).Run()
+			git(dir, "worktree", "unlock", wt.Path).Run()
 		}
 	}
 
 	var buf bytes.Buffer
-	cmd := exec.Command("git", "worktree", "prune")
+	cmd := git(dir, "worktree", "prune")
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	if err := cmd.Run(); err != nil {
@@ -135,9 +144,9 @@ func PruneWorktrees() error {
 // around (nobody ran `git fetch --prune`) refuses to go, even though it is
 // contained in main. A branch that doesn't exist is treated as success so the
 // caller can re-invoke after a partial deletion without surfacing an error.
-func DeleteBranch(branch string) error {
+func DeleteBranch(dir, branch string) error {
 	var buf bytes.Buffer
-	cmd := exec.Command("git", "branch", "-D", branch)
+	cmd := git(dir, "branch", "-D", branch)
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	if err := cmd.Run(); err != nil {
@@ -159,9 +168,10 @@ type Worktree struct {
 }
 
 // ListWorktrees parses `git worktree list --porcelain` and returns all
-// registered worktrees (including the main one).
-func ListWorktrees() ([]Worktree, error) {
-	out, err := exec.Command("git", "worktree", "list", "--porcelain").Output()
+// registered worktrees. The main worktree — the repository root the linked
+// ones hang off — is always the first entry, which is git's own ordering.
+func ListWorktrees(dir string) ([]Worktree, error) {
+	out, err := git(dir, "worktree", "list", "--porcelain").Output()
 	if err != nil {
 		return nil, err
 	}
@@ -189,8 +199,8 @@ func ListWorktrees() ([]Worktree, error) {
 
 // lockReason returns the reason the worktree at path is locked with, or ""
 // when it is unlocked, unregistered, or git could not be asked.
-func lockReason(path string) string {
-	wts, err := ListWorktrees()
+func lockReason(dir, path string) string {
+	wts, err := ListWorktrees(dir)
 	if err != nil {
 		return ""
 	}
@@ -210,7 +220,7 @@ type Commit struct {
 
 // LastCommit returns the HEAD commit of the repository at repoPath.
 func LastCommit(repoPath string) (Commit, error) {
-	out, err := exec.Command("git", "-C", repoPath, "log", "-1", "--format=%ct%n%s").Output()
+	out, err := git(repoPath, "log", "-1", "--format=%ct%n%s").Output()
 	if err != nil {
 		return Commit{}, err
 	}
@@ -231,12 +241,12 @@ func LastCommit(repoPath string) (Commit, error) {
 // is safe to delete even when nobody has pulled main yet, and a local-only
 // merge is safe even when it hasn't been pushed, so take the union of the two.
 // A git failure yields an empty set: this only decorates a listing.
-func MergedBranches() map[string]bool {
+func MergedBranches(dir string) map[string]bool {
 	merged := map[string]bool{}
 	for _, base := range []string{"main", "master"} {
 		var found bool
 		for _, ref := range []string{base, "origin/" + base} {
-			out, err := exec.Command("git", "branch", "--merged", ref, "--format=%(refname:short)").Output()
+			out, err := git(dir, "branch", "--merged", ref, "--format=%(refname:short)").Output()
 			if err != nil {
 				continue // ref doesn't resolve: no remote, or the other base name
 			}
@@ -255,15 +265,15 @@ func MergedBranches() map[string]bool {
 }
 
 // BranchExists reports whether refs/heads/<branch> resolves.
-func BranchExists(branch string) bool {
-	return exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/"+branch).Run() == nil
+func BranchExists(dir, branch string) bool {
+	return git(dir, "show-ref", "--verify", "--quiet", "refs/heads/"+branch).Run() == nil
 }
 
 // Dirty reports whether the worktree at repoPath has uncommitted changes,
 // untracked files included. A git failure reads as clean: this only decorates
 // a listing, and is not worth failing it over.
 func Dirty(repoPath string) bool {
-	out, err := exec.Command("git", "-C", repoPath, "status", "--porcelain").Output()
+	out, err := git(repoPath, "status", "--porcelain").Output()
 	return err == nil && len(out) > 0
 }
 
@@ -273,7 +283,7 @@ func Dirty(repoPath string) bool {
 // .../.claude/worktrees/<name>. An error is returned only if
 // `git rev-parse --show-toplevel` itself fails.
 func CurrentClaudeWorktree() (path, name string, err error) {
-	top, err := RepoRoot(false)
+	top, err := RepoRoot("", false)
 	if err != nil {
 		return "", "", err
 	}

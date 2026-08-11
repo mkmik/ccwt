@@ -25,11 +25,17 @@ import (
 type TuiCmd struct {
 	Interval time.Duration `default:"2s" help:"How often to re-read the worktree list."`
 	Fetch    time.Duration `default:"1m" help:"How often to fetch origin/main in the background (0 to never)."`
+	Global   bool          `short:"g" help:"Show the worktrees of every project listed in $XDG_CONFIG_HOME/ccwt/config.toml, not just this repo's."`
 }
 
 func (c *TuiCmd) Run() error {
 	if !stdoutIsTTY() {
 		return errors.New("tui needs a terminal on stdout (use `ccwt list` when piping)")
+	}
+
+	projects, err := projectRoots(c.Global)
+	if err != nil {
+		return err
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -63,7 +69,7 @@ func (c *TuiCmd) Run() error {
 	tick := time.NewTicker(c.Interval)
 	defer tick.Stop()
 
-	var u ui
+	u := ui{projects: projects}
 	var last string
 	redraw := func() error {
 		lines, err := u.frame()
@@ -90,11 +96,11 @@ func (c *TuiCmd) Run() error {
 		return nil
 	}
 	open := func() error {
-		name := u.sel
-		if name == "" || !underHerdr() {
+		path := u.sel
+		if path == "" || !underHerdr() {
 			return nil
 		}
-		return act("opening "+name+"…", func() string { return herdrOpen(name) })
+		return act("opening "+filepath.Base(path)+"…", func() string { return herdrOpen(path) })
 	}
 
 	for {
@@ -116,7 +122,7 @@ func (c *TuiCmd) Run() error {
 					return err
 				}
 			case k == "x" && underHerdr():
-				if err := act("creating…", herdrNew); err != nil {
+				if err := act("creating…", u.newWorktree); err != nil {
 					return err
 				}
 			case k == "\x1b[A", k == "k":
@@ -128,9 +134,9 @@ func (c *TuiCmd) Run() error {
 					return err
 				}
 			case k == "r":
-				if name := u.sel; name != "" {
-					if err := act("removing "+name+"…", func() string {
-						msg, ok := removeWorktree(name)
+				if path := u.sel; path != "" {
+					if err := act("removing "+filepath.Base(path)+"…", func() string {
+						msg, ok := removeWorktree(path)
 						if ok {
 							u.dropSelected()
 						}
@@ -142,8 +148,8 @@ func (c *TuiCmd) Run() error {
 			default:
 				// A click selects the row it landed on and opens it, which is
 				// the one thing you'd want a click in this list to do.
-				if row := mouseRow(k); row >= 2 && row-2 < len(u.names) {
-					u.sel = u.names[row-2]
+				if row := mouseRow(k); row >= 2 && row-2 < len(u.paths) {
+					u.sel = u.paths[row-2]
 					if err := open(); err != nil {
 						return err
 					}
@@ -153,34 +159,49 @@ func (c *TuiCmd) Run() error {
 	}
 }
 
-// ui is the whole model: which worktree is selected, the names the last frame
-// showed (so a selection can be resolved back to a row), and the transient
-// status-bar message.
+// ui is the whole model: which worktree is selected, the worktrees the last
+// frame showed (so a selection can be resolved back to a row), the projects the
+// list spans (nil for just the repo we're in), and the transient status-bar
+// message.
 //
-// The selection is held by name rather than by index because the list is
-// re-read and re-sorted every interval: an index would silently point at a
-// different worktree once one is removed or a commit reorders the rows.
+// A worktree is held by path rather than by index because the list is re-read
+// and re-sorted every interval: an index would silently point at a different
+// worktree once one is removed or a commit reorders the rows. By path rather
+// than by name because under -g two projects can each have a "fix-tests", and
+// because the path is what an action needs — the repo is the part of it in
+// front of .claude/worktrees/.
 type ui struct {
-	sel   string // selected worktree, "" when nothing is selected yet
-	names []string
-	msg   string
+	sel      string // selected worktree path, "" when nothing is selected yet
+	paths    []string
+	projects []string
+	msg      string
 }
 
 // move walks the selection by d rows, starting from the top when nothing is
 // selected (or when the selected worktree has since disappeared).
 func (u *ui) move(d int) {
-	if len(u.names) == 0 {
+	if len(u.paths) == 0 {
 		return
 	}
-	i := min(max(slices.Index(u.names, u.sel)+d, 0), len(u.names)-1)
-	u.sel = u.names[i]
+	i := min(max(slices.Index(u.paths, u.sel)+d, 0), len(u.paths)-1)
+	u.sel = u.paths[i]
+}
+
+// root is the repo an action applies to: the selected worktree's project, or
+// the repo the tui is running in when nothing is selected. Outside -g the two
+// are the same repo.
+func (u *ui) root() (string, error) {
+	if root, ok := gitutil.ClaudeWorktreeRepoRoot(u.sel); ok {
+		return root, nil
+	}
+	return gitutil.RepoRoot("", true)
 }
 
 // dropSelected moves the selection off the selected worktree, as it has to once
 // that worktree is removed: down a row, or up one when the removed row was the
-// last. The removed name is still in u.names — the list is only re-read on the
+// last. The removed path is still in u.paths — the list is only re-read on the
 // next frame — so this is the ordinary walk, and when it was the only row the
-// selection stays on the dead name and frame clears it.
+// selection stays on the dead path and frame clears it.
 func (u *ui) dropSelected() {
 	gone := u.sel
 	u.move(1)
@@ -204,7 +225,7 @@ func (u *ui) frame() ([]string, error) {
 	}
 
 	var buf bytes.Buffer
-	names, err := renderList(&buf, true, cols)
+	paths, err := renderList(&buf, true, cols, u.projects)
 	if err != nil {
 		return nil, err
 	}
@@ -213,13 +234,13 @@ func (u *ui) frame() ([]string, error) {
 	body := max(rows-1, 1)
 
 	// The frame doesn't scroll: a list taller than the terminal is simply cut,
-	// so only the rows on screen count as selectable. Keeping u.names to those
+	// so only the rows on screen count as selectable. Keeping u.paths to those
 	// is what stops a click below the table from opening a worktree nobody can
 	// see. ponytail: add scrolling if a repo ever grows more worktrees than a
-	// window has lines.
-	u.names = names[:min(len(names), max(body-1, 0))]
+	// window has lines — which -g makes rather easier to hit.
+	u.paths = paths[:min(len(paths), max(body-1, 0))]
 	// Row i of the table is line i+1: line 0 is the header.
-	i := slices.Index(u.names, u.sel)
+	i := slices.Index(u.paths, u.sel)
 	if i < 0 {
 		u.sel = "" // the selected worktree is gone (removed, or scrolled off)
 	} else if i+1 < len(lines) {
@@ -388,50 +409,58 @@ func gitPull() string {
 // are hidden and their keys ignored rather than left to fail on every press.
 func underHerdr() bool { return os.Getenv("HERDR_ENV") != "" }
 
-// herdrNew is the herdr plugin's new-worktree action from the inside: create a
-// worktree, open it. --force-create in spirit, since the tui is usually run
-// from inside the repo and sometimes from inside a worktree, and either way
-// what "new" should do there is make a fresh one.
-func herdrNew() string {
-	_, name, err := (&NewWorktreeBranchCmd{ForceCreate: true}).create()
+// newWorktree is the herdr plugin's new-worktree action from the inside: create
+// a worktree of the selected row's project, open it. --force-create in spirit,
+// since the tui is usually run from inside the repo and sometimes from inside a
+// worktree, and either way what "new" should do there is make a fresh one.
+func (u *ui) newWorktree() string {
+	root, err := u.root()
 	if err != nil {
 		return "new failed: " + err.Error()
 	}
-	return herdrOpen(name)
+	path, _, err := (&NewWorktreeBranchCmd{ForceCreate: true}).create(root)
+	if err != nil {
+		return "new failed: " + err.Error()
+	}
+	return herdrOpen(path)
 }
 
-// herdrOpen opens a worktree as its own herdr workspace, the same way the
-// herdr plugin's new-worktree action does — including handing it the enclosing
-// repo root as --cwd, since herdr refuses to spawn a workspace from inside a
-// linked worktree.
+// herdrOpen opens the worktree at path as its own herdr workspace, the same way
+// the herdr plugin's new-worktree action does — including handing it the
+// enclosing repo root as --cwd, since herdr refuses to spawn a workspace from
+// inside a linked worktree.
 //
 // No --label: herdr derives a workspace's name from its root pane's directory,
 // which for a worktree is already <name>, and a --label would instead pin a
 // custom override — renaming the workspace out from under someone who had
 // named it themselves, every time they reopened it.
-func herdrOpen(name string) string {
-	root, err := gitutil.RepoRoot(true)
-	if err != nil {
-		return "open failed: " + err.Error()
+func herdrOpen(path string) string {
+	root, ok := gitutil.ClaudeWorktreeRepoRoot(path)
+	if !ok {
+		return "open failed: " + path + " is not a Claude Code worktree"
 	}
 	herdr := os.Getenv("HERDR_BIN_PATH")
 	if herdr == "" {
 		herdr = "herdr"
 	}
-	path := filepath.Join(root, ".claude", "worktrees", name)
 	out, err := exec.Command(herdr, "worktree", "open",
 		"--cwd", root, "--path", path, "--focus").CombinedOutput()
 	if err != nil {
 		return "open failed: " + lastLine(out, err)
 	}
-	return "opened " + name
+	return "opened " + filepath.Base(path)
 }
 
-// removeWorktree is `ccwt remove <name>`, refusal and all: an unmerged branch
-// comes back as the same error it prints on the command line, so the tui never
-// deletes something the cli wouldn't.
-func removeWorktree(name string) (string, bool) {
-	if err := (&RemoveCmd{Name: name}).Run(); err != nil {
+// removeWorktree is `ccwt remove <name>` against the worktree's own project,
+// refusal and all: an unmerged branch comes back as the same error it prints on
+// the command line, so the tui never deletes something the cli wouldn't.
+func removeWorktree(path string) (string, bool) {
+	root, ok := gitutil.ClaudeWorktreeRepoRoot(path)
+	if !ok {
+		return "remove failed: " + path + " is not a Claude Code worktree", false
+	}
+	name := filepath.Base(path)
+	if err := (&RemoveCmd{Name: name}).remove(root); err != nil {
 		return "remove failed: " + err.Error(), false
 	}
 	return "removed " + name, true

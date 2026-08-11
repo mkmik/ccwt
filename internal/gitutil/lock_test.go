@@ -30,10 +30,10 @@ func TestLockLifecycle(t *testing.T) {
 	add := func(name string) string {
 		t.Helper()
 		wt := filepath.Join(repo, ".claude", "worktrees", name)
-		if err := AddWorktree(wt, "worktree-"+name); err != nil {
+		if err := AddWorktree("", wt, "worktree-"+name); err != nil {
 			t.Fatalf("AddWorktree(%s): %v", name, err)
 		}
-		if got := lockReason(wt); got != LockReason {
+		if got := lockReason("", wt); got != LockReason {
 			t.Fatalf("lockReason(%s) = %q, want %q", name, got, LockReason)
 		}
 		return wt
@@ -41,7 +41,7 @@ func TestLockLifecycle(t *testing.T) {
 
 	// ccwt's own lock is released and the worktree goes away.
 	wt := add("ours")
-	if err := RemoveWorktree(wt); err != nil {
+	if err := RemoveWorktree("", wt); err != nil {
 		t.Fatalf("RemoveWorktree: %v", err)
 	}
 	if _, err := os.Stat(wt); !os.IsNotExist(err) {
@@ -58,7 +58,7 @@ func TestLockLifecycle(t *testing.T) {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
 	}
-	if err := RemoveWorktree(wt); err == nil {
+	if err := RemoveWorktree("", wt); err == nil {
 		t.Error("RemoveWorktree on a hand-locked worktree: want error, got nil")
 	}
 	if _, err := os.Stat(wt); err != nil {
@@ -70,10 +70,10 @@ func TestLockLifecycle(t *testing.T) {
 	if err := os.RemoveAll(wt); err != nil {
 		t.Fatal(err)
 	}
-	if err := PruneWorktrees(); err != nil {
+	if err := PruneWorktrees(""); err != nil {
 		t.Fatalf("PruneWorktrees: %v", err)
 	}
-	if r := lockReason(wt); r != "" {
+	if r := lockReason("", wt); r != "" {
 		t.Errorf("stale worktree still registered (lock %q)", r)
 	}
 }
