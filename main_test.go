@@ -340,6 +340,48 @@ func TestHerdrOpenLabelsNewWorkspacesOnly(t *testing.T) {
 	}
 }
 
+// TestDone: `done` is `remove .` plus closing our own workspace — the one
+// `remove` leaves alone — and only after the removal went through: a refusal
+// leaves both the worktree and the workspace where they were.
+func TestDone(t *testing.T) {
+	initRepo(t)
+	path := capture(t, &NewWorktreeBranchCmd{Name: "mine", Path: true})
+	t.Chdir(path)
+	if err := os.WriteFile(filepath.Join(path, "scratch"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	log := filepath.Join(dir, "calls")
+	herdr := filepath.Join(dir, "herdr")
+	script := fmt.Sprintf("#!/bin/sh\necho \"$@\" >> %q\n"+
+		"[ \"$1 $2\" = \"worktree list\" ] && printf '{\"result\":{\"worktrees\":"+
+		"[{\"path\":\"%s\",\"open_workspace_id\":\"w1\"}]}}'\nexit 0\n", log, path)
+	if err := os.WriteFile(herdr, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_BIN_PATH", herdr)
+	t.Setenv("HERDR_WORKSPACE_ID", "w1")
+
+	if err := (&DoneCmd{}).Run(); err == nil {
+		t.Error("done on a dirty worktree succeeded, want refusal")
+	}
+	if _, err := os.Stat(log); !os.IsNotExist(err) {
+		t.Error("refused done closed the workspace anyway")
+	}
+
+	if err := (&DoneCmd{Force: true}).Run(); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(log); !strings.Contains(string(got), "workspace close w1") {
+		t.Errorf("herdr calls = %q, want our own workspace closed", got)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("worktree %s still exists (%v)", path, err)
+	}
+}
+
 // TestGc: only worktrees that are both merged and idle are collected — an
 // unmerged one and one with a session running in it stay put — and what `gc`
 // removes, it removes the way `remove` does, branch and all.
