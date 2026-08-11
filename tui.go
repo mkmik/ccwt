@@ -96,11 +96,21 @@ func (c *TuiCmd) Run() error {
 		return nil
 	}
 	open := func() error {
-		path := u.sel
+		path := u.sel.path
 		if path == "" || !underHerdr() {
 			return nil
 		}
 		return act("opening "+filepath.Base(path)+"…", func() string { return herdrOpen(path) })
+	}
+	// activate is what ↵ — and a click, which is the same gesture with a
+	// selection bundled in — does to whatever the selection landed on: fold a
+	// project section shut, or open a worktree as a workspace.
+	activate := func() error {
+		if u.sel.path == "" {
+			u.toggle()
+			return nil
+		}
+		return open()
 	}
 
 	for {
@@ -130,11 +140,13 @@ func (c *TuiCmd) Run() error {
 			case k == "\x1b[B", k == "j":
 				u.move(1)
 			case k == "\r", k == "\n":
-				if err := open(); err != nil {
+				if err := activate(); err != nil {
 					return err
 				}
+			case k == " ": // folds a section, and does nothing on a worktree
+				u.toggle()
 			case k == "r":
-				if path := u.sel; path != "" {
+				if path := u.sel.path; path != "" {
 					if err := act("removing "+filepath.Base(path)+"…", func() string {
 						msg, ok := removeWorktree(path)
 						if ok {
@@ -146,11 +158,11 @@ func (c *TuiCmd) Run() error {
 					}
 				}
 			default:
-				// A click selects the row it landed on and opens it, which is
+				// A click selects the row it landed on and acts on it, which is
 				// the one thing you'd want a click in this list to do.
-				if row := mouseRow(k); row >= 2 && row-2 < len(u.paths) {
-					u.sel = u.paths[row-2]
-					if err := open(); err != nil {
+				if row := mouseRow(k); row >= 2 && row-2 < len(u.rows) {
+					u.sel = u.rows[row-2]
+					if err := activate(); err != nil {
 						return err
 					}
 				}
@@ -159,41 +171,55 @@ func (c *TuiCmd) Run() error {
 	}
 }
 
-// ui is the whole model: which worktree is selected, the worktrees the last
-// frame showed (so a selection can be resolved back to a row), the projects the
-// list spans (nil for just the repo we're in), and the transient status-bar
-// message.
+// ui is the whole model: which row is selected, the rows the last frame showed
+// (so a selection can be resolved back to a screen line), the projects the list
+// spans (nil for just the repo we're in), which of their sections are folded
+// shut, and the transient status-bar message.
 //
-// A worktree is held by path rather than by index because the list is re-read
-// and re-sorted every interval: an index would silently point at a different
-// worktree once one is removed or a commit reorders the rows. By path rather
-// than by name because under -g two projects can each have a "fix-tests", and
-// because the path is what an action needs — the repo is the part of it in
-// front of .claude/worktrees/.
+// The selection is held as the row's identity rather than as an index because
+// the list is re-read and re-sorted every interval: an index would silently
+// point at a different worktree once one is removed or a commit reorders the
+// rows.
 type ui struct {
-	sel      string // selected worktree path, "" when nothing is selected yet
-	paths    []string
-	projects []string
-	msg      string
+	sel       listRow // selected row, the zero value when nothing is selected yet
+	rows      []listRow
+	projects  []string
+	collapsed map[string]bool // project root -> section folded shut
+	msg       string
 }
 
 // move walks the selection by d rows, starting from the top when nothing is
-// selected (or when the selected worktree has since disappeared).
+// selected (or when the selected row has since disappeared). Section headers
+// are rows like any other: they're what ↵ folds, so the keyboard has to be able
+// to land on one.
 func (u *ui) move(d int) {
-	if len(u.paths) == 0 {
+	if len(u.rows) == 0 {
 		return
 	}
-	i := min(max(slices.Index(u.paths, u.sel)+d, 0), len(u.paths)-1)
-	u.sel = u.paths[i]
+	i := min(max(slices.Index(u.rows, u.sel)+d, 0), len(u.rows)-1)
+	u.sel = u.rows[i]
 }
 
-// root is the repo an action applies to: the selected worktree's project, or
-// the repo the tui is running in when nothing is selected. Under -g there is no
-// such fallback — the repos in view are the configured ones, and the directory
-// ccwt happens to have been started in isn't one of them.
+// toggle folds the selected project's section shut, or opens it back up. Only
+// section headers fold, and only -g draws any.
+func (u *ui) toggle() {
+	if u.sel.path != "" || u.sel.project == "" {
+		return
+	}
+	if u.collapsed == nil {
+		u.collapsed = map[string]bool{}
+	}
+	u.collapsed[u.sel.project] = !u.collapsed[u.sel.project]
+}
+
+// root is the repo an action applies to: the selected row's project, or the
+// repo the tui is running in when nothing is selected. Outside -g they're all
+// the same repo. Under -g there is no such fallback — the repos in view are the
+// configured ones, and the directory ccwt was started in isn't one of them.
+
 func (u *ui) root() (string, error) {
-	if root, ok := gitutil.ClaudeWorktreeRepoRoot(u.sel); ok {
-		return root, nil
+	if u.sel.project != "" {
+		return u.sel.project, nil
 	}
 	if u.projects != nil {
 		return "", errors.New("no worktree selected")
@@ -203,22 +229,21 @@ func (u *ui) root() (string, error) {
 
 // gitDir is the repo the whole-repo actions work on — the pull key, and the
 // branch the status bar reports the drift of. "." outside -g: the directory
-// ccwt was started in. Under -g the selected worktree's project instead, and ""
+// ccwt was started in. Under -g the selected row's project instead, and ""
 // (do nothing, report nothing) until something is selected, since with a dozen
 // repos on screen the current directory is not the one the keys should reach.
 func (u *ui) gitDir() string {
 	if u.projects == nil {
 		return "."
 	}
-	root, _ := gitutil.ClaudeWorktreeRepoRoot(u.sel)
-	return root
+	return u.sel.project
 }
 
 // dropSelected moves the selection off the selected worktree, as it has to once
 // that worktree is removed: down a row, or up one when the removed row was the
-// last. The removed path is still in u.paths — the list is only re-read on the
+// last. The removed row is still in u.rows — the list is only re-read on the
 // next frame — so this is the ordinary walk, and when it was the only row the
-// selection stays on the dead path and frame clears it.
+// selection stays on the dead one and frame clears it.
 func (u *ui) dropSelected() {
 	gone := u.sel
 	u.move(1)
@@ -242,7 +267,7 @@ func (u *ui) frame() ([]string, error) {
 	}
 
 	var buf bytes.Buffer
-	paths, err := renderList(&buf, true, cols, u.projects)
+	listRows, err := renderList(&buf, true, cols, u.projects, u.collapsed)
 	if err != nil {
 		return nil, err
 	}
@@ -251,15 +276,16 @@ func (u *ui) frame() ([]string, error) {
 	body := max(rows-1, 1)
 
 	// The frame doesn't scroll: a list taller than the terminal is simply cut,
-	// so only the rows on screen count as selectable. Keeping u.paths to those
+	// so only the rows on screen count as selectable. Keeping u.rows to those
 	// is what stops a click below the table from opening a worktree nobody can
 	// see. ponytail: add scrolling if a repo ever grows more worktrees than a
-	// window has lines — which -g makes rather easier to hit.
-	u.paths = paths[:min(len(paths), max(body-1, 0))]
+	// window has lines — which -g makes rather easier to hit, folding sections
+	// away being the answer to it for now.
+	u.rows = listRows[:min(len(listRows), max(body-1, 0))]
 	// Row i of the table is line i+1: line 0 is the header.
-	i := slices.Index(u.paths, u.sel)
+	i := slices.Index(u.rows, u.sel)
 	if i < 0 {
-		u.sel = "" // the selected worktree is gone (removed, or scrolled off)
+		u.sel = listRow{} // the selected row is gone (removed, folded away, or scrolled off)
 	} else if i+1 < len(lines) {
 		lines[i+1] = highlight(lines[i+1], cols)
 	}
@@ -328,18 +354,23 @@ func readKeys() <-chan string {
 // transient message (the result of a pull) or how far the branch has drifted
 // from its upstream, cut or padded to exactly the terminal width. The
 // per-worktree actions only appear once there's a worktree to apply them to,
-// and the herdr ones only when there's a herdr to open a workspace in.
-func statusBar(cols int, msg, sel, dir string) string {
+// and the herdr ones only when there's a herdr to open a workspace in. On a
+// section header ↵ means the other thing it does, and there's nothing there to
+// remove.
+func statusBar(cols int, msg string, sel listRow, dir string) string {
 	herdr := underHerdr()
 	keys := " ccwt  q:quit  p:pull"
 	if herdr {
 		keys += "  x:new"
 	}
-	if sel != "" {
+	switch {
+	case sel.path != "":
 		if herdr {
 			keys += "  ↵:open"
 		}
 		keys += "  r:remove"
+	case sel.project != "":
+		keys += "  ↵:fold"
 	}
 	if msg == "" {
 		msg = gitDivergence(dir)

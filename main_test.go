@@ -288,15 +288,10 @@ func TestGitDivergence(t *testing.T) {
 }
 
 // Under -g the current directory is not one of the repos in view, so the keys
-// and the status bar have to reach the selected worktree's project instead —
-// and nothing at all while there's no selection.
+// and the status bar have to reach the selected row's project instead — and
+// nothing at all while there's no selection.
 func TestGlobalModeIgnoresTheCurrentDirectory(t *testing.T) {
-	// EvalSymlinks: on macOS t.TempDir() hands out /var/..., git reports /private/var/...
-	root, err := filepath.EvalSymlinks(initRepo(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	wt := capture(t, &NewWorktreeBranchCmd{Name: "somewhere", Path: true})
+	root := initRepo(t)
 
 	global := ui{projects: []string{root}}
 	if got := global.gitDir(); got != "" {
@@ -305,9 +300,9 @@ func TestGlobalModeIgnoresTheCurrentDirectory(t *testing.T) {
 	if _, err := global.root(); err == nil {
 		t.Error("root() with nothing selected fell back to the current directory")
 	}
-	global.sel = wt
+	global.sel = listRow{project: root, path: filepath.Join(root, ".claude", "worktrees", "somewhere")}
 	if got := global.gitDir(); got != root {
-		t.Errorf("gitDir() = %q, want the selected worktree's project %q", got, root)
+		t.Errorf("gitDir() = %q, want the selected row's project %q", got, root)
 	}
 
 	// Outside -g the current directory is still the answer.
@@ -324,11 +319,11 @@ func TestGlobalModeIgnoresTheCurrentDirectory(t *testing.T) {
 // is short (pad) or long (cut) — otherwise it wraps and shoves the table up.
 func TestStatusBarIsExactlyOneLineWide(t *testing.T) {
 	for _, msg := range []string{"", "ok", strings.Repeat("x", 200)} {
-		for _, sel := range []string{"", "some-worktree"} {
+		for _, sel := range []listRow{{}, {path: "some-worktree"}, {project: "some-project"}} {
 			bar := statusBar(40, msg, sel, ".")
 			bar = strings.TrimSuffix(strings.TrimPrefix(bar, "\x1b[7m"), "\x1b[0m")
 			if got := len([]rune(bar)); got != 40 {
-				t.Errorf("statusBar(40, %.10q, %q) is %d cols wide, want 40", msg, sel, got)
+				t.Errorf("statusBar(40, %.10q, %v) is %d cols wide, want 40", msg, sel, got)
 			}
 		}
 	}
@@ -342,7 +337,7 @@ func TestStatusBarShowsHerdrActionsOnlyUnderHerdr(t *testing.T) {
 		want bool
 	}{{"", false}, {"1", true}} {
 		t.Setenv("HERDR_ENV", tc.env)
-		bar := statusBar(200, "", "some-worktree", ".")
+		bar := statusBar(200, "", listRow{path: "some-worktree"}, ".")
 		for _, key := range []string{"x:new", "↵:open"} {
 			if strings.Contains(bar, key) != tc.want {
 				t.Errorf("HERDR_ENV=%q: %q in the bar = %v, want %v", tc.env, key, !tc.want, tc.want)
@@ -354,55 +349,64 @@ func TestStatusBarShowsHerdrActionsOnlyUnderHerdr(t *testing.T) {
 	}
 }
 
-// The selection is kept by name, so it has to survive the list changing under
-// it: rows reordering (a commit lands elsewhere) must not move it, and the
-// selected worktree disappearing must not wedge the arrows.
+// worktreeRows is what a frame hands back for a list of plain worktree rows.
+func worktreeRows(paths ...string) []listRow {
+	rows := make([]listRow, len(paths))
+	for i, p := range paths {
+		rows[i] = listRow{path: p}
+	}
+	return rows
+}
+
+// The selection is kept by identity, so it has to survive the list changing
+// under it: rows reordering (a commit lands elsewhere) must not move it, and
+// the selected worktree disappearing must not wedge the arrows.
 func TestSelectionFollowsTheWorktree(t *testing.T) {
-	u := ui{paths: []string{"alpha", "bravo", "charlie"}}
+	u := ui{rows: worktreeRows("alpha", "bravo", "charlie")}
 	u.move(1) // nothing selected yet: start at the top
 	u.move(1)
-	if u.sel != "bravo" {
-		t.Fatalf("after two downs sel = %q, want bravo", u.sel)
+	if u.sel.path != "bravo" {
+		t.Fatalf("after two downs sel = %q, want bravo", u.sel.path)
 	}
 
 	// A commit reorders the list: the selection stays on bravo, and the next
 	// arrow moves relative to where bravo sits now.
-	u.paths = []string{"bravo", "charlie", "alpha"}
+	u.rows = worktreeRows("bravo", "charlie", "alpha")
 	u.move(1)
-	if u.sel != "charlie" {
-		t.Errorf("after the rows reordered, sel = %q, want charlie", u.sel)
+	if u.sel.path != "charlie" {
+		t.Errorf("after the rows reordered, sel = %q, want charlie", u.sel.path)
 	}
 
-	u.paths = []string{"alpha"} // bravo removed out from under us
-	u.sel = "bravo"
+	u.rows = worktreeRows("alpha") // bravo removed out from under us
+	u.sel = listRow{path: "bravo"}
 	u.move(1)
-	if u.sel != "alpha" {
-		t.Errorf("after the selected worktree vanished, sel = %q, want alpha", u.sel)
+	if u.sel.path != "alpha" {
+		t.Errorf("after the selected worktree vanished, sel = %q, want alpha", u.sel.path)
 	}
 
-	u.paths = nil
+	u.rows = nil
 	u.move(-1) // must not panic on an empty list
 }
 
 // Removing a worktree must not dump you back at nothing selected: `r` twice in
 // a row should remove two worktrees, not one.
 func TestSelectionSurvivesRemove(t *testing.T) {
-	u := ui{paths: []string{"alpha", "bravo", "charlie"}, sel: "bravo"}
+	u := ui{rows: worktreeRows("alpha", "bravo", "charlie"), sel: listRow{path: "bravo"}}
 	u.dropSelected()
-	if u.sel != "charlie" { // the row below
-		t.Errorf("after removing a middle row, sel = %q, want charlie", u.sel)
+	if u.sel.path != "charlie" { // the row below
+		t.Errorf("after removing a middle row, sel = %q, want charlie", u.sel.path)
 	}
 
-	u.paths = []string{"alpha", "charlie"}
+	u.rows = worktreeRows("alpha", "charlie")
 	u.dropSelected()
-	if u.sel != "alpha" { // last row: fall back to the one above
-		t.Errorf("after removing the last row, sel = %q, want alpha", u.sel)
+	if u.sel.path != "alpha" { // last row: fall back to the one above
+		t.Errorf("after removing the last row, sel = %q, want alpha", u.sel.path)
 	}
 
-	u.paths = []string{"alpha"}
+	u.rows = worktreeRows("alpha")
 	u.dropSelected() // the only row: nothing left to select, frame clears it
-	if u.sel != "alpha" {
-		t.Errorf("after removing the only row, sel = %q, want alpha", u.sel)
+	if u.sel.path != "alpha" {
+		t.Errorf("after removing the only row, sel = %q, want alpha", u.sel.path)
 	}
 }
 
@@ -427,9 +431,9 @@ func TestFrameRowsMatchNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i, path := range u.paths {
-		if !strings.Contains(lines[i+1], filepath.Base(path)) {
-			t.Errorf("paths[%d] = %q, but line %d is %q", i, path, i+1, lines[i+1])
+	for i, r := range u.rows {
+		if !strings.Contains(lines[i+1], filepath.Base(r.path)) {
+			t.Errorf("rows[%d] = %q, but line %d is %q", i, r.path, i+1, lines[i+1])
 		}
 	}
 	if !strings.HasPrefix(lines[1], "\x1b[7m") {
@@ -520,12 +524,12 @@ func TestListFitsTerminalWidth(t *testing.T) {
 
 	for _, width := range []int{20, 50, 60, 80, 100, 200} {
 		var buf bytes.Buffer
-		if _, err := renderList(&buf, true, width, nil); err != nil {
+		if _, err := renderList(&buf, true, width, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 		// Every column bottoms out at minCol, so a terminal narrower than that
 		// floor gets the floor rather than an ever-thinner table.
-		floor := 4*minCol + len("AGE") + len("CLAUDE") + 2*(len(listColumns(false))-1)
+		floor := 4*minCol + len("AGE") + len("CLAUDE") + 2*(len(listColumns())-1)
 		for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
 			if got := len([]rune(line)); got > max(width, floor) {
 				t.Errorf("width=%d: line is %d columns wide: %q", width, got, line)
@@ -537,7 +541,7 @@ func TestListFitsTerminalWidth(t *testing.T) {
 // BRANCH and LAST COMMIT are capped even on a terminal with room to spare, so
 // the space they don't need goes to SESSION.
 func TestFitTableCapsBranchAndCommit(t *testing.T) {
-	cols := listColumns(false)
+	cols := listColumns()
 	row := []string{"a-name", "worktree-exceedingly-verbose-branch-name", "2h", "yes",
 		"a commit subject that runs on well past any sensible column width (#1234)", "a session summary"}
 	fitTable([][]string{row}, 500, cols)
@@ -608,45 +612,80 @@ func TestSummarizeTranscript(t *testing.T) {
 	}
 }
 
-// -g spans the configured projects: every project's worktrees show up, tagged
-// with the project they came from, and the identities handed back to the tui
-// point at the right repo — which a name alone couldn't, since two projects can
-// each have a worktree called "shared".
+// -g spans the configured projects: each gets a section of its own, holding its
+// worktrees, and the identities handed back to the tui point at the right repo
+// — which a name alone couldn't, since two projects can each have a worktree
+// called "shared".
 func TestGlobalListSpansProjects(t *testing.T) {
-	var roots, worktrees []string
+	// The section's identity is the repo root git reports, which on a mac isn't
+	// spelled the way the config path is (/var vs /private/var) — so take it
+	// from the worktree, the same way renderList does.
+	var roots, gitRoots, worktrees []string
 	for range 2 {
 		roots = append(roots, initRepo(t))
-		worktrees = append(worktrees, capture(t, &NewWorktreeBranchCmd{Name: "shared", Path: true}))
+		path := capture(t, &NewWorktreeBranchCmd{Name: "shared", Path: true})
+		worktrees = append(worktrees, path)
+		root, _ := gitutil.ClaudeWorktreeRepoRoot(path)
+		gitRoots = append(gitRoots, root)
 	}
 
 	var buf bytes.Buffer
-	got, err := renderList(&buf, false, 0, roots)
+	got, err := renderList(&buf, false, 0, roots, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	slices.Sort(got)
-	if want := slices.Sorted(slices.Values(worktrees)); !slices.Equal(got, want) {
-		t.Errorf("renderList paths = %v, want %v", got, want)
+	// A section header for each project, then that project's worktrees.
+	want := []listRow{
+		{project: gitRoots[0]}, {project: gitRoots[0], path: worktrees[0]},
+		{project: gitRoots[1]}, {project: gitRoots[1], path: worktrees[1]},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("renderList rows = %v, want %v", got, want)
 	}
 	out := buf.String()
-	if !strings.HasPrefix(out, "PROJECT") {
-		t.Errorf("-g output has no PROJECT column:\n%s", out)
-	}
 	for _, root := range roots {
-		if !strings.Contains(out, filepath.Base(root)) {
-			t.Errorf("project %q is missing from:\n%s", filepath.Base(root), out)
+		if header := "▾ " + filepath.Base(root) + " (1)"; !strings.Contains(out, header) {
+			t.Errorf("no %q section in:\n%s", header, out)
 		}
 	}
 
-	// The tui reads that same list, and what it selects has to be one of those
-	// worktrees — which is what its actions then resolve a project out of.
+	// Folded shut, a project keeps its header — turned around, and still saying
+	// how much is underneath — and contributes no rows at all.
+	buf.Reset()
+	got, err = renderList(&buf, false, 0, roots, map[string]bool{gitRoots[0]: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := want[2:]; !slices.Equal(got[1:], want) {
+		t.Errorf("with the first section folded, rows = %v, want %v", got, want)
+	}
+	if header := "▸ " + filepath.Base(roots[0]) + " (1)"; !strings.Contains(buf.String(), header) {
+		t.Errorf("no %q section in:\n%s", header, buf.String())
+	}
+
+	// The tui reads that same list: the first row is a section, ↵ on it folds
+	// the section away, and below it are the worktrees its actions resolve a
+	// project out of.
 	u := ui{projects: roots}
 	if _, err := u.frame(); err != nil {
 		t.Fatal(err)
 	}
 	u.move(1)
-	if !slices.Contains(worktrees, u.sel) {
-		t.Errorf("tui selected %q, want one of %v", u.sel, worktrees)
+	if (u.sel != listRow{project: gitRoots[0]}) {
+		t.Fatalf("tui selected %v, want the %s section", u.sel, gitRoots[0])
+	}
+	u.move(1)
+	if !slices.Contains(worktrees, u.sel.path) {
+		t.Errorf("tui selected %q, want one of %v", u.sel.path, worktrees)
+	}
+
+	u.sel = listRow{project: gitRoots[0]}
+	u.toggle()
+	if _, err := u.frame(); err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(u.rows, func(r listRow) bool { return r.path == worktrees[0] }) {
+		t.Errorf("folding the %s section left its worktree on screen: %v", gitRoots[0], u.rows)
 	}
 }
 

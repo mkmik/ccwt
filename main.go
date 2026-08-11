@@ -342,23 +342,33 @@ func (c *ListCmd) Run() error {
 	if tty {
 		width, _, _ = term.GetSize(int(os.Stdout.Fd()))
 	}
-	_, err = renderList(os.Stdout, tty, width, projects)
+	_, err = renderList(os.Stdout, tty, width, projects, nil)
 	return err
 }
 
-// renderList writes the worktree table to w and returns the worktree paths in
-// the order their rows were printed, which is what lets `ccwt tui` map a screen
-// line back to a worktree. A path rather than a name because with -g two
-// projects can each have a worktree called "fix-tests", and the path is also
-// the only thing an action needs: the repo it belongs to is the part in front
-// of .claude/worktrees/.
+// listRow identifies one body line of the table: a worktree by its path, or —
+// under -g — a project's section header, with an empty path. Both carry the
+// project they belong to, as the repo's main worktree, which is what an action
+// on the row resolves against.
+//
+// A worktree by path rather than by name because with -g two projects can each
+// have a worktree called "fix-tests", and the path is also the only thing an
+// action needs. A project by root path rather than by the directory name the
+// header shows, for the same reason: two checkouts can share a basename.
+type listRow struct{ project, path string }
+
+// renderList writes the worktree table to w and returns one listRow per body
+// line, in the order the lines were printed, which is what lets `ccwt tui` map
+// a screen line back to what's on it.
 //
 // tty selects the human-reader decorations (markers, ✓); the tui always asks
 // for them, plain `list` only when stdout is a terminal. width is the terminal
 // the table has to fit inside, or 0 for "as wide as it wants". projects are the
 // repos to cover: nil means the repo we're standing in, anything else is the
-// configured project list and brings the PROJECT column with it.
-func renderList(out io.Writer, tty bool, width int, projects []string) ([]string, error) {
+// configured project list and gets a foldable section per project. collapsed
+// holds the roots whose section is folded shut — only the tui has any, since
+// there is nothing to unfold them with on the command line.
+func renderList(out io.Writer, tty bool, width int, projects []string, collapsed map[string]bool) ([]listRow, error) {
 	global := projects != nil
 	if !global {
 		// "" is the current directory, which is how git reads "the repo we're in".
@@ -432,7 +442,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string) ([]string
 	var refs []ref
 	for i, wts := range lists {
 		for _, wt := range wts {
-			refs = append(refs, ref{filepath.Base(roots[i]), merged[i], wt})
+			refs = append(refs, ref{roots[i], merged[i], wt})
 		}
 	}
 
@@ -480,8 +490,9 @@ func renderList(out io.Writer, tty bool, width int, projects []string) ([]string
 	}
 
 	// Stable: worktrees sharing a commit timestamp keep `git worktree list`
-	// order rather than shuffling between runs. Newest-first across all the
-	// projects at once, which is the order you were working in.
+	// order rather than shuffling between runs. Newest-first, which is the
+	// order you were working in — across all the projects at once outside -g's
+	// sections, and within each section under them.
 	slices.SortStableFunc(rows, func(a, b row) int {
 		return b.sortTime.Compare(a.sortTime)
 	})
@@ -490,28 +501,64 @@ func renderList(out io.Writer, tty bool, width int, projects []string) ([]string
 	if tty {
 		gutter = marker(false, "")
 	}
-	cols := listColumns(global)
-	header := []string{gutter + "NAME", gutter + "BRANCH", "AGE", "CLAUDE", gutter + "LAST COMMIT", "SESSION"}
-	if global {
-		header = append([]string{"PROJECT"}, header...)
+	table := [][]string{{gutter + "NAME", gutter + "BRANCH", "AGE", "CLAUDE", gutter + "LAST COMMIT", "SESSION"}}
+	var lines []listRow
+	emit := func(r row) {
+		lines = append(lines, listRow{r.project, r.path})
+		table = append(table, []string{r.name, r.branch, r.age, r.claude, r.subject, r.summary})
 	}
-	table := [][]string{header}
-	paths := make([]string, len(rows))
-	for i, r := range rows {
-		paths[i] = r.path
-		cells := []string{r.name, r.branch, r.age, r.claude, r.subject, r.summary}
-		if global {
-			cells = append([]string{r.project}, cells...)
+	if !global {
+		for _, r := range rows {
+			emit(r)
 		}
-		table = append(table, cells)
+	} else {
+		// Sections in the order the config lists the projects: stable, unlike an
+		// order derived from the worktrees, which would shuffle the sections
+		// around under the cursor every time someone committed. Two config
+		// entries pointing into the same repo share the one section. A project
+		// with no worktrees still gets its (0) header — it's a configured
+		// project, and in the tui that header is where `x` makes its first
+		// worktree; only one git couldn't read at all is left out.
+		seen := map[string]bool{}
+		for _, root := range roots {
+			if root == "" || seen[root] {
+				continue
+			}
+			seen[root] = true
+			var mine []row
+			for _, r := range rows {
+				if r.project == root {
+					mine = append(mine, r)
+				}
+			}
+			lines = append(lines, listRow{project: root})
+			table = append(table, []string{section(root, len(mine), collapsed[root]), "", "", "", "", ""})
+			if collapsed[root] {
+				continue
+			}
+			for _, r := range mine {
+				emit(r)
+			}
+		}
 	}
-	fitTable(table, width, cols)
+	fitTable(table, width, listColumns())
 
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	for _, r := range table {
 		fmt.Fprintln(w, strings.Join(r, "\t"))
 	}
-	return paths, w.Flush()
+	return lines, w.Flush()
+}
+
+// section is a project's header line: a disclosure triangle, the repo's
+// directory name, and how many worktrees are underneath — the count being the
+// only thing left to say about a section once it's folded shut.
+func section(root string, n int, collapsed bool) string {
+	glyph := "▾"
+	if collapsed {
+		glyph = "▸"
+	}
+	return fmt.Sprintf("%s %s (%d)", glyph, filepath.Base(root), n)
 }
 
 // gitError turns a failed git invocation into something worth printing: git
@@ -550,10 +597,9 @@ type column struct {
 // is usually the worktree's own name with a "worktree-" bolted on the front,
 // and a commit subject only has to say which commit it is, so the widest
 // either ever needs to be is much narrower than the widest it could be — and
-// every column they give up goes to SESSION. PROJECT, when -g brings it along,
-// is a repo's directory name and stays short on its own.
-func listColumns(global bool) []column {
-	cols := []column{
+// every column they give up goes to SESSION.
+func listColumns() []column {
+	return []column{
 		{truncate, 0, 0},
 		{elide, 26, 0},
 		{nil, 0, 0},
@@ -561,10 +607,6 @@ func listColumns(global bool) []column {
 		{elide, 40, 0},
 		{truncate, 0, 60},
 	}
-	if global {
-		return append([]column{{truncate, 0, 0}}, cols...) // PROJECT
-	}
-	return cols
 }
 
 // minCol is as narrow as a column ever gets: three characters and an ellipsis,
