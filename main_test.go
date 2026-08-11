@@ -480,14 +480,17 @@ func TestListFitsTerminalWidth(t *testing.T) {
 	}
 }
 
-// BRANCH is capped even on a terminal with room to spare, so the space it
-// doesn't need goes to SESSION.
-func TestFitTableCapsBranch(t *testing.T) {
+// BRANCH and LAST COMMIT are capped even on a terminal with room to spare, so
+// the space they don't need goes to SESSION.
+func TestFitTableCapsBranchAndCommit(t *testing.T) {
 	cols := listColumns(false)
-	row := []string{"a-name", "worktree-exceedingly-verbose-branch-name", "2h", "yes", "a commit", "a session summary"}
+	row := []string{"a-name", "worktree-exceedingly-verbose-branch-name", "2h", "yes",
+		"a commit subject that runs on well past any sensible column width (#1234)", "a session summary"}
 	fitTable([][]string{row}, 500, cols)
-	if got := len([]rune(row[1])); got != cols[1].max {
-		t.Errorf("branch column is %d wide, want %d: %q", got, cols[1].max, row[1])
+	for _, i := range []int{1, 4} {
+		if got := len([]rune(row[i])); got != cols[i].max {
+			t.Errorf("column %d is %d wide, want %d: %q", i, got, cols[i].max, row[i])
+		}
 	}
 }
 

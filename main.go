@@ -546,18 +546,19 @@ type column struct {
 // "worktree-elegant-…-cook" from "worktree-elegant-…-otter", or one commit
 // from the next ("… tui` (#32)"), tends to be the last word.
 //
-// BRANCH is capped even when there's room for it: it's usually the worktree's
-// own name with a "worktree-" bolted on the front, so the widest it ever needs
-// to be is much narrower than the widest it could be, and every column it
-// gives up goes to SESSION. PROJECT, when -g brings it along, is a repo's
-// directory name and stays short on its own.
+// BRANCH and LAST COMMIT are capped even when there's room for them. A branch
+// is usually the worktree's own name with a "worktree-" bolted on the front,
+// and a commit subject only has to say which commit it is, so the widest
+// either ever needs to be is much narrower than the widest it could be — and
+// every column they give up goes to SESSION. PROJECT, when -g brings it along,
+// is a repo's directory name and stays short on its own.
 func listColumns(global bool) []column {
 	cols := []column{
 		{truncate, 0, 0},
 		{elide, 26, 0},
 		{nil, 0, 0},
 		{nil, 0, 0},
-		{elide, 0, 60},
+		{elide, 40, 0},
 		{truncate, 0, 60},
 	}
 	if global {
