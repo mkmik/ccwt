@@ -49,7 +49,7 @@ type RepoRootCmd struct {
 }
 
 func (c *RepoRootCmd) Run() error {
-	path, err := gitutil.RepoRoot(c.RootWorktree)
+	path, err := gitutil.RepoRoot("", c.RootWorktree)
 	if err != nil {
 		return err
 	}
@@ -60,7 +60,7 @@ func (c *RepoRootCmd) Run() error {
 type DotDotCmd struct{}
 
 func (c *DotDotCmd) Run() error {
-	path, err := gitutil.RepoRoot(true)
+	path, err := gitutil.RepoRoot("", true)
 	if err != nil {
 		// git couldn't resolve the toplevel — most often because the current
 		// directory was deleted out from under us (e.g. the worktree was
@@ -101,7 +101,11 @@ func (c *NewWorktreeBranchCmd) out(path, name string) string {
 }
 
 func (c *NewWorktreeBranchCmd) Run() error {
-	path, name, err := c.create()
+	root, err := gitutil.RepoRoot("", true)
+	if err != nil {
+		return err
+	}
+	path, name, err := c.create(root)
 	if err != nil {
 		return err
 	}
@@ -111,10 +115,12 @@ func (c *NewWorktreeBranchCmd) Run() error {
 	return nil
 }
 
-// create makes (or reuses) the worktree and reports its path and name, without
-// the terminal side effects Run adds — which is what callers that aren't a
-// command line (the tui) want.
-func (c *NewWorktreeBranchCmd) create() (string, string, error) {
+// create makes (or reuses) a worktree of the repo at root and reports its path
+// and name, without the terminal side effects Run adds — which is what callers
+// that aren't a command line (the tui) want. root is a parameter rather than
+// the cwd's repo because under `tui -g` the worktree belongs to whichever
+// project is selected, not to wherever the tui happens to be running.
+func (c *NewWorktreeBranchCmd) create(root string) (string, string, error) {
 	if c.Name == "" && c.Switch == "" && !c.ForceCreate {
 		path, name, err := gitutil.CurrentClaudeWorktree()
 		if err != nil {
@@ -128,11 +134,6 @@ func (c *NewWorktreeBranchCmd) create() (string, string, error) {
 	name := c.Name
 	if name == "" {
 		name = namegen.Generate()
-	}
-
-	root, err := gitutil.RepoRoot(true)
-	if err != nil {
-		return "", "", err
 	}
 
 	parent := filepath.Join(root, ".claude", "worktrees")
@@ -154,9 +155,9 @@ func (c *NewWorktreeBranchCmd) create() (string, string, error) {
 	case errors.Is(statErr, os.ErrNotExist):
 		var addErr error
 		if c.Switch != "" {
-			addErr = gitutil.AddWorktreeOnBranch(worktreePath, c.Switch)
+			addErr = gitutil.AddWorktreeOnBranch(root, worktreePath, c.Switch)
 		} else {
-			addErr = gitutil.AddWorktree(worktreePath, "worktree-"+name)
+			addErr = gitutil.AddWorktree(root, worktreePath, "worktree-"+name)
 		}
 		if addErr != nil {
 			return "", "", addErr
@@ -192,7 +193,7 @@ func (c *CdCmd) Run() error {
 		return nil
 	}
 
-	root, err := gitutil.RepoRoot(true)
+	root, err := gitutil.RepoRoot("", true)
 	if err != nil {
 		return err
 	}
@@ -242,13 +243,20 @@ type RemoveCmd struct {
 }
 
 func (c *RemoveCmd) Run() error {
-	root, err := gitutil.RepoRoot(true)
+	root, err := gitutil.RepoRoot("", true)
 	if err != nil {
 		return err
 	}
+	return c.remove(root)
+}
 
+// remove is Run against a named repo instead of the cwd's, so `tui -g` can
+// remove a worktree of a project it isn't standing in. Every git command below
+// therefore names root rather than relying on where the process happens to be.
+func (c *RemoveCmd) remove(root string) error {
 	name := c.Name
 	if name == "." {
+		var err error
 		if _, name, err = gitutil.CurrentClaudeWorktree(); err != nil {
 			return err
 		}
@@ -264,14 +272,14 @@ func (c *RemoveCmd) Run() error {
 	// is gone, so an unmerged branch used to leave the worktree removed and the
 	// branch stranded behind it. Settle it before anything is touched. A branch
 	// that doesn't exist (a worktree made by `new --switch`, say) can't strand.
-	if !c.KeepBranch && !c.Force && gitutil.BranchExists(branch) && !gitutil.MergedBranches()[branch] {
+	if !c.KeepBranch && !c.Force && gitutil.BranchExists(root, branch) && !gitutil.MergedBranches(root)[branch] {
 		return fmt.Errorf("%s is not merged: re-run with -D to delete it anyway, or --keep-branch to remove only the worktree", branch)
 	}
 
 	// Removing the worktree we're standing in leaves the process in a deleted
 	// directory, which makes every subsequent git fork fail — so hop out to the
 	// repo root first, and cd the shell there afterwards (same as `ccwt cd ..`).
-	cwdTop, _ := gitutil.RepoRoot(false)
+	cwdTop, _ := gitutil.RepoRoot("", false)
 	inside := cwdTop == worktreePath
 	if inside {
 		if err := os.Chdir(root); err != nil {
@@ -280,21 +288,21 @@ func (c *RemoveCmd) Run() error {
 	}
 
 	if _, err := os.Stat(worktreePath); err == nil {
-		if err := gitutil.RemoveWorktree(worktreePath); err != nil {
+		if err := gitutil.RemoveWorktree(root, worktreePath); err != nil {
 			return err
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 
-	if err := gitutil.PruneWorktrees(); err != nil {
+	if err := gitutil.PruneWorktrees(root); err != nil {
 		return err
 	}
 
 	if !c.KeepBranch {
 		// Force-delete: the check above is the safety valve, and it is the only
 		// one that agrees with the "✓" in `ccwt list`.
-		if err := gitutil.DeleteBranch(branch); err != nil {
+		if err := gitutil.DeleteBranch(root, branch); err != nil {
 			return err
 		}
 	}
@@ -305,7 +313,9 @@ func (c *RemoveCmd) Run() error {
 	return nil
 }
 
-type ListCmd struct{}
+type ListCmd struct {
+	Global bool `short:"g" help:"List the worktrees of every project listed in $XDG_CONFIG_HOME/ccwt/config.toml, not just this repo's."`
+}
 
 // marker returns the flag glyph, or the blank gutter of the same width so
 // unmarked cells stay aligned. The trailing space keeps the marker from
@@ -321,6 +331,10 @@ func marker(on bool, glyph string) string {
 var stdoutIsTTY = func() bool { return term.IsTerminal(int(os.Stdout.Fd())) }
 
 func (c *ListCmd) Run() error {
+	projects, err := projectRoots(c.Global)
+	if err != nil {
+		return err
+	}
 	tty := stdoutIsTTY()
 	// Fit the table to the terminal only when there is one — and GetSize
 	// returns 0 when there isn't, which is exactly what "don't fit" means here.
@@ -328,69 +342,117 @@ func (c *ListCmd) Run() error {
 	if tty {
 		width, _, _ = term.GetSize(int(os.Stdout.Fd()))
 	}
-	_, err := renderList(os.Stdout, tty, width)
+	_, err = renderList(os.Stdout, tty, width, projects)
 	return err
 }
 
-// renderList writes the worktree table to w and returns the worktree names in
-// the order their rows were printed, which is what lets `ccwt tui` map a
-// screen line back to a worktree. tty selects the human-reader decorations
-// (markers, ✓); the tui always asks for them, plain `list` only when stdout is
-// a terminal. width is the terminal the table has to fit inside, or 0 for "as
-// wide as it wants".
-func renderList(out io.Writer, tty bool, width int) ([]string, error) {
-	root, err := gitutil.RepoRoot(true)
-	if err != nil {
+// renderList writes the worktree table to w and returns the worktree paths in
+// the order their rows were printed, which is what lets `ccwt tui` map a screen
+// line back to a worktree. A path rather than a name because with -g two
+// projects can each have a worktree called "fix-tests", and the path is also
+// the only thing an action needs: the repo it belongs to is the part in front
+// of .claude/worktrees/.
+//
+// tty selects the human-reader decorations (markers, ✓); the tui always asks
+// for them, plain `list` only when stdout is a terminal. width is the terminal
+// the table has to fit inside, or 0 for "as wide as it wants". projects are the
+// repos to cover: nil means the repo we're standing in, anything else is the
+// configured project list and brings the PROJECT column with it.
+func renderList(out io.Writer, tty bool, width int, projects []string) ([]string, error) {
+	global := projects != nil
+	if !global {
+		// "" is the current directory, which is how git reads "the repo we're in".
+		projects = []string{""}
+	}
+
+	type row struct {
+		project, name, branch, age, claude, subject, summary string
+		path                                                 string // the row's identity, for the tui
+		sortTime                                             time.Time
+	}
+
+	// Every lookup below shells out to git or lsof, and within a round none of
+	// them depend on each other, so they all go out at once: serially they are
+	// essentially the whole runtime of the command (~500ms across 21 worktrees
+	// on a large repo), in parallel it costs about as much as the slowest single
+	// worktree. Each goroutine owns one slice element, so no locking. There are
+	// two rounds — which worktrees exist, then what each one looks like — since
+	// the second can't be started until the first says what to look at.
+	var (
+		wg     sync.WaitGroup
+		roots  = make([]string, len(projects))
+		lists  = make([][]gitutil.Worktree, len(projects))
+		merged = make([]map[string]bool, len(projects))
+		errs   = make([]error, len(projects))
+		cur    string
+	)
+	// The lsof scan is the slowest single thing here (~200ms) and nothing in
+	// either git round needs it, so it gets its own WaitGroup and runs
+	// alongside both rather than delaying the second.
+	var lsof sync.WaitGroup
+	var claudeCwdSet map[string]bool
+	lsof.Go(func() { claudeCwdSet = claudeCwds() })
+	if tty {
+		wg.Go(func() { cur, _, _ = gitutil.CurrentClaudeWorktree() })
+	}
+	for i, dir := range projects {
+		wg.Go(func() {
+			wts, err := gitutil.ListWorktrees(dir)
+			if err != nil {
+				errs[i] = gitError(dir, err)
+				return
+			}
+			if len(wts) == 0 {
+				return
+			}
+			// The main worktree is the repo root the .claude/worktrees/ hang
+			// off. Taking it from git rather than from the configured path
+			// keeps working when that path points somewhere inside the repo.
+			roots[i] = wts[0].Path
+			claudeDir := filepath.Join(roots[i], ".claude", "worktrees") + string(filepath.Separator)
+			lists[i] = slices.DeleteFunc(wts, func(wt gitutil.Worktree) bool {
+				return !strings.HasPrefix(wt.Path, claudeDir)
+			})
+		})
+		if tty {
+			wg.Go(func() { merged[i] = gitutil.MergedBranches(dir) })
+		}
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
-	wts, err := gitutil.ListWorktrees()
-	if err != nil {
-		return nil, err
+
+	// One flat list of worktrees, each still knowing which project it came from.
+	type ref struct {
+		project string
+		merged  map[string]bool
+		wt      gitutil.Worktree
 	}
+	var refs []ref
+	for i, wts := range lists {
+		for _, wt := range wts {
+			refs = append(refs, ref{filepath.Base(roots[i]), merged[i], wt})
+		}
+	}
+
 	// The worktree we're running in gets a "* " on its name, one on its last
 	// commit when it has uncommitted changes, and a "✓ " on its branch when
 	// that branch is already merged — but only for human readers: piped
 	// output stays parseable. Unmarked cells get the same two-space gutter
 	// so the columns line up.
-	claudeDir := filepath.Join(root, ".claude", "worktrees") + string(filepath.Separator)
-	claudeWts := slices.DeleteFunc(wts, func(wt gitutil.Worktree) bool {
-		return !strings.HasPrefix(wt.Path, claudeDir)
-	})
-
-	type row struct {
-		name, branch, age, claude, subject, summary string
-		plain                                       string // name without the tty marker
-		dirty                                       bool
-		sortTime                                    time.Time
-	}
-
-	// Every lookup below shells out to git or lsof, and none of them depend on
-	// each other, so they all go out at once: serially they are essentially the
-	// whole runtime of the command (~500ms across 21 worktrees on a large repo),
-	// in parallel it costs about as much as the slowest single worktree.
-	// Each goroutine owns one rows[i], so no locking.
-	var (
-		wg           sync.WaitGroup
-		rows         = make([]row, len(claudeWts))
-		cur          string
-		merged       map[string]bool
-		claudeCwdSet map[string]bool
-	)
-	wg.Go(func() { claudeCwdSet = claudeCwds() })
-	if tty {
-		wg.Go(func() { cur, _, _ = gitutil.CurrentClaudeWorktree() })
-		wg.Go(func() { merged = gitutil.MergedBranches() })
-	}
-	for i, wt := range claudeWts {
+	rows := make([]row, len(refs))
+	for i, rf := range refs {
 		wg.Go(func() {
 			r := &rows[i]
-			r.plain = filepath.Base(wt.Path)
-			r.name = r.plain
-			r.branch = wt.Branch
+			r.path = rf.wt.Path
+			r.project = rf.project
+			r.name = filepath.Base(rf.wt.Path)
+			r.branch = rf.wt.Branch
 			if r.branch == "" {
 				r.branch = "(detached)"
 			}
-			if commit, err := gitutil.LastCommit(wt.Path); err == nil {
+			if commit, err := gitutil.LastCommit(rf.wt.Path); err == nil {
 				r.age = humanAge(time.Since(commit.Time))
 				r.subject = commit.Subject
 				r.sortTime = commit.Time
@@ -398,29 +460,28 @@ func renderList(out io.Writer, tty bool, width int) ([]string, error) {
 				r.age = "?"
 				r.subject = "(no commits)"
 			}
-			r.summary = sessionSummary(wt.Path)
+			r.summary = sessionSummary(rf.wt.Path)
 			if tty {
-				r.dirty = gitutil.Dirty(wt.Path)
+				r.name = marker(rf.wt.Path == cur, "*") + r.name
+				r.branch = marker(rf.merged[rf.wt.Branch], "✓") + r.branch
+				r.subject = marker(gitutil.Dirty(rf.wt.Path), "*") + r.subject
 			}
 		})
 	}
 	wg.Wait()
 
-	// The rest is map lookups against results the fan-out had to finish first.
-	for i, wt := range claudeWts {
-		r := &rows[i]
-		r.claude = "no"
-		if isClaudeActiveIn(wt.Path, claudeCwdSet) {
-			r.claude = "yes"
-		}
-		if tty {
-			r.name = marker(wt.Path == cur, "*") + r.name
-			r.branch = marker(merged[wt.Branch], "✓") + r.branch
-			r.subject = marker(r.dirty, "*") + r.subject
+	// All that's left of the scan is map lookups against it.
+	lsof.Wait()
+	for i := range rows {
+		rows[i].claude = "no"
+		if isClaudeActiveIn(rows[i].path, claudeCwdSet) {
+			rows[i].claude = "yes"
 		}
 	}
+
 	// Stable: worktrees sharing a commit timestamp keep `git worktree list`
-	// order rather than shuffling between runs.
+	// order rather than shuffling between runs. Newest-first across all the
+	// projects at once, which is the order you were working in.
 	slices.SortStableFunc(rows, func(a, b row) int {
 		return b.sortTime.Compare(a.sortTime)
 	})
@@ -429,38 +490,73 @@ func renderList(out io.Writer, tty bool, width int) ([]string, error) {
 	if tty {
 		gutter = marker(false, "")
 	}
-	table := [][]string{{gutter + "NAME", gutter + "BRANCH", "AGE", "CLAUDE", gutter + "LAST COMMIT", "SESSION"}}
-	names := make([]string, len(rows))
-	for i, r := range rows {
-		names[i] = r.plain
-		table = append(table, []string{r.name, r.branch, r.age, r.claude, r.subject, r.summary})
+	cols := listColumns(global)
+	header := []string{gutter + "NAME", gutter + "BRANCH", "AGE", "CLAUDE", gutter + "LAST COMMIT", "SESSION"}
+	if global {
+		header = append([]string{"PROJECT"}, header...)
 	}
-	fitTable(table, width)
+	table := [][]string{header}
+	paths := make([]string, len(rows))
+	for i, r := range rows {
+		paths[i] = r.path
+		cells := []string{r.name, r.branch, r.age, r.claude, r.subject, r.summary}
+		if global {
+			cells = append([]string{r.project}, cells...)
+		}
+		table = append(table, cells)
+	}
+	fitTable(table, width, cols)
 
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	for _, r := range table {
 		fmt.Fprintln(w, strings.Join(r, "\t"))
 	}
-	return names, w.Flush()
+	return paths, w.Flush()
 }
 
-// columns says how each column of the table may be shortened when it doesn't
-// all fit, and how wide it is allowed to get when it does. AGE and CLAUDE are
-// never longer than their own headers, so there is nothing to cut there.
+// gitError turns a failed git invocation into something worth printing: git
+// says "fatal: not a git repository" on its stderr, which exec keeps on the
+// ExitError rather than in the "exit status 128" the error itself stringifies
+// to. In global mode the project it came from goes in front, since with a
+// dozen repos on screen the message alone doesn't say which one is misconfigured.
+func gitError(dir string, err error) error {
+	msg := err.Error()
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+		msg = strings.TrimSpace(string(ee.Stderr))
+	}
+	if dir == "" {
+		return errors.New(msg)
+	}
+	return fmt.Errorf("%s: %s", dir, msg)
+}
+
+type column struct {
+	cut func(string, int) string
+	max int // only used when there's no terminal width to fit to; 0 = no cap
+}
+
+// listColumns says how each column of the table may be shortened when it
+// doesn't all fit, and how wide it is allowed to get when it does. AGE and
+// CLAUDE are never longer than their own headers, so there is nothing to cut
+// there.
 //
 // BRANCH and LAST COMMIT lose their middle rather than their end: what tells
 // "worktree-elegant-…-cook" from "worktree-elegant-…-otter", or one commit
 // from the next ("… tui` (#32)"), tends to be the last word.
-var columns = []struct {
-	cut func(string, int) string
-	max int // only used when there's no terminal width to fit to; 0 = no cap
-}{
-	{truncate, 0},
-	{elide, 0},
-	{nil, 0},
-	{nil, 0},
-	{elide, 60},
-	{truncate, 60},
+func listColumns(global bool) []column {
+	cols := []column{
+		{truncate, 0},
+		{elide, 0},
+		{nil, 0},
+		{nil, 0},
+		{elide, 60},
+		{truncate, 60},
+	}
+	if global {
+		return append([]column{{truncate, 0}}, cols...) // PROJECT
+	}
+	return cols
 }
 
 // minCol is as narrow as a column ever gets: three characters and an ellipsis,
@@ -480,7 +576,7 @@ const minCol = 6
 // width <= 0 means there's no terminal to fit to — piped output, say — and
 // the fixed caps stand in for one, so a paragraph-long session summary can't
 // run off into the distance.
-func fitTable(table [][]string, width int) {
+func fitTable(table [][]string, width int, columns []column) {
 	widths := make([]int, len(columns))
 	for _, row := range table {
 		for i, cell := range row {

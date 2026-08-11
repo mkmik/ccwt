@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -170,7 +171,7 @@ func TestRemoveUnmerged(t *testing.T) {
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("worktree %s still exists (%v)", path, err)
 	}
-	if !gitutil.BranchExists("worktree-ahead") {
+	if !gitutil.BranchExists("", "worktree-ahead") {
 		t.Error("--keep-branch deleted the branch")
 	}
 }
@@ -201,7 +202,7 @@ func TestRemoveSquashMerged(t *testing.T) {
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("worktree %s still exists (%v)", path, err)
 	}
-	if gitutil.BranchExists("worktree-squashed") {
+	if gitutil.BranchExists("", "worktree-squashed") {
 		t.Error("worktree removed but the branch was stranded")
 	}
 }
@@ -220,7 +221,7 @@ func TestRemoveMergedUpstream(t *testing.T) {
 	if err := (&RemoveCmd{Name: "upstreamed"}).Run(); err != nil {
 		t.Fatalf("removing a branch merged into origin/main: %v", err)
 	}
-	if gitutil.BranchExists("worktree-upstreamed") {
+	if gitutil.BranchExists("", "worktree-upstreamed") {
 		t.Error("worktree removed but the branch was stranded")
 	}
 }
@@ -319,7 +320,7 @@ func TestStatusBarShowsHerdrActionsOnlyUnderHerdr(t *testing.T) {
 // it: rows reordering (a commit lands elsewhere) must not move it, and the
 // selected worktree disappearing must not wedge the arrows.
 func TestSelectionFollowsTheWorktree(t *testing.T) {
-	u := ui{names: []string{"alpha", "bravo", "charlie"}}
+	u := ui{paths: []string{"alpha", "bravo", "charlie"}}
 	u.move(1) // nothing selected yet: start at the top
 	u.move(1)
 	if u.sel != "bravo" {
@@ -328,39 +329,39 @@ func TestSelectionFollowsTheWorktree(t *testing.T) {
 
 	// A commit reorders the list: the selection stays on bravo, and the next
 	// arrow moves relative to where bravo sits now.
-	u.names = []string{"bravo", "charlie", "alpha"}
+	u.paths = []string{"bravo", "charlie", "alpha"}
 	u.move(1)
 	if u.sel != "charlie" {
 		t.Errorf("after the rows reordered, sel = %q, want charlie", u.sel)
 	}
 
-	u.names = []string{"alpha"} // bravo removed out from under us
+	u.paths = []string{"alpha"} // bravo removed out from under us
 	u.sel = "bravo"
 	u.move(1)
 	if u.sel != "alpha" {
 		t.Errorf("after the selected worktree vanished, sel = %q, want alpha", u.sel)
 	}
 
-	u.names = nil
+	u.paths = nil
 	u.move(-1) // must not panic on an empty list
 }
 
 // Removing a worktree must not dump you back at nothing selected: `r` twice in
 // a row should remove two worktrees, not one.
 func TestSelectionSurvivesRemove(t *testing.T) {
-	u := ui{names: []string{"alpha", "bravo", "charlie"}, sel: "bravo"}
+	u := ui{paths: []string{"alpha", "bravo", "charlie"}, sel: "bravo"}
 	u.dropSelected()
 	if u.sel != "charlie" { // the row below
 		t.Errorf("after removing a middle row, sel = %q, want charlie", u.sel)
 	}
 
-	u.names = []string{"alpha", "charlie"}
+	u.paths = []string{"alpha", "charlie"}
 	u.dropSelected()
 	if u.sel != "alpha" { // last row: fall back to the one above
 		t.Errorf("after removing the last row, sel = %q, want alpha", u.sel)
 	}
 
-	u.names = []string{"alpha"}
+	u.paths = []string{"alpha"}
 	u.dropSelected() // the only row: nothing left to select, frame clears it
 	if u.sel != "alpha" {
 		t.Errorf("after removing the only row, sel = %q, want alpha", u.sel)
@@ -368,7 +369,7 @@ func TestSelectionSurvivesRemove(t *testing.T) {
 }
 
 // A click is turned into a worktree by counting screen lines, so the frame's
-// row i must really be names[i] — off by the one header line, and clicking a
+// row i must really be paths[i] — off by the one header line, and clicking a
 // row would open (or `r` would remove) its neighbour.
 func TestFrameRowsMatchNames(t *testing.T) {
 	initRepo(t)
@@ -388,9 +389,9 @@ func TestFrameRowsMatchNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i, name := range u.names {
-		if !strings.Contains(lines[i+1], name) {
-			t.Errorf("names[%d] = %q, but line %d is %q", i, name, i+1, lines[i+1])
+	for i, path := range u.paths {
+		if !strings.Contains(lines[i+1], filepath.Base(path)) {
+			t.Errorf("paths[%d] = %q, but line %d is %q", i, path, i+1, lines[i+1])
 		}
 	}
 	if !strings.HasPrefix(lines[1], "\x1b[7m") {
@@ -465,12 +466,12 @@ func TestListFitsTerminalWidth(t *testing.T) {
 
 	for _, width := range []int{20, 50, 60, 80, 100, 200} {
 		var buf bytes.Buffer
-		if _, err := renderList(&buf, true, width); err != nil {
+		if _, err := renderList(&buf, true, width, nil); err != nil {
 			t.Fatal(err)
 		}
 		// Every column bottoms out at minCol, so a terminal narrower than that
 		// floor gets the floor rather than an ever-thinner table.
-		floor := 4*minCol + len("AGE") + len("CLAUDE") + 2*(len(columns)-1)
+		floor := 4*minCol + len("AGE") + len("CLAUDE") + 2*(len(listColumns(false))-1)
 		for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
 			if got := len([]rune(line)); got > max(width, floor) {
 				t.Errorf("width=%d: line is %d columns wide: %q", width, got, line)
@@ -536,6 +537,100 @@ func TestSummarizeTranscript(t *testing.T) {
 				t.Errorf("summarizeTranscript() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// -g spans the configured projects: every project's worktrees show up, tagged
+// with the project they came from, and the identities handed back to the tui
+// point at the right repo — which a name alone couldn't, since two projects can
+// each have a worktree called "shared".
+func TestGlobalListSpansProjects(t *testing.T) {
+	var roots, worktrees []string
+	for range 2 {
+		roots = append(roots, initRepo(t))
+		worktrees = append(worktrees, capture(t, &NewWorktreeBranchCmd{Name: "shared", Path: true}))
+	}
+
+	var buf bytes.Buffer
+	got, err := renderList(&buf, false, 0, roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(got)
+	if want := slices.Sorted(slices.Values(worktrees)); !slices.Equal(got, want) {
+		t.Errorf("renderList paths = %v, want %v", got, want)
+	}
+	out := buf.String()
+	if !strings.HasPrefix(out, "PROJECT") {
+		t.Errorf("-g output has no PROJECT column:\n%s", out)
+	}
+	for _, root := range roots {
+		if !strings.Contains(out, filepath.Base(root)) {
+			t.Errorf("project %q is missing from:\n%s", filepath.Base(root), out)
+		}
+	}
+
+	// The tui reads that same list, and what it selects has to be one of those
+	// worktrees — which is what its actions then resolve a project out of.
+	u := ui{projects: roots}
+	if _, err := u.frame(); err != nil {
+		t.Fatal(err)
+	}
+	u.move(1)
+	if !slices.Contains(worktrees, u.sel) {
+		t.Errorf("tui selected %q, want one of %v", u.sel, worktrees)
+	}
+}
+
+// Under -g the tui acts on rows belonging to projects it isn't standing in, so
+// a removal has to name that project's repo throughout: miss one git command
+// and it removes the worktree but strands the branch in the other repo.
+func TestRemoveFromAnotherProject(t *testing.T) {
+	other := initRepo(t)
+	path := capture(t, &NewWorktreeBranchCmd{Name: "elsewhere", Path: true})
+	initRepo(t) // now standing in an unrelated repo
+
+	if msg, ok := removeWorktree(path); !ok {
+		t.Fatalf("removing another project's worktree: %s", msg)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("worktree %s still exists (%v)", path, err)
+	}
+	if gitutil.BranchExists(other, "worktree-elsewhere") {
+		t.Error("branch left behind in the other project")
+	}
+}
+
+// Where -g gets its projects: XDG's config location, and a leading ~ expanded
+// the way the shell would. With no config file there is nothing to show, so it
+// has to say where to write one rather than print an empty table.
+func TestProjectRootsFromConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	if roots, err := projectRoots(false); err != nil || roots != nil {
+		t.Errorf("projectRoots(false) = (%v, %v), want (nil, nil): no -g, no config", roots, err)
+	}
+	if _, err := projectRoots(true); err == nil || !strings.Contains(err.Error(), configPath()) {
+		t.Errorf("projectRoots with no config file: err = %v, want one naming %s", err, configPath())
+	}
+
+	dir := filepath.Join(home, ".config", "ccwt")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := "[[projects]]\npath = \"~/src/one\"\n\n[[projects]]\npath = \"/srv/two\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := projectRoots(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{filepath.Join(home, "src", "one"), "/srv/two"}; !slices.Equal(got, want) {
+		t.Errorf("projectRoots = %v, want %v", got, want)
 	}
 }
 

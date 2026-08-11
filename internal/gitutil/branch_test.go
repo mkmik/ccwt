@@ -22,7 +22,7 @@ func TestAddWorktreeOnBranch(t *testing.T) {
 	}
 
 	wt := filepath.Join(repo, ".claude", "worktrees", "generated-name")
-	if err := AddWorktreeOnBranch(wt, "foobar"); err != nil {
+	if err := AddWorktreeOnBranch("", wt, "foobar"); err != nil {
 		t.Fatalf("AddWorktreeOnBranch: %v", err)
 	}
 	out, err := exec.Command("git", "-C", wt, "rev-parse", "--abbrev-ref", "HEAD").Output()
