@@ -807,6 +807,130 @@ func TestFrameScrollsToTheSelection(t *testing.T) {
 	}
 }
 
+// `/` types a pattern into the bar and moves the selection to the matching row
+// as it's typed; n and N walk the rest of the matches, wrapping around the ends.
+//
+// The rows are ordered newest-commit-first, but three commits a few
+// milliseconds apart share a timestamp and the sort is stable, so the order
+// here is whatever `git worktree list` gives — hence the assertions below are
+// written against `order` rather than against the names.
+func TestSearch(t *testing.T) {
+	initRepo(t)
+	for _, name := range []string{"alpha", "bravo", "charlie"} {
+		path := capture(t, &NewWorktreeBranchCmd{Name: name, Path: true})
+		git(t, "-C", path, "commit", "--allow-empty", "-m", "subject-"+name)
+	}
+
+	var u ui
+	if _, err := u.frame(); err != nil { // the frame is what fills in the rows
+		t.Fatal(err)
+	}
+	var order []string
+	for _, r := range u.rows {
+		order = append(order, filepath.Base(r.path))
+	}
+	if len(order) != 3 || order[1] != "bravo" {
+		t.Fatalf("rows are %v, want the three worktrees with bravo in the middle", order)
+	}
+	sel := func() string { return filepath.Base(u.sel.path) }
+	// type_ feeds the prompt a string the way the tty does — a byte at a time,
+	// control bytes (enter, backspace, escape) among them.
+	type_ := func(s string) {
+		for _, k := range splitKeys(s) {
+			u.edit(k)
+		}
+	}
+
+	// Incremental: the match follows the pattern keystroke by keystroke, with
+	// no enter involved — including backwards, when a character is rubbed out.
+	// "v" is on bravo's line and on no other (unlike "b", which "subject-" puts
+	// on every one of them).
+	u.prompt(1)
+	type_("V")
+	if sel() != "bravo" { // case-insensitive
+		t.Errorf("/V selected %q, want bravo out of %v", sel(), order)
+	}
+	type_("x")
+	if u.sel != (listRow{}) {
+		t.Errorf("/Vx selected %q, want the selection back where the prompt opened", sel())
+	}
+	type_("\x7fo\r")
+	if u.typing || u.query != "Vo" || sel() != "bravo" || u.msg != "" {
+		t.Fatalf("after typing: query %q typing %v sel %q msg %q, want %q false bravo none", u.query, u.typing, sel(), u.msg, "Vo")
+	}
+
+	// Every match on screen is picked out, the selected row's out of its bar.
+	lines, err := u.frame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := lines[slices.Index(order, "bravo")+1]
+	if !strings.Contains(row, "\x1b[0mvo\x1b[7m") {
+		t.Errorf("selected row is %q, want the match punched out of the reverse video", row)
+	}
+
+	// n wraps around the list to come back to the only match.
+	u.seek(1)
+	if sel() != "bravo" || u.msg != "" {
+		t.Errorf("n from the only match selected %q (%q), want bravo", sel(), u.msg)
+	}
+
+	// A regexp, not a literal: bravo is the only row it matches.
+	u.prompt(1)
+	type_("br[aeiou]v\r")
+	if sel() != "bravo" || u.msg != "" {
+		t.Errorf("/br[aeiou]v selected %q (%q), want bravo out of %v", sel(), u.msg, order)
+	}
+	u.prompt(1)
+	type_("br[\r") // …and one that doesn't compile says so
+	if !strings.HasPrefix(u.msg, "bad pattern") {
+		t.Errorf("an unclosed [ left msg %q, want a bad pattern message", u.msg)
+	}
+
+	// ? searches the other way, and n repeats it in that direction: from the
+	// middle row, "a" (on every row) runs up the list and wraps.
+	u.sel = u.rows[1]
+	u.prompt(-1)
+	type_("a\r")
+	if sel() != order[0] {
+		t.Errorf("?a from the middle row selected %q, want %q", sel(), order[0])
+	}
+	u.seek(u.dir)
+	if sel() != order[2] {
+		t.Errorf("n after ?a selected %q, want %q — backwards, wrapping around the top", sel(), order[2])
+	}
+	u.seek(-u.dir)
+	if sel() != order[0] {
+		t.Errorf("N after ?a selected %q, want %q — the other way", sel(), order[0])
+	}
+
+	// A pattern nothing matches leaves the selection where it was and says so.
+	was := u.sel
+	u.prompt(1)
+	type_("zzz\r")
+	if u.sel != was || u.msg == "" {
+		t.Errorf("/zzz selected %q with msg %q, want %q left alone and a message", sel(), u.msg, filepath.Base(was.path))
+	}
+
+	// The bar is the prompt while one is up, ? and all.
+	u.prompt(-1)
+	type_("al")
+	if lines, err = u.frame(); err != nil {
+		t.Fatal(err)
+	}
+	if bar := lines[len(lines)-1]; !strings.Contains(bar, "?al") {
+		t.Errorf("status bar is %q, want the ?al prompt on it", bar)
+	}
+
+	// Escape abandons the whole search: the pattern it displaced comes back,
+	// direction and all, and so does the selection.
+	type_("\x1b")
+	if u.typing || u.query != "zzz" || u.dir != 1 || u.sel != was {
+		t.Errorf("escape left typing %v query %q dir %d sel %q, want the previous search and row back",
+			u.typing, u.query, u.dir, sel())
+	}
+}
+
 // The background fetch has to actually move origin/main, and it has to stop
 // when the tui does rather than outliving it. Twice over: nil is the repo the
 // tui runs in, and under -g it's the configured projects — from a directory
