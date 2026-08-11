@@ -79,6 +79,23 @@ func TestListMarksCurrent(t *testing.T) {
 	}
 }
 
+// TestListNoHeaders: --no-headers drops the header row and nothing else.
+func TestListNoHeaders(t *testing.T) {
+	initRepo(t)
+	name := capture(t, &NewWorktreeBranchCmd{})
+
+	if out := capture(t, &ListCmd{}); !strings.HasPrefix(out, "NAME") {
+		t.Errorf("default output has no header row:\n%s", out)
+	}
+	out := capture(t, &ListCmd{NoHeaders: true})
+	if strings.Contains(out, "NAME") {
+		t.Errorf("--no-headers printed a header row:\n%s", out)
+	}
+	if !strings.HasPrefix(out, name+" ") {
+		t.Errorf("--no-headers dropped the worktree row:\n%s", out)
+	}
+}
+
 // TestRemoveCurrent covers `ccwt remove .` from inside the worktree it names:
 // the worktree goes away and the command prints (and asks the wrapper to cd to)
 // the repo root, instead of refusing.
@@ -1105,7 +1122,7 @@ func TestListFitsTerminalWidth(t *testing.T) {
 
 	for _, width := range []int{20, 50, 60, 80, 100, 200} {
 		var buf bytes.Buffer
-		if _, err := renderList(&buf, true, width, nil, nil); err != nil {
+		if _, err := renderList(&buf, true, width, nil, nil, true); err != nil {
 			t.Fatal(err)
 		}
 		// Every column bottoms out at minCol, so a terminal narrower than that
@@ -1225,7 +1242,7 @@ func TestGlobalListSpansProjects(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	got, err := renderList(&buf, false, 0, roots, nil)
+	got, err := renderList(&buf, false, 0, roots, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1247,7 +1264,7 @@ func TestGlobalListSpansProjects(t *testing.T) {
 	// Folded shut, a project keeps its header — turned around, and still saying
 	// how much is underneath — and contributes no rows at all.
 	buf.Reset()
-	got, err = renderList(&buf, false, 0, roots, map[string]bool{gitRoots[0]: true})
+	got, err = renderList(&buf, false, 0, roots, map[string]bool{gitRoots[0]: true}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1302,7 +1319,7 @@ func TestGlobalListOutsideAnyRepo(t *testing.T) {
 	// tty: the markers are the only thing that ever looked at the current
 	// directory, so the complaint only shows up with them turned on.
 	var buf bytes.Buffer
-	_, err = renderList(&buf, true, 0, []string{root}, nil)
+	_, err = renderList(&buf, true, 0, []string{root}, nil, true)
 	w.Close()
 	if err != nil {
 		t.Fatal(err)

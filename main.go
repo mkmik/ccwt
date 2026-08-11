@@ -465,7 +465,8 @@ func gcCandidates(root string, active map[string]bool) ([]string, error) {
 }
 
 type ListCmd struct {
-	Global bool `short:"g" help:"List the worktrees of every project listed in $XDG_CONFIG_HOME/ccwt/config.toml, not just this repo's."`
+	Global    bool `short:"g" help:"List the worktrees of every project listed in $XDG_CONFIG_HOME/ccwt/config.toml, not just this repo's."`
+	NoHeaders bool `help:"Leave out the header row, for feeding the table to cut, awk, or a shell loop."`
 }
 
 // marker returns the flag glyph, or the blank gutter of the same width so
@@ -493,7 +494,7 @@ func (c *ListCmd) Run() error {
 	if tty {
 		width, _, _ = term.GetSize(int(os.Stdout.Fd()))
 	}
-	_, err = renderList(os.Stdout, tty, width, projects, nil)
+	_, err = renderList(os.Stdout, tty, width, projects, nil, !c.NoHeaders)
 	return err
 }
 
@@ -518,8 +519,9 @@ type listRow struct{ project, path string }
 // repos to cover: nil means the repo we're standing in, anything else is the
 // configured project list and gets a foldable section per project. collapsed
 // holds the roots whose section is folded shut — only the tui has any, since
-// there is nothing to unfold them with on the command line.
-func renderList(out io.Writer, tty bool, width int, projects []string, collapsed map[string]bool) ([]listRow, error) {
+// there is nothing to unfold them with on the command line. headers draws the
+// header row; `list --no-headers` is the only caller that doesn't want it.
+func renderList(out io.Writer, tty bool, width int, projects []string, collapsed map[string]bool, headers bool) ([]listRow, error) {
 	global := projects != nil
 	if !global {
 		// "" is the current directory, which is how git reads "the repo we're in".
@@ -672,7 +674,10 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	if tty {
 		gutter = marker(false, "")
 	}
-	table := [][]string{{gutter + "NAME", gutter + "BRANCH", "AGE", "CLAUDE", "TOPIC"}}
+	var table [][]string
+	if headers {
+		table = append(table, []string{gutter + "NAME", gutter + "BRANCH", "AGE", "CLAUDE", "TOPIC"})
+	}
 	var lines []listRow
 	emit := func(r row) {
 		lines = append(lines, listRow{r.project, r.path})
