@@ -73,15 +73,16 @@ ccwt new --path                   # /path/to/repo/.claude/worktrees/dreamy-forag
 Claude Code session is currently running in each, and what each one is about:
 
 ```
-  NAME                      BRANCH                    AGE  CLAUDE  TOPIC
-* dreamy-foraging-hickey  * worktree-dreamy-…-hickey  2h   yes     ✳ Goal was a widget on the dashboard; it's built and…
-  calm-baking-otter       ✓ worktree-calm-bak…-otter  1d   no      ⎇ Fix the flux capacitor
+    NAME                    BRANCH                    AGE  CLAUDE  TOPIC
+* * dreamy-foraging-hickey  worktree-dreamy-…-hickey  2h   yes     ✳ Goal was a widget on the dashboard; it's built and…
+  ✓ calm-baking-otter       worktree-calm-bak…-otter  1d   no      ⎇ Fix the flux capacitor
 ```
 
-A `*` before the name marks the worktree you're currently in. A `✓` before the branch means
-it's already merged into `main` (or `master`), so the worktree is safe to `ccwt remove`; a
-`*` there instead means the worktree has uncommitted changes, which isn't safe to remove
-whatever git makes of the branch. A `✳` beats both: [Herdr](https://herdr.dev)
+Every row leads with two glyphs. The first is a `*` on the worktree you're currently in.
+The second says whether the worktree can go: a `✓` means its branch is already merged into
+`main` (or `master`), so the worktree is safe to `ccwt remove`; a `*` there instead means
+the worktree has uncommitted changes, which isn't safe to remove whatever git makes of the
+branch. A `✳` beats both: [Herdr](https://herdr.dev)
 says an agent is working in there right now — the case git can't see at all, since a branch
 made a minute ago with nothing committed to it is merged and clean. That comes from Herdr
 rather than from Claude Code, so it holds for whatever agent is running in the worktree.
@@ -101,18 +102,18 @@ tail, since the last word is usually what tells them apart, while a session summ
 sentence and simply stops:
 
 ```
-  NAME                       BRANCH                   AGE  CLAUDE  TOPIC
-* dreamy-foraging-hickey   * worktree-dreamy-…-hickey 2h   yes     ✳ Goal was a widget on…
-  calm-baking-otter        ✓ worktree-calm-b…-otter   1d   no      ⎇ Fix the flux ca… (#41)
+    NAME                     BRANCH                   AGE  CLAUDE  TOPIC
+* * dreamy-foraging-hickey   worktree-dreamy-…-hickey 2h   yes     ✳ Goal was a widget on…
+  ✓ calm-baking-otter        worktree-calm-b…-otter   1d   no      ⎇ Fix the flux ca… (#41)
 ```
 
 `ccwt tui` shows that same table full-screen and keeps it up to date, repainting in place
 so it doesn't flicker, with a status bar along the bottom:
 
 ```
-  NAME                      BRANCH                    AGE  CLAUDE  TOPIC
-* dreamy-foraging-hickey  * worktree-dreamy-…-hickey  2h   yes     ✳ Goal was a widget on the dashboard; it's built and…
-  calm-baking-otter       ✓ worktree-calm-bak…-otter  1d   no      ⎇ Fix the flux capacitor
+    NAME                    BRANCH                    AGE  CLAUDE  TOPIC
+* * dreamy-foraging-hickey  worktree-dreamy-…-hickey  2h   yes     ✳ Goal was a widget on the dashboard; it's built and…
+  ✓ calm-baking-otter       worktree-calm-bak…-otter  1d   no      ⎇ Fix the flux capacitor
 
  ccwt  q:quit  p:pull  /:search  x:new  space:open  r:remove │ main  ↑1 ↓2
 ```
@@ -169,10 +170,10 @@ the repo you're standing in, a section per project, each holding that project's 
 newest-first:
 
 ```
-  NAME                        BRANCH                    AGE  CLAUDE  TOPIC
+    NAME                      BRANCH                    AGE  CLAUDE  TOPIC
 ▾ ccwt (2)
-  dreamy-foraging-hickey    * worktree-dreamy-…-hickey  2h   yes     ✳ Goal was a widget on…
-  calm-baking-otter         ✓ worktree-calm-bak…-otter  1d   no      ⎇ Fix the flux capacitor
+  * dreamy-foraging-hickey    worktree-dreamy-…-hickey  2h   yes     ✳ Goal was a widget on…
+  ✓ calm-baking-otter         worktree-calm-bak…-otter  1d   no      ⎇ Fix the flux capacitor
 ▸ platform (14)
 ```
 
