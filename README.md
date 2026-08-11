@@ -30,6 +30,11 @@ The snippet defines a thin `ccwt` shell function that wraps the binary and perfo
 `cd` for you. Everything still works without it — you just won't get the automatic
 directory change.
 
+Under zsh the same snippet also installs completion: `ccwt <TAB>` lists the commands,
+and `ccwt cd <TAB>` (like `remove` and `lock`) lists the worktrees of the repo you're
+standing in. Source it *after* `compinit`, which is what defines `compdef` — sourced
+before, you keep the `cd` and silently get no completion.
+
 ## Quick start
 
 ```sh
@@ -295,7 +300,7 @@ swallow stderr, or you'll lose the cwd report.
 | `ccwt new-worktree-name` | Print a generated worktree name (`adjective-verb-noun`) without creating anything. |
 | `ccwt repo-root` | Print the root of the current git repository. Add `--root-worktree` to print the *enclosing* repo root when you're inside a `.claude/worktrees/<name>` worktree. |
 | `ccwt ..` | Shorthand for `repo-root --root-worktree`: print (and, with shell integration, `cd` to) the enclosing repository root. |
-| `ccwt init <shell>` | Emit the shell-integration snippet to source from your rc file. |
+| `ccwt init <shell>` | Emit the shell-integration snippet to source from your rc file. For `zsh` the snippet carries completion too: commands, and worktree names for `cd`, `remove` and `lock`. |
 | `ccwt config view` / `ccwt config edit` | Print the config file, or open it in `$EDITOR` (`vi` if unset). Both create an empty one if there isn't any. The file holds the `[[projects]]` `-g` spans and `branch_prefix`, what `ccwt new` puts in front of a worktree's name to make its branch (`worktree-` when unset). |
 | `ccwt --version` | Print version information. |
 

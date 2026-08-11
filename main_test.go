@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alecthomas/kong"
 	"github.com/mkmik/ccwt/internal/gitutil"
 )
 
@@ -1405,6 +1406,33 @@ func TestConfigView(t *testing.T) {
 	}
 	if out := capture(t, &ConfigViewCmd{}); out != strings.TrimRight(cfg, "\n") {
 		t.Errorf("view = %q, want %q", out, cfg)
+	}
+}
+
+// The zsh completion menu is generated from the command table, so it has to
+// survive what the help strings contain: an apostrophe ("the one you're in")
+// must come out as zsh string syntax instead of ending the string and leaving
+// the rest as shell code, and an alias needs a line of its own so `ccwt ls`
+// completes too.
+func TestZshCommandMenu(t *testing.T) {
+	parser, err := kong.New(&cli, kong.Name("ccwt"), kong.Vars{"version": "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	menu := zshCommandMenu(parser.Model.Node)
+	for _, want := range []string{
+		"'cd:cd into an existing worktree",
+		"'ls:List Claude Code worktrees",
+		`'done:Finish with the worktree you'\''re in`,
+	} {
+		if !strings.Contains(menu, want) {
+			t.Errorf("menu is missing %q:\n%s", want, menu)
+		}
+	}
+	for _, line := range strings.Split(strings.TrimSuffix(menu, "\n"), "\n") {
+		if !strings.HasPrefix(line, "        '") || !strings.HasSuffix(line, "'") {
+			t.Errorf("%q is not a quoted _describe entry", line)
+		}
 	}
 }
 

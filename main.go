@@ -1098,14 +1098,92 @@ function ccwt
 end
 `
 
-func (c *InitCmd) Run() error {
+// zshCompletionSnippet rides along with the zsh integration, so the one
+// `source <(ccwt init zsh)` people already have installs completion too. %s is
+// the command menu, generated from kong's own model so it can't drift from the
+// commands. ponytail: only the commands are completed, not their flags — add
+// flags when someone misses them.
+const zshCompletionSnippet = `
+# Completion for the function above. compdef only exists once compinit has run,
+# so source this after it (nothing breaks if you don't, you just get no menu).
+_ccwt() {
+    local -a cmds=(
+%s    )
+    local context state line
+    typeset -A opt_args
+    _arguments -C '1:command:->cmd' '*::arg:->arg'
+    case $state in
+        cmd) _describe -t commands 'ccwt command' cmds ;;
+        arg)
+            # ponytail: the commands taking a worktree name, spelled out, with
+            # the literals each one also accepts. A fourth one goes here.
+            case $words[1] in
+                cd) _ccwt_worktrees .. - ;;
+                remove|lock) _ccwt_worktrees . ;;
+            esac
+            ;;
+    esac
+}
+
+# The worktrees of the repo the shell is standing in, preceded by whatever
+# literals the caller passed. Nothing to offer outside a repo, and the error
+# git prints there is not the completer's to show.
+_ccwt_worktrees() {
+    local root
+    root=$(command ccwt repo-root --root-worktree 2>/dev/null) || return
+    local -a names
+    names=("$@" $root/.claude/worktrees/*(N/:t))
+    _describe -t worktrees worktree names
+}
+
+if (( $+functions[compdef] )); then
+    compdef _ccwt ccwt
+fi
+`
+
+func (c *InitCmd) Run(kctx *kong.Context) error {
 	switch c.Shell {
 	case "bash", "zsh":
 		fmt.Print(posixInitSnippet)
+		if c.Shell == "zsh" {
+			fmt.Printf(zshCompletionSnippet, zshCommandMenu(kctx.Model.Node))
+		}
 	case "fish":
 		fmt.Print(fishInitSnippet)
 	}
 	return nil
+}
+
+// zshCommandMenu renders the children of n as _describe entries, one
+// 'name:description' per line, aliases included so `ccwt ls` completes too.
+func zshCommandMenu(n *kong.Node) string {
+	var b strings.Builder
+	for _, child := range n.Children {
+		if child.Hidden {
+			continue
+		}
+		for _, name := range slices.Concat([]string{child.Name}, child.Aliases) {
+			fmt.Fprintf(&b, "        %s\n", zshQuote(name+":"+zshDescription(child.Help)))
+		}
+	}
+	return b.String()
+}
+
+// zshDescription cuts a command's help down to what fits on a menu line: the
+// first sentence, capped. The help texts here are paragraphs — the rest of one
+// belongs in `ccwt --help`, not next to a completion candidate.
+func zshDescription(help string) string {
+	if i := strings.Index(help, ". "); i >= 0 {
+		help = help[:i]
+	}
+	return truncate(strings.TrimSuffix(help, "."), 60)
+}
+
+// zshQuote wraps s in the single quotes zsh takes literally. The help texts are
+// full of apostrophes ("the one you're in"), and each one would otherwise end
+// the string and leave the rest as shell syntax.
+func zshQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func humanAge(d time.Duration) string {
