@@ -1159,7 +1159,7 @@ func TestListFitsTerminalWidth(t *testing.T) {
 		}
 		// Every column bottoms out at minCol, so a terminal narrower than that
 		// floor gets the floor rather than an ever-thinner table.
-		floor := 3*minCol + len("AGE") + len("CLAUDE") + 2*(len(listColumns())-1)
+		floor := 3*minCol + len("AGE") + len("CLAUDE") + 2*(len(allColumns())-1)
 		for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
 			if got := len([]rune(line)); got > max(width, floor) {
 				t.Errorf("width=%d: line is %d columns wide: %q", width, got, line)
@@ -1171,7 +1171,7 @@ func TestListFitsTerminalWidth(t *testing.T) {
 // BRANCH is capped even on a terminal with room to spare, so the space it
 // doesn't need goes to TOPIC — which keeps all of it.
 func TestFitTableCapsBranch(t *testing.T) {
-	cols := listColumns()
+	cols := allColumns()
 	long := topic("", "a commit subject that runs on well past any sensible column width (#1234)")
 	row := []string{"a-name", "worktree-exceedingly-verbose-branch-name", "2h", "yes", long}
 	fitTable([][]string{row}, 500, cols)
@@ -1180,6 +1180,44 @@ func TestFitTableCapsBranch(t *testing.T) {
 	}
 	if row[4] != long {
 		t.Errorf("TOPIC = %q, want it uncut: %q", row[4], long)
+	}
+}
+
+// Which columns the table draws is the config's call, in the order it names
+// them. A name that isn't a column is a typo, and a typo that silently drops a
+// column is one you'd never find, so it's an error instead.
+func TestConfigColumns(t *testing.T) {
+	initRepo(t)
+	capture(t, &NewWorktreeBranchCmd{Name: "one", Path: true})
+	writeConfig := func(cfg string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(configPath()), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(configPath(), []byte(cfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	writeConfig("columns = [\"topic\", \"name\"]\n")
+	var buf bytes.Buffer
+	if _, err := renderList(&buf, false, 0, nil, nil, true); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	head := strings.Split(out, "\n")[0]
+	if i, j := strings.Index(head, "TOPIC"), strings.Index(head, "NAME"); i != 0 || j < i {
+		t.Errorf("header = %q, want TOPIC then NAME", head)
+	}
+	for _, gone := range []string{"BRANCH", "CLAUDE", "worktree-one"} {
+		if strings.Contains(out, gone) {
+			t.Errorf("%q is in a table that asked for topic and name only:\n%s", gone, out)
+		}
+	}
+
+	writeConfig("columns = [\"nmae\"]\n")
+	if _, err := renderList(&buf, false, 0, nil, nil, true); err == nil || !strings.Contains(err.Error(), "nmae") {
+		t.Errorf("unknown column: err = %v, want one naming it", err)
 	}
 }
 

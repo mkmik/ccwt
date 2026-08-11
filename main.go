@@ -527,6 +527,10 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 		// "" is the current directory, which is how git reads "the repo we're in".
 		projects = []string{""}
 	}
+	cols, err := listColumns()
+	if err != nil {
+		return nil, err
+	}
 
 	type row struct {
 		project, name, branch, age, claude, topic string
@@ -676,14 +680,30 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	if tty {
 		gutter = marker(false, "")
 	}
+	// Everything above builds the whole row; pick is where the hidden columns
+	// go, so a column's absence can't change anything but the printing.
+	pick := func(cells ...string) []string {
+		out := make([]string, len(cols))
+		for i, c := range cols {
+			out[i] = cells[c.i]
+		}
+		return out
+	}
 	var table [][]string
 	if headers {
-		table = append(table, []string{gutter + gutter + "NAME", "BRANCH", "AGE", "CLAUDE", "TOPIC"})
+		head := make([]string, len(cols))
+		for i, c := range cols {
+			head[i] = c.name
+			if c.i == 0 {
+				head[i] = gutter + gutter + c.name // clear of the two glyphs a name leads with
+			}
+		}
+		table = append(table, head)
 	}
 	var lines []listRow
 	emit := func(r row) {
 		lines = append(lines, listRow{r.project, r.path})
-		table = append(table, []string{r.name, r.branch, r.age, r.claude, r.topic})
+		table = append(table, pick(r.name, r.branch, r.age, r.claude, r.topic))
 	}
 	if !global {
 		for _, r := range rows {
@@ -710,7 +730,12 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 				}
 			}
 			lines = append(lines, listRow{project: root})
-			table = append(table, []string{section(root, len(mine), collapsed[root]), "", "", "", ""})
+			// In the first column drawn, whichever that is: the header names the
+			// project and folds the section, and both have to survive whatever
+			// the config left out.
+			head := make([]string, len(cols))
+			head[0] = section(root, len(mine), collapsed[root])
+			table = append(table, head)
 			if collapsed[root] {
 				continue
 			}
@@ -719,7 +744,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 			}
 		}
 	}
-	fitTable(table, width, listColumns())
+	fitTable(table, width, cols)
 
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	for _, r := range table {
@@ -788,12 +813,14 @@ func gitError(dir string, err error) error {
 }
 
 type column struct {
+	name string
+	i    int // where its cell sits in the full row
 	cut  func(string, int) string
 	max  int // always applies; 0 = no cap
 	pipe int // extra cap when there's no terminal width to fit to; 0 = no cap
 }
 
-// listColumns says how each column of the table may be shortened when it
+// allColumns says how each column of the table may be shortened when it
 // doesn't all fit, and how wide it is allowed to get when it does. AGE and
 // CLAUDE are never longer than their own headers, so there is nothing to cut
 // there.
@@ -806,14 +833,46 @@ type column struct {
 // own name with a "worktree-" bolted on the front, so the widest it ever needs
 // to be is much narrower than the widest it could be, and everything it gives
 // up goes to TOPIC.
-func listColumns() []column {
-	return []column{
-		{truncate, 0, 0},
-		{elide, 26, 0},
-		{nil, 0, 0},
-		{nil, 0, 0},
-		{topicCut, 0, 60},
+func allColumns() []column {
+	cols := []column{
+		{name: "NAME", cut: truncate},
+		{name: "BRANCH", cut: elide, max: 26},
+		{name: "AGE"},
+		{name: "CLAUDE"},
+		{name: "TOPIC", cut: topicCut, pipe: 60},
 	}
+	for i := range cols {
+		cols[i].i = i
+	}
+	return cols
+}
+
+// listColumns is the columns to draw: the config's, in the order it names
+// them, or all of them when it says nothing. A name that isn't a column is an
+// error rather than a silently missing column — the config is hand-written,
+// and a typo there is otherwise invisible.
+func listColumns() ([]column, error) {
+	cfg, err := loadConfig()
+	if err != nil {
+		return nil, err
+	}
+	all := allColumns()
+	if len(cfg.Columns) == 0 {
+		return all, nil
+	}
+	cols := make([]column, 0, len(cfg.Columns))
+	for _, name := range cfg.Columns {
+		i := slices.IndexFunc(all, func(c column) bool { return strings.EqualFold(c.name, name) })
+		if i < 0 {
+			names := make([]string, len(all))
+			for j, c := range all {
+				names[j] = strings.ToLower(c.name)
+			}
+			return nil, fmt.Errorf("%s: unknown column %q in `columns` (have %s)", configPath(), name, strings.Join(names, ", "))
+		}
+		cols = append(cols, all[i])
+	}
+	return cols, nil
 }
 
 // minCol is as narrow as a column ever gets: three characters and an ellipsis,
