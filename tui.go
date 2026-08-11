@@ -125,10 +125,11 @@ func (c *TuiCmd) Run() error {
 		}
 		return act("opening "+filepath.Base(path)+"…", func() string { return herdrOpen(path, "") })
 	}
-	// activate is what a click does to whatever row it landed on: fold a project
-	// section shut, or open a worktree as a workspace. The keyboard keeps the two
-	// apart — space only opens, ↵ only folds — so that a fold can't misfire into
-	// opening a worktree; a click can't, since it names the row it means.
+	// activate is what a double-click does to whatever row it landed on: fold a
+	// project section shut, or open a worktree as a workspace. The keyboard keeps
+	// the two apart — space only opens, ↵ only folds — so that a fold can't
+	// misfire into opening a worktree; a click can't, since it names the row it
+	// means.
 	activate := func() error {
 		if u.sel.path == "" {
 			u.toggle()
@@ -198,10 +199,9 @@ func (c *TuiCmd) Run() error {
 					}
 				}
 			default:
-				// A click selects the row it landed on and acts on it, which is
-				// the one thing you'd want a click in this list to do.
-				if row := u.at(mouseRow(k)); row != (listRow{}) {
-					u.sel = row
+				// A click selects the row it landed on; it takes a second one to
+				// act on it, as it does in any other list.
+				if row := u.at(mouseRow(k)); row != (listRow{}) && u.click(row) {
 					if err := activate(); err != nil {
 						return err
 					}
@@ -239,6 +239,8 @@ type ui struct {
 	stamp   string
 	restart string
 
+	clicked time.Time // when the last click landed on sel — see click
+
 	// The last list read, kept so that moving the selection — which changes
 	// nothing but which row is reverse-videoed — doesn't re-run the git and
 	// lsof scan behind it (half a second on a big repo, once per keypress).
@@ -263,6 +265,27 @@ func (u *ui) at(n int) listRow {
 		return listRow{}
 	}
 	return u.rows[i]
+}
+
+// doubleClick is how long the second click of a double has to arrive within.
+// ponytail: a constant, since no terminal tells us the desktop's setting.
+const doubleClick = 400 * time.Millisecond
+
+// click selects the row and reports whether it was the second click on it in
+// quick succession — the one that acts on it. A single click only moves the
+// selection: opening a workspace is not something a stray click on the way past
+// should do, and the row you clicked is the one the keys then apply to.
+//
+// The timing is ours to keep because the terminal doesn't do it: SGR reporting
+// has one press event and no notion of a double.
+func (u *ui) click(row listRow) bool {
+	double := row == u.sel && time.Since(u.clicked) < doubleClick
+	u.sel, u.clicked = row, time.Now()
+	if double {
+		// A third click starts a fresh pair rather than opening the row again.
+		u.clicked = time.Time{}
+	}
+	return double
 }
 
 // move walks the selection by d rows, starting from the top when nothing is

@@ -846,6 +846,39 @@ func TestMouseRow(t *testing.T) {
 	}
 }
 
+// One click selects, two open: a click on the way past a row shouldn't spawn a
+// workspace, and the terminal won't tell us which is which, so the timing is
+// ours to get right.
+func TestClickDoubles(t *testing.T) {
+	alpha, bravo := listRow{path: "alpha"}, listRow{path: "bravo"}
+
+	var u ui
+	if u.click(alpha) {
+		t.Error("the first click on a row acted on it, want it to only select")
+	}
+	if u.sel != alpha {
+		t.Errorf("after one click sel = %q, want alpha", u.sel.path)
+	}
+	if !u.click(alpha) {
+		t.Error("the second click on the same row didn't act on it")
+	}
+	if u.click(alpha) {
+		t.Error("a third click acted again, want it to start a fresh pair")
+	}
+
+	// A second click somewhere else is a first click there.
+	u.click(bravo)
+	if u.click(alpha) {
+		t.Error("clicking back to a row acted on it, want it to only select")
+	}
+
+	// Two clicks far enough apart are two single clicks.
+	u.clicked = time.Now().Add(-2 * doubleClick)
+	if u.click(alpha) {
+		t.Error("a slow second click acted on the row, want it to only select")
+	}
+}
+
 // One read of stdin is not one keystroke: hold an arrow down and it repeats
 // faster than a frame draws, so the tty hands over several sequences at once.
 // Every one of them has to come back out, or the list doesn't move while a key
