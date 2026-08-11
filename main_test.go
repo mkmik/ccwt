@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -227,6 +228,54 @@ func TestRemoveMergedUpstream(t *testing.T) {
 	}
 	if gitutil.BranchExists("", "worktree-upstreamed") {
 		t.Error("worktree removed but the branch was stranded")
+	}
+}
+
+// TestRemoveUnderHerdr: under herdr the worktree is usually an open workspace
+// with an agent in it, so `remove` closes it before the directory goes away —
+// but only once the checks pass. Uncommitted changes are one of those checks:
+// the removal is forced, so they'd be gone for good, and the workspace must
+// still be there afterwards.
+func TestRemoveUnderHerdr(t *testing.T) {
+	initRepo(t)
+	path := capture(t, &NewWorktreeBranchCmd{Name: "open", Path: true})
+	if err := os.WriteFile(filepath.Join(path, "scratch"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// A herdr that records what it was asked to do and reports the worktree as
+	// open in workspace w9.
+	dir := t.TempDir()
+	log := filepath.Join(dir, "calls")
+	herdr := filepath.Join(dir, "herdr")
+	script := fmt.Sprintf("#!/bin/sh\necho \"$@\" >> %q\n"+
+		"[ \"$1 $2\" = \"worktree list\" ] && printf '{\"result\":{\"worktrees\":"+
+		"[{\"path\":\"%s\",\"open_workspace_id\":\"w9\"}]}}'\nexit 0\n", log, path)
+	if err := os.WriteFile(herdr, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_BIN_PATH", herdr)
+	t.Setenv("HERDR_WORKSPACE_ID", "w1")
+
+	if err := (&RemoveCmd{Name: "open"}).Run(); err == nil {
+		t.Error("removing a dirty worktree succeeded, want refusal")
+	}
+	if _, err := os.Stat(log); !os.IsNotExist(err) {
+		t.Error("refused remove closed the workspace anyway")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("refused remove deleted the worktree anyway: %v", err)
+	}
+
+	if err := (&RemoveCmd{Name: "open", Force: true}).Run(); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(log); !strings.Contains(string(got), "workspace close w9") {
+		t.Errorf("herdr calls = %q, want the workspace closed", got)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("worktree %s still exists (%v)", path, err)
 	}
 }
 

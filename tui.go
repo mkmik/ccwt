@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -546,16 +547,56 @@ func herdrOpen(path string) string {
 	if !ok {
 		return "open failed: " + path + " is not a Claude Code worktree"
 	}
-	herdr := os.Getenv("HERDR_BIN_PATH")
-	if herdr == "" {
-		herdr = "herdr"
-	}
-	out, err := exec.Command(herdr, "worktree", "open",
+	out, err := exec.Command(herdrBin(), "worktree", "open",
 		"--cwd", root, "--path", path, "--focus").CombinedOutput()
 	if err != nil {
 		return "open failed: " + lastLine(out, err)
 	}
 	return "opened " + filepath.Base(path)
+}
+
+// herdrBin is the herdr to talk to: plugin actions are handed one in
+// HERDR_BIN_PATH, everyone else has it on PATH.
+func herdrBin() string {
+	if bin := os.Getenv("HERDR_BIN_PATH"); bin != "" {
+		return bin
+	}
+	return "herdr"
+}
+
+// herdrClose closes the workspace herdr has open on the worktree at path —
+// which is what ends the agent running in it — so that removing the directory
+// doesn't leave a workspace sitting in a hole. A worktree nobody has open is a
+// no-op.
+//
+// Our own workspace is left alone: closing it would kill this process before it
+// got as far as removing the worktree. `remove .` from inside its own workspace
+// keeps doing what it did before — cd the shell out to the repo root.
+func herdrClose(root, path string) error {
+	out, err := exec.Command(herdrBin(), "worktree", "list", "--cwd", root).Output()
+	if err != nil {
+		return fmt.Errorf("herdr worktree list: %w", err)
+	}
+	var resp struct {
+		Result struct {
+			Worktrees []struct {
+				Path      string `json:"path"`
+				Workspace string `json:"open_workspace_id"`
+			} `json:"worktrees"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return fmt.Errorf("herdr worktree list: %w", err)
+	}
+	for _, wt := range resp.Result.Worktrees {
+		if wt.Path != path || wt.Workspace == "" || wt.Workspace == os.Getenv("HERDR_WORKSPACE_ID") {
+			continue
+		}
+		if out, err := exec.Command(herdrBin(), "workspace", "close", wt.Workspace).CombinedOutput(); err != nil {
+			return fmt.Errorf("herdr workspace close %s: %s", wt.Workspace, lastLine(out, err))
+		}
+	}
+	return nil
 }
 
 // removeWorktree is `ccwt remove <name>` against the worktree's own project,

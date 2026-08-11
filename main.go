@@ -238,7 +238,7 @@ func emitOSC7(path string) {
 
 type RemoveCmd struct {
 	Name       string `arg:"" help:"Worktree name to remove. Use \".\" for the worktree you're currently in."`
-	Force      bool   `short:"D" help:"Force-delete the branch even when it is not merged."`
+	Force      bool   `short:"D" help:"Remove anyway: delete the branch even when it is not merged, and the worktree even when it has uncommitted changes."`
 	KeepBranch bool   `help:"Remove the worktree but keep its branch."`
 }
 
@@ -274,6 +274,21 @@ func (c *RemoveCmd) remove(root string) error {
 	// that doesn't exist (a worktree made by `new --switch`, say) can't strand.
 	if !c.KeepBranch && !c.Force && gitutil.BranchExists(root, branch) && !gitutil.MergedBranches(root)[branch] {
 		return fmt.Errorf("%s is not merged: re-run with -D to delete it anyway, or --keep-branch to remove only the worktree", branch)
+	}
+
+	// The removal is a `git worktree remove --force`, so uncommitted work in it
+	// is gone for good and no branch is left holding it — the same reason to
+	// refuse as an unmerged branch, and the same way out of it.
+	if !c.Force && gitutil.Dirty(worktreePath) {
+		return fmt.Errorf("%s has uncommitted changes: commit them, or re-run with -D to throw them away", name)
+	}
+
+	// Under herdr the worktree is usually an open workspace with an agent living
+	// in it; close it before the directory it sits in disappears.
+	if underHerdr() {
+		if err := herdrClose(root, worktreePath); err != nil {
+			return err
+		}
 	}
 
 	// Removing the worktree we're standing in leaves the process in a deleted
@@ -356,8 +371,9 @@ func (c *GcCmd) Run() error {
 
 // gcCandidates names the Claude Code worktrees of the repo at root that are
 // safe to reclaim: the "✓" of `ccwt list` (branch contained in main, which is
-// also what `remove` requires) and a "no" in its CLAUDE column. active is the
-// set of cwds of running Claude Code processes, as claudeCwds reports them.
+// also what `remove` requires), no "*" (uncommitted changes, which `remove`
+// also refuses) and a "no" in its CLAUDE column. active is the set of cwds of
+// running Claude Code processes, as claudeCwds reports them.
 //
 // A detached worktree is never a candidate: it has no branch to be merged.
 func gcCandidates(root string, active map[string]bool) ([]string, error) {
@@ -369,7 +385,7 @@ func gcCandidates(root string, active map[string]bool) ([]string, error) {
 	prefix := filepath.Join(root, ".claude", "worktrees") + string(filepath.Separator)
 	var names []string
 	for _, wt := range wts {
-		if strings.HasPrefix(wt.Path, prefix) && merged[wt.Branch] && !isClaudeActiveIn(wt.Path, active) {
+		if strings.HasPrefix(wt.Path, prefix) && merged[wt.Branch] && !gitutil.Dirty(wt.Path) && !isClaudeActiveIn(wt.Path, active) {
 			names = append(names, filepath.Base(wt.Path))
 		}
 	}
@@ -1027,8 +1043,8 @@ var cli struct {
 	Cd                CdCmd                `cmd:"" name:"cd" help:"cd into an existing worktree under .claude/worktrees/<name> (errors if it doesn't exist). Use \"..\" for the enclosing repo root, or \"-\" for the previous directory."`
 	List              ListCmd              `cmd:"" name:"list" aliases:"ls" help:"List Claude Code worktrees with branch, age, running-session, last commit, and what the last Claude Code session there was about."`
 	Tui               TuiCmd               `cmd:"" name:"tui" help:"Show the worktree list full-screen, refreshing as things change. q quits, p runs git pull, arrows select a worktree, r removes it. Under herdr, x creates a worktree and opens it, and enter (or a click) opens the selected one."`
-	Remove            RemoveCmd            `cmd:"" name:"remove" help:"Delete a worktree under .claude/worktrees/<name> and its branch (merged-only; -D to force unmerged, --keep-branch to remove only the worktree). Use \".\" for the current worktree; removing it cds to the repo root."`
-	Gc                GcCmd                `cmd:"" name:"gc" help:"Remove every worktree whose branch is already merged and that has no Claude Code session running in it, branches included. Prints what it found and asks first, unless -y."`
+	Remove            RemoveCmd            `cmd:"" name:"remove" help:"Delete a worktree under .claude/worktrees/<name> and its branch (merged and clean only; -D to remove anyway, --keep-branch to remove only the worktree). Under herdr its workspace is closed first. Use \".\" for the current worktree; removing it cds to the repo root."`
+	Gc                GcCmd                `cmd:"" name:"gc" help:"Remove every worktree whose branch is already merged, with nothing uncommitted and no Claude Code session running in it, branches included. Prints what it found and asks first, unless -y."`
 	RepoRoot          RepoRootCmd          `cmd:"" name:"repo-root" help:"Print the root directory of the current git repository."`
 	DotDot            DotDotCmd            `cmd:"" name:".." help:"Print the enclosing repo root, stripping any .claude/worktrees/<name> suffix (shorthand for repo-root --root-worktree)."`
 	Init              InitCmd              `cmd:"" name:"init" help:"Emit a shell integration snippet to source from your rc file (e.g. source <(ccwt init zsh), or for fish: ccwt init fish | source)."`
