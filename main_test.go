@@ -41,8 +41,8 @@ func TestNewPath(t *testing.T) {
 }
 
 // TestListMarksCurrent covers both "*" markers — the current worktree's name
-// and a dirty worktree's branch, where the "*" also has to beat the "✓" the
-// branch would otherwise get for being merged. Each must appear on its row
+// and a dirty worktree's leading removal glyph, where the "*" also has to beat
+// the "✓" the merged branch would otherwise get. Each must appear on its row
 // only, and only when stdout is a tty.
 func TestListMarksCurrent(t *testing.T) {
 	initRepo(t)
@@ -57,15 +57,12 @@ func TestListMarksCurrent(t *testing.T) {
 	stdoutIsTTY = func() bool { return true }
 	for _, line := range strings.Split(capture(t, &ListCmd{}), "\n") {
 		switch {
-		case line == "" || strings.HasPrefix(line, "  NAME"):
-		case strings.HasPrefix(line, "* "+here+" "):
-			if !strings.Contains(line, "* worktree-") {
-				t.Errorf("dirty worktree missing branch marker: %q", line)
-			}
+		case line == "" || strings.HasPrefix(line, "    NAME"):
+		case strings.HasPrefix(line, "* * "+here+" "):
 			if strings.Contains(line, "✓") {
 				t.Errorf("dirty worktree marked merged: %q", line)
 			}
-		case strings.HasPrefix(line, "  "+other+" "):
+		case strings.HasPrefix(line, "  ✓ "+other+" "):
 			if strings.Contains(line, "*") {
 				t.Errorf("clean worktree has a dirty marker: %q", line)
 			}
@@ -136,9 +133,9 @@ func TestListMarksMerged(t *testing.T) {
 	for _, tty := range []bool{true, false} {
 		stdoutIsTTY = func() bool { return tty }
 		for _, line := range strings.Split(capture(t, &ListCmd{}), "\n") {
-			name, rest, _ := strings.Cut(strings.TrimPrefix(line, "  "), " ")
+			name, _, _ := strings.Cut(strings.TrimLeft(line, "✓* "), " ")
 			want := tty && name == "merged"
-			if got := strings.Contains(rest, "✓ worktree-"+name); got != want {
+			if got := strings.HasPrefix(line, "  ✓ "); got != want {
 				t.Errorf("tty=%v: merged glyph = %v, want %v: %q", tty, got, want, line)
 			}
 		}
@@ -467,7 +464,8 @@ func TestGcKeepsCurrentWorktree(t *testing.T) {
 // TestAgentWorkingIsNotSafeToRemove: a worktree an agent is working in is off
 // limits even though git has nothing against it — the branch is merged (it has
 // no commits of its own yet) and the tree is clean. It gets the session glyph
-// where the "✓" would go, `remove` refuses it until -D, and `gc` walks past it.
+// where the "✓" would go at the head of the row, `remove` refuses it until -D,
+// and `gc` walks past it.
 func TestAgentWorkingIsNotSafeToRemove(t *testing.T) {
 	initRepo(t)
 	busy := capture(t, &NewWorktreeBranchCmd{Name: "busy", Path: true})
@@ -480,13 +478,13 @@ func TestAgentWorkingIsNotSafeToRemove(t *testing.T) {
 	defer func(orig func() bool) { stdoutIsTTY = orig }(stdoutIsTTY)
 	stdoutIsTTY = func() bool { return true }
 	for _, line := range strings.Split(capture(t, &ListCmd{}), "\n") {
-		name, rest, _ := strings.Cut(strings.TrimPrefix(line, "  "), " ")
+		name, _, _ := strings.Cut(strings.TrimLeft(line, "✓* "+sessionGlyph), " ")
 		want := map[string]string{"busy": sessionGlyph, "idle": "✓"}[name]
 		if want == "" {
 			continue // header, or the blank last line
 		}
-		if !strings.Contains(rest, want+" worktree-"+name) {
-			t.Errorf("%s: want %q on the branch: %q", name, want, line)
+		if !strings.HasPrefix(line, "  "+want+" ") {
+			t.Errorf("%s: want %q leading the row: %q", name, want, line)
 		}
 	}
 

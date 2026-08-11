@@ -609,15 +609,18 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 		}
 	}
 
-	// The worktree we're running in gets a "* " on its name, and its branch
-	// gets a "✓ " when it's already merged — or a "* " when the worktree has
+	// Two glyphs lead the name. First the "* " of the worktree we're running
+	// in, then the one saying whether the worktree is safe to remove: a "✓ "
+	// when its branch is already merged — or a "* " when the worktree has
 	// uncommitted changes, which beats the "✓": whatever git says about the
 	// branch, there's unsaved work here and it isn't safe to delete. An agent
 	// working in it beats both, with the "✳ " of a live session: git sees a
 	// fresh branch with nothing on it, which is precisely what an agent that
-	// has just started looks like. Human readers only: piped output stays
-	// parseable. Unmarked cells get the same two-space gutter so the columns
-	// line up.
+	// has just started looks like. Both ride at the head of the row because
+	// "where am I?" and "can this go?" are the actionable things on the line,
+	// and reading down two left-hand strips answers them for the whole table.
+	// Human readers only: piped output stays parseable. Unmarked cells get the
+	// same two-space gutter so the columns line up.
 	rows := make([]row, len(refs))
 	for i, rf := range refs {
 		wg.Go(func() {
@@ -639,7 +642,6 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 			}
 			r.topic = topic(sessionSummary(rf.wt.Path), r.subject)
 			if tty {
-				r.name = marker(rf.wt.Path == cur, "*") + r.name
 				glyph, on := "✓", rf.merged[rf.wt.Branch]
 				if gitutil.Dirty(rf.wt.Path) {
 					glyph, on = "*", true
@@ -647,7 +649,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 				if activeIn(rf.wt.Path, busy) {
 					glyph, on = sessionGlyph, true
 				}
-				r.branch = marker(on, glyph) + r.branch
+				r.name = marker(rf.wt.Path == cur, "*") + marker(on, glyph) + r.name
 			}
 		})
 	}
@@ -676,7 +678,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	}
 	var table [][]string
 	if headers {
-		table = append(table, []string{gutter + "NAME", gutter + "BRANCH", "AGE", "CLAUDE", "TOPIC"})
+		table = append(table, []string{gutter + gutter + "NAME", "BRANCH", "AGE", "CLAUDE", "TOPIC"})
 	}
 	var lines []listRow
 	emit := func(r row) {
@@ -728,7 +730,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 
 // The glyphs TOPIC is prefixed with, saying where the line came from: Claude
 // Code's own asterisk for a session, a branch for a commit subject. The
-// session one does second duty in the BRANCH column, where it marks the
+// session one does second duty at the head of the row, where it marks the
 // worktree an agent is working in right now.
 const (
 	sessionGlyph = "✳"
