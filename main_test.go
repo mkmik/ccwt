@@ -787,10 +787,10 @@ func TestFrameRowsMatchNames(t *testing.T) {
 			t.Errorf("rows[%d] = %q, but line %d is %q", i, r.path, i+1, lines[i+1])
 		}
 	}
-	if !strings.HasPrefix(lines[1], "\x1b[7m") {
+	if !strings.HasPrefix(lines[1], rowBar) {
 		t.Errorf("selected row %q is not highlighted", lines[1])
 	}
-	if strings.HasPrefix(lines[2], "\x1b[7m") {
+	if strings.HasPrefix(lines[2], rowBar) {
 		t.Errorf("unselected row %q is highlighted", lines[2])
 	}
 }
@@ -914,7 +914,7 @@ func TestFrameScrollsToTheSelection(t *testing.T) {
 	if name := filepath.Base(want.path); !strings.Contains(lines[2], name) {
 		t.Errorf("last line of the table is %q, want the selected %q on it", lines[2], name)
 	}
-	if !strings.HasPrefix(lines[2], "\x1b[7m") {
+	if !strings.HasPrefix(lines[2], rowBar) {
 		t.Errorf("the selected row %q is not highlighted", lines[2])
 	}
 
@@ -995,8 +995,8 @@ func TestSearch(t *testing.T) {
 		t.Fatal(err)
 	}
 	row := lines[slices.Index(order, "bravo")+1]
-	if !strings.Contains(row, "\x1b[0mvo\x1b[7m") {
-		t.Errorf("selected row is %q, want the match punched out of the reverse video", row)
+	if !strings.Contains(row, "\x1b[0mvo"+rowBar) {
+		t.Errorf("selected row is %q, want the match punched out of the bar", row)
 	}
 
 	// n wraps around the list to come back to the only match.
