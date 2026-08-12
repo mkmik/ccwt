@@ -498,22 +498,40 @@ func (c *ListCmd) Run() error {
 	return err
 }
 
-// listRow identifies one body line of the table: a worktree by its path, or —
-// under -g — a project's section header, with an empty path. Both carry the
-// project they belong to, as the repo's main worktree, which is what an action
-// on the row resolves against.
+// listRow identifies one body line of the table: a worktree by its path, a
+// queued prompt by its task id, the "<done>" stand-in for a removed worktree by
+// both, or — under -g — a project's section header, with neither. All of them
+// carry the project they belong to, as the repo's main worktree, which is what
+// an action on the row resolves against.
 //
 // A worktree by path rather than by name because with -g two projects can each
 // have a worktree called "fix-tests", and the path is also the only thing an
 // action needs. A project by root path rather than by the directory name the
 // header shows, for the same reason: two checkouts can share a basename.
-type listRow struct{ project, path string }
+type listRow struct {
+	project, path string
+	task          int64 // a queued prompt's id, or doneRow; 0 for the other rows
+}
+
+// doneRow marks the stand-in row for a worktree that was removed with prompts
+// still queued behind it. Its path is the removed worktree's, which is both what
+// tells two stand-ins apart and what keeps the orphaned chain attached to it.
+const doneRow = -1
+
+// worktree reports whether the row is a live worktree — the rows the
+// per-worktree keys apply to. Everything else on screen is something you can
+// land on but not open, pull or remove.
+func (r listRow) worktree() bool { return r.path != "" && r.task == 0 }
+
+// section reports whether the row is a project's section header, the only kind
+// of row there is anything to fold.
+func (r listRow) section() bool { return r.path == "" && r.task == 0 && r.project != "" }
 
 // renderList writes the worktree table to w and returns one listRow per body
 // line, in the order the lines were printed, which is what lets `ccwt tui` map
-// a screen line back to what's on it, along with every worktree's cells in
-// full, keyed by path — the same values before fitTable cuts them down, which
-// is what the tui's details pane shows.
+// a screen line back to what's on it, along with every row's cells in full,
+// keyed by that row — the same values before fitTable cuts them down, which is
+// what the tui's details pane shows.
 //
 // tty selects the human-reader decorations (markers, ✓); the tui always asks
 // for them, plain `list` only when stdout is a terminal. width is the terminal
@@ -523,7 +541,7 @@ type listRow struct{ project, path string }
 // holds the roots whose section is folded shut — only the tui has any, since
 // there is nothing to unfold them with on the command line. headers draws the
 // header row; `list --no-headers` is the only caller that doesn't want it.
-func renderList(out io.Writer, tty bool, width int, projects []string, collapsed map[string]bool, headers bool) ([]listRow, map[string][]string, error) {
+func renderList(out io.Writer, tty bool, width int, projects []string, collapsed map[string]bool, headers bool) ([]listRow, map[listRow][]string, error) {
 	global := projects != nil
 	if !global {
 		// "" is the current directory, which is how git reads "the repo we're in".
@@ -702,22 +720,75 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 		}
 		table = append(table, head)
 	}
+	// The queued prompts are read here, on the same refresh as everything else:
+	// that is also all the cross-process notification there is: another ccwt
+	// writing to the database shows up on the next tick, a second or two later,
+	// which is soon enough for work that is by definition waiting on something.
+	tasks, err := loadTasks()
+	if err != nil {
+		return nil, nil, err
+	}
+	queue := indexTasks(tasks)
+	live := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		live[r.path] = true
+	}
+
 	var lines []listRow
-	details := map[string][]string{}
-	emit := func(r row) {
-		lines = append(lines, listRow{r.project, r.path})
-		cells := []string{r.name, r.branch, r.age, r.claude, r.topic}
+	details := map[listRow][]string{}
+	add := func(id listRow, cells []string) {
+		lines = append(lines, id)
 		table = append(table, pick(cells...)) // pick copies, so cells is ours to keep
+	}
+	// emitTask draws one queued prompt and then whatever is queued behind it:
+	// the chain is a tree, and it's drawn as one, indented under the row it is
+	// waiting for. name is what the details pane calls the whole chain — the
+	// worktree it hangs off, since a prompt has no name of its own.
+	var emitTask func(name string, t Task, depth int)
+	emitTask = func(name string, t Task, depth int) {
+		id := listRow{project: t.Project, task: t.ID}
+		cells := taskCells(t, gutter, depth)
+		add(id, cells)
+		cells[0] = name
+		details[id] = cells
+		for _, k := range queue.kids[t.ID] {
+			emitTask(name, k, depth+1)
+		}
+	}
+	emit := func(r row) {
+		id := listRow{project: r.project, path: r.path}
+		cells := []string{r.name, r.branch, r.age, r.claude, r.topic}
+		add(id, cells)
 		// The pane names the worktree rather than repeating the row: the two
 		// glyphs the name leads with say where you are and whether it's safe to
 		// remove, and neither is something to copy out of a details view.
 		cells[0] = filepath.Base(r.path)
-		details[r.path] = cells
+		details[id] = cells
+		for _, t := range queue.roots[r.path] {
+			emitTask(filepath.Base(r.path), t, 0)
+		}
+	}
+	// emitOrphans draws what is left of a chain whose worktree has been removed:
+	// a bare "<done>" stand-in with the chain still under it, one per removed
+	// worktree, after the live ones. Deleting the work is not the same as
+	// cancelling what was queued behind it, and a prompt with nowhere to hang
+	// would otherwise just vanish.
+	emitOrphans := func(project string) {
+		for _, path := range queue.orphans(project, live) {
+			id := listRow{project: project, path: path, task: doneRow}
+			cells := []string{gutter + gutter + doneName, "", "", "", filepath.Base(path)}
+			add(id, cells)
+			details[id] = cells
+			for _, t := range queue.roots[path] {
+				emitTask(doneName, t, 0)
+			}
+		}
 	}
 	if !global {
 		for _, r := range rows {
 			emit(r)
 		}
+		emitOrphans(roots[0])
 	} else {
 		// Sections in the order the config lists the projects: stable, unlike an
 		// order derived from the worktrees, which would shuffle the sections
@@ -751,6 +822,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 			for _, r := range mine {
 				emit(r)
 			}
+			emitOrphans(root)
 		}
 	}
 	fitTable(table, width, cols)
@@ -766,9 +838,14 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 // Code's own asterisk for a session, a branch for a commit subject. The
 // session one does second duty at the head of the row, where it marks the
 // worktree an agent is working in right now.
+//
+// taskGlyph is the odd one out: it leads a queued prompt's NAME rather than its
+// TOPIC, because on that row the structure is the thing to say — what this is
+// waiting for is which row it hangs under.
 const (
 	sessionGlyph = "✳"
 	commitGlyph  = "⎇"
+	taskGlyph    = "↳"
 )
 
 // topic is what the worktree is about in one line: what the last Claude Code

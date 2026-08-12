@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -515,6 +516,7 @@ func initRepo(t *testing.T) string {
 	repo := t.TempDir()
 	t.Chdir(repo)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // ignore the user's own config (branch_prefix)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())  // ... and the queued prompts of the machine we're testing on
 	git(t, "init", "-b", "main")
 	git(t, "config", "core.hooksPath", "/dev/null") // ignore the user's global hooks
 	git(t, "commit", "--allow-empty", "-m", "init")
@@ -603,11 +605,13 @@ func TestGlobalModeIgnoresTheCurrentDirectory(t *testing.T) {
 // is short (pad) or long (cut) — otherwise it wraps and shoves the table up.
 func TestStatusBarIsExactlyOneLineWide(t *testing.T) {
 	for _, msg := range []string{"", "ok", strings.Repeat("x", 200)} {
-		for _, sel := range []listRow{{}, {path: "some-worktree"}, {project: "some-project"}} {
-			bar := statusBar(40, msg, sel, "main  in sync")
-			bar = strings.TrimSuffix(strings.TrimPrefix(bar, "\x1b[7m"), "\x1b[0m")
-			if got := len([]rune(bar)); got != 40 {
-				t.Errorf("statusBar(40, %.10q, %v) is %d cols wide, want 40", msg, sel, got)
+		for _, sel := range []listRow{{}, {path: "some-worktree"}, {project: "some-project"}, {task: 1}} {
+			for _, searching := range []bool{false, true} {
+				bar := statusBar(40, msg, sel, "main  in sync", searching)
+				bar = strings.TrimSuffix(strings.TrimPrefix(bar, "\x1b[7m"), "\x1b[0m")
+				if got := len([]rune(bar)); got != 40 {
+					t.Errorf("statusBar(40, %.10q, %v) is %d cols wide, want 40", msg, sel, got)
+				}
 			}
 		}
 	}
@@ -621,7 +625,7 @@ func TestStatusBarShowsHerdrActionsOnlyUnderHerdr(t *testing.T) {
 		want bool
 	}{{"", false}, {"1", true}} {
 		t.Setenv("HERDR_ENV", tc.env)
-		bar := statusBar(200, "", listRow{path: "some-worktree"}, "")
+		bar := statusBar(200, "", listRow{path: "some-worktree"}, "", false)
 		for _, key := range []string{"x:new", "space:open"} {
 			if strings.Contains(bar, key) != tc.want {
 				t.Errorf("HERDR_ENV=%q: %q in the bar = %v, want %v", tc.env, key, !tc.want, tc.want)
@@ -630,6 +634,19 @@ func TestStatusBarShowsHerdrActionsOnlyUnderHerdr(t *testing.T) {
 		if !strings.Contains(bar, "r:remove") {
 			t.Errorf("HERDR_ENV=%q: r:remove is gone, but it doesn't need herdr", tc.env)
 		}
+	}
+}
+
+// `n` is two keys in one: the next thing to do, and — while a search pattern is
+// in force — vim's next match. The bar is the only place that says which, so it
+// has to keep up.
+func TestStatusBarSaysWhichNIsInForce(t *testing.T) {
+	sel := listRow{path: "some-worktree"}
+	if bar := statusBar(200, "", sel, "", false); !strings.Contains(bar, "n:queue") || strings.Contains(bar, "n:next") {
+		t.Errorf("with no pattern the bar is %q, want n:queue on it", bar)
+	}
+	if bar := statusBar(200, "", sel, "", true); !strings.Contains(bar, "n:next") || strings.Contains(bar, "n:queue") {
+		t.Errorf("with a pattern in force the bar is %q, want n:next on it", bar)
 	}
 }
 
@@ -978,6 +995,11 @@ func TestFrameScrollsToTheSelection(t *testing.T) {
 // written against `order` rather than against the names.
 func TestSearch(t *testing.T) {
 	initRepo(t)
+	// One fixed commit date, so the three really do share a timestamp: a run
+	// that happened to straddle a second boundary sorted the last one to the
+	// top instead, and every assertion below is written against the order.
+	t.Setenv("GIT_AUTHOR_DATE", "2024-01-01T00:00:00Z")
+	t.Setenv("GIT_COMMITTER_DATE", "2024-01-01T00:00:00Z")
 	for _, name := range []string{"alpha", "bravo", "charlie"} {
 		path := capture(t, &NewWorktreeBranchCmd{Name: name, Path: true})
 		git(t, "-C", path, "commit", "--allow-empty", "-m", "subject-"+name)
@@ -1186,7 +1208,7 @@ func TestDetailPaneShowsWhatTheTableCut(t *testing.T) {
 		t.Fatal(err)
 	}
 	u.move(1)
-	u.detail = u.cells[u.sel.path] // what `d` does
+	u.detail = u.cells[u.sel] // what `d` does
 	if u.detail == nil {
 		t.Fatalf("no cells for the selected row %q", u.sel.path)
 	}
@@ -1613,6 +1635,166 @@ func TestDefaultCommandIsTui(t *testing.T) {
 		if got := ctx.Command(); got != tc.want {
 			t.Errorf("ccwt %q ran %q, want %q", tc.args, got, tc.want)
 		}
+	}
+}
+
+// renderRows draws the list the way the tui does and hands back its rows along
+// with the table they were drawn as.
+func renderRows(t *testing.T) ([]listRow, string) {
+	t.Helper()
+	var buf bytes.Buffer
+	rows, _, err := renderList(&buf, false, 0, nil, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rows, buf.String()
+}
+
+// typeInto feeds a prompt to the open entry box one keystroke at a time, then
+// presses enter — what the tui does with the keys it reads.
+func typeInto(u *ui, prompt string) {
+	for _, r := range prompt {
+		u.queue(string(r))
+	}
+	u.queue("\r")
+}
+
+// A queued prompt is work waiting on something else to finish, so it is drawn
+// under the row it waits on, and a prompt queued behind it under that in turn.
+// It outlives what it was waiting for: removing the worktree leaves a "<done>"
+// stand-in with the chain still hanging off it, since deleting the work is not
+// the same as cancelling what was queued behind it.
+func TestQueuedPromptsHangOffTheirWorktree(t *testing.T) {
+	initRepo(t)
+	capture(t, &NewWorktreeBranchCmd{Name: "alpha", Path: true})
+
+	render := func() ([]listRow, string) { return renderRows(t) }
+	// Queued the way the tui queues it — `n`, the prompt, enter — so that the
+	// keystrokes are covered along with the storage.
+	var u ui
+	queue := func(parent listRow, prompt string) {
+		t.Helper()
+		u.entry = entry{parent: parent, open: true}
+		typeInto(&u, prompt)
+		if u.msg != "queued" {
+			t.Fatalf("queueing %q: %s", prompt, u.msg)
+		}
+	}
+
+	rows, _ := render()
+	if len(rows) != 1 || !rows[0].worktree() {
+		t.Fatalf("rows before anything was queued = %v, want the one worktree", rows)
+	}
+	queue(rows[0], "then update the docs")
+
+	rows, _ = render()
+	if len(rows) != 2 || rows[1].task <= 0 {
+		t.Fatalf("rows = %v, want the worktree and a queued prompt under it", rows)
+	}
+	queue(rows[1], "and then cut a release")
+
+	rows, body := render()
+	lines := strings.Split(strings.TrimRight(body, "\n"), "\n")
+	if len(rows) != 3 || len(lines) != 3 {
+		t.Fatalf("rows = %v, lines = %q, want the worktree and two queued prompts", rows, lines)
+	}
+	if !strings.Contains(lines[1], "then update the docs") || !strings.Contains(lines[2], "and then cut a release") {
+		t.Errorf("the prompts aren't on their rows:\n%s", body)
+	}
+	// The second waits on the first, so it's drawn a level further in.
+	if in, deeper := strings.Index(lines[1], taskGlyph), strings.Index(lines[2], taskGlyph); deeper <= in {
+		t.Errorf("the chained prompt is indented %d, want more than the %d of the one it waits on:\n%s", deeper, in, body)
+	}
+
+	// rows[0].project rather than the repo path initRepo handed back: on macOS
+	// that one is /var/..., and git — which is what the removal talks to —
+	// reports /private/var/....
+	if err := (&RemoveCmd{Name: "alpha", Force: true}).remove(rows[0].project); err != nil {
+		t.Fatal(err)
+	}
+	rows, body = render()
+	if len(rows) != 3 || rows[0].task != doneRow {
+		t.Fatalf("rows after the worktree went = %v, want a <done> stand-in and the chain", rows)
+	}
+	if !strings.Contains(body, doneName) || !strings.Contains(body, "and then cut a release") {
+		t.Errorf("the orphaned chain isn't drawn under a %s row:\n%s", doneName, body)
+	}
+
+	// `r` on the stand-in drops every chain that was waiting on the worktree —
+	// the one behind it goes with the one it was waiting on.
+	if msg, ok := dropTasks(rows[0]); !ok {
+		t.Fatalf("dropping the orphaned chain: %s", msg)
+	}
+	if rows, body = render(); len(rows) != 0 {
+		t.Errorf("rows after deleting the chain = %v, want none:\n%s", rows, body)
+	}
+}
+
+// `e` in the details pane rewrites a queued prompt where it stands: the text
+// changes and nothing else does — what was waiting on it is still waiting on
+// it, and it hasn't become a new prompt at the end of the chain.
+func TestEditingAQueuedPromptLeavesItWhereItIs(t *testing.T) {
+	initRepo(t)
+	capture(t, &NewWorktreeBranchCmd{Name: "alpha", Path: true})
+
+	var u ui
+	rows, _ := renderRows(t)
+	u.entry = entry{parent: rows[0], open: true}
+	typeInto(&u, "port the widget")
+
+	rows, _ = renderRows(t)
+	first := rows[1]
+	u.entry = entry{parent: first, open: true}
+	typeInto(&u, "then write the docs")
+
+	// What `e` opens: the prompt as the details pane shows it, and the id of the
+	// row it came from. Rub out "widget", type something else.
+	u.entry = entry{parent: first, text: "port the widget", open: true, id: first.task}
+	for range len("widget") {
+		u.queue("\x7f")
+	}
+	typeInto(&u, "sidebar")
+	if u.msg != "saved" {
+		t.Fatalf("editing: %s", u.msg)
+	}
+
+	rows, body := renderRows(t)
+	if len(rows) != 3 || rows[1] != first {
+		t.Fatalf("rows after the edit = %v, want the same three with %v still second", rows, first)
+	}
+	lines := strings.Split(strings.TrimRight(body, "\n"), "\n")
+	if !strings.Contains(lines[1], "port the sidebar") || strings.Contains(body, "port the widget") {
+		t.Errorf("the edit didn't land:\n%s", body)
+	}
+	if !strings.Contains(lines[2], "then write the docs") {
+		t.Errorf("the prompt waiting on it moved or lost its text:\n%s", body)
+	}
+}
+
+// The queue is shared by every ccwt there is — a project's own tui, the `-g`
+// one, the next one you open in another tab — so two of them writing at once
+// have to both get their prompt in, rather than one coming back with SQLite's
+// "database is locked".
+func TestQueueTakesConcurrentWriters(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	wt := listRow{project: "/repo", path: "/repo/.claude/worktrees/alpha"}
+
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Go(func() { // its own connection, as a separate process would have
+			if err := addTask(wt, fmt.Sprintf("prompt %d", i)); err != nil {
+				t.Errorf("queueing prompt %d: %v", i, err)
+			}
+		})
+	}
+	wg.Wait()
+
+	tasks, err := loadTasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 8 {
+		t.Errorf("%d prompts queued, want all 8: %v", len(tasks), tasks)
 	}
 }
 
