@@ -1198,16 +1198,25 @@ func TestDetailPaneShowsWhatTheTableCut(t *testing.T) {
 		t.Fatalf("pane is %d lines, want the 12 the terminal has", len(lines))
 	}
 	joined := strings.Join(lines, "\n")
-	// The pane is a window with a border, so a wrapped value has the frame's
-	// right and left edges between its halves: dropping them is what turns the
-	// pane back into the text it wrapped.
-	text := strings.Join(strings.Fields(strings.ReplaceAll(joined, "│", "")), " ")
+	// The pane is a window drawn over the list, so its own lines are the ones
+	// the border runs down — and a wrapped value has that border between its
+	// halves: dropping it is what turns the pane back into the text it wrapped.
+	pane := func(lines []string) []string {
+		var out []string
+		for _, l := range lines {
+			if strings.ContainsAny(l, "┌│└") {
+				out = append(out, l)
+			}
+		}
+		return out
+	}
+	text := strings.Join(strings.Fields(strings.ReplaceAll(strings.Join(pane(lines), "\n"), "│", "")), " ")
 	for _, want := range []string{filepath.Base(path), "worktree-exceedingly-verbose-worktree-name", subject} {
 		if !strings.Contains(text, want) {
 			t.Errorf("pane doesn't show %q:\n%s", want, joined)
 		}
 	}
-	for _, line := range lines[1 : len(lines)-1] { // the bars carry escapes of their own
+	for _, line := range pane(lines) {
 		if got := len([]rune(line)); got > 60 {
 			t.Errorf("pane line is %d columns wide: %q", got, line)
 		}
@@ -1225,13 +1234,22 @@ func TestDetailPaneShowsWhatTheTableCut(t *testing.T) {
 	if top < 1 {
 		t.Fatalf("pane starts on line %d, want it inset from the top:\n%s", top, strings.Join(lines, "\n"))
 	}
-	for _, line := range lines[top : len(lines)-1] {
-		if line == "" {
-			continue // below the pane's bottom edge
-		}
+	for _, line := range pane(lines) {
 		if !strings.HasPrefix(line, "  ") || len([]rune(line)) >= 100 {
 			t.Errorf("pane line isn't inset from the sides: %q", line)
 		}
+	}
+
+	// It's a modal over the list, not a screen of its own: the rows the pane
+	// doesn't cover are still the list, and they hold still while it's up —
+	// the tick's refresh is what would otherwise move them.
+	name := filepath.Base(path)[:20] // the row is the cut-down one — that's the point of the pane
+	if !strings.Contains(lines[0], "NAME") || !strings.Contains(lines[1], name) {
+		t.Errorf("the list isn't drawn behind the pane:\n%s", strings.Join(lines[:top], "\n"))
+	}
+	u.stale()
+	if u.body == nil {
+		t.Error("the list behind the pane was dropped, so the next frame re-reads it")
 	}
 }
 

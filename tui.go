@@ -271,8 +271,15 @@ type ui struct {
 	cells map[string][]string // worktree path -> its cells in full, same lifetime
 }
 
-// stale drops the cached list, so the next frame reads it again.
-func (u *ui) stale() { u.body = nil }
+// stale drops the cached list, so the next frame reads it again — except while
+// the details pane is up, where the list is the frozen backdrop it sits on: a
+// refresh would shuffle rows nobody can reach, and re-run the git and lsof scan
+// behind a list nobody is reading.
+func (u *ui) stale() {
+	if u.detail == nil {
+		u.body = nil
+	}
+}
 
 // at returns the row on screen line n, counting the way a mouse report does:
 // line 1 is the table header, so line 2 is the first row of the window. The
@@ -497,19 +504,6 @@ func (u *ui) dropSelected() {
 func (u *ui) frame() ([]string, error) {
 	cols, rows := termSize()
 
-	// The details pane is modal: it takes the whole frame, and it holds its own
-	// copy of what it shows, so the list underneath needn't be read at all while
-	// it's up — the tick would otherwise re-run the git and lsof scan behind a
-	// list nobody can see.
-	if u.detail != nil {
-		body := max(rows-1, 1)
-		lines := detailPane(u.detail, cols, body)
-		for len(lines) < body {
-			lines = append(lines, "")
-		}
-		return append(lines[:body], highlight(" esc:close ", cols)), nil
-	}
-
 	// Re-read only when the cache was dropped or the terminal got wider or
 	// narrower, since the table is laid out to the width.
 	if u.body == nil || cols != u.cols {
@@ -562,6 +556,20 @@ func (u *ui) frame() ([]string, error) {
 	for len(lines) < body {
 		lines = append(lines, "")
 	}
+
+	// The details pane is a modal: it lands on top of the list, which goes on
+	// being drawn — and, since stale() leaves the cache alone while it's up,
+	// stands still — behind it. The pane's own lines are the only ones it
+	// replaces; the rest of the screen is the list you're still in.
+	if u.detail != nil {
+		for i, l := range detailPane(u.detail, cols, body) {
+			if l != "" && i < body {
+				lines[i] = l
+			}
+		}
+		return append(lines[:body], highlight(" esc:close ", cols)), nil
+	}
+
 	// While the prompt is up it takes the whole bar, as it does in vim: the key
 	// hints have nothing to say about a line you're typing into.
 	// The restart notice outlasts the transient messages but yields to them
@@ -583,17 +591,22 @@ func (u *ui) frame() ([]string, error) {
 // the config draws — hiding a column from the table is about what the list is
 // for, and the pane is where you go for the value itself.
 //
-// It's drawn as a window inset from the screen edge rather than a screen of
-// its own, so it reads as a look at one row of the list you're still in. The
-// margin gives way first on a small terminal, then the border stays: the
-// values are the point, the framing isn't. Its top edge names the worktree.
+// It's drawn as a window over the list rather than a screen of its own, so it
+// reads as a look at one row of the list you're still in. The lines it returns
+// are the window and nothing else — the frame lays them over the rows, and
+// leaves the rest of them showing. The margin gives way first on a small
+// terminal, then the border stays: the values are the point, the framing isn't.
+// Its top edge names the worktree.
 //
 // The border is the price of that: a drag-select that overshoots the value
 // picks up a "│", and copying a value out is what the pane is for. Landing it
 // a cell out from the text keeps an ordinary drag clear of it.
 //
 // ponytail: no scrolling — five values fit any terminal worth running the tui
-// in. Give it a window like the list's if the pane grows.
+// in. Give it a window like the list's if the pane grows. And the margin is
+// blank rather than the list showing through it: splicing rows that carry the
+// selection band and the search highlights back in around the border is a lot
+// of code for four cells either side.
 func detailPane(cells []string, cols, rows int) []string {
 	all := allColumns()
 	label := 0

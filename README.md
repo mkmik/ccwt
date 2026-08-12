@@ -132,23 +132,26 @@ branch, uncommitted changes or a working agent, exactly like `ccwt remove`.
 Clicking a row selects it, and double-clicking opens it. `x` creates a worktree and opens it — the same thing the
 plugin's **New ccwt worktree** action does, without leaving the list.
 
-`d` opens the selected worktree's details over the list: every column's value in full, one per
-line and wrapped to the width, instead of the row the table had to cut down to fit. `esc`
-closes it, and while it's up the other keys do nothing.
+`d` opens the selected worktree's details as a window over the list: every column's value in
+full, one per line and wrapped to the width, instead of the row the table had to cut down to
+fit. It's modal — `esc` closes it, and while it's up the other keys do nothing and the list
+behind it holds still.
 
 ```
- dreamy-foraging-hickey
-
- NAME    dreamy-foraging-hickey
- BRANCH  worktree-dreamy-foraging-hickey
- AGE     2h
- CLAUDE  yes
- TOPIC   ✳ Goal was a widget on the dashboard; it's built and wired up, and the
-         numbers on it are still the mocked ones
+    NAME                  BRANCH                    AGE  CLAUDE  TOPIC
+  ✓ calm-baking-otter     worktree-calm-bak…-otter  1d   no      ⎇ Fix the flux capacitor
+    ┌─ dreamy-foraging-hickey ───────────────────────────────────────────────────────┐
+    │ NAME    dreamy-foraging-hickey                                                 │
+    │ BRANCH  worktree-dreamy-foraging-hickey                                        │
+    │ AGE     2h                                                                     │
+    │ CLAUDE  yes                                                                    │
+    │ TOPIC   ✳ Goal was a widget on the dashboard; it's built and wired up, and the │
+    │         numbers on it are still the mocked ones                                │
+    └────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 Every column the table knows about is in there, including any the config leaves out of the
-list — and no border, so a value is a mouse selection away from your clipboard.
+list.
 
 Something parked in a pane for days goes on running the binary it started from, so the tui
 watches that binary and says so when it's replaced — by `go install`, by a package manager,
