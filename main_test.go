@@ -1154,7 +1154,7 @@ func TestListFitsTerminalWidth(t *testing.T) {
 
 	for _, width := range []int{20, 50, 60, 80, 100, 200} {
 		var buf bytes.Buffer
-		if _, err := renderList(&buf, true, width, nil, nil, true); err != nil {
+		if _, _, err := renderList(&buf, true, width, nil, nil, true); err != nil {
 			t.Fatal(err)
 		}
 		// Every column bottoms out at minCol, so a terminal narrower than that
@@ -1164,6 +1164,48 @@ func TestListFitsTerminalWidth(t *testing.T) {
 			if got := len([]rune(line)); got > max(width, floor) {
 				t.Errorf("width=%d: line is %d columns wide: %q", width, got, line)
 			}
+		}
+	}
+}
+
+// The details pane exists because the table cuts: on a terminal too narrow to
+// show a long commit subject in the TOPIC column, `d` on the row has to show
+// all of it — wrapped, and still inside the width, since a line that wraps
+// itself would push the status bar off the bottom.
+func TestDetailPaneShowsWhatTheTableCut(t *testing.T) {
+	initRepo(t)
+	const subject = "a commit subject that runs on well past any sensible column width (#1234)"
+	path := capture(t, &NewWorktreeBranchCmd{Name: "exceedingly-verbose-worktree-name", Path: true})
+	git(t, "-C", path, "commit", "--allow-empty", "-m", subject)
+
+	defer func(old func() (int, int)) { termSize = old }(termSize)
+	termSize = func() (int, int) { return 60, 12 }
+
+	var u ui
+	if _, err := u.frame(); err != nil { // the first frame is what fills in the rows
+		t.Fatal(err)
+	}
+	u.move(1)
+	u.detail = u.cells[u.sel.path] // what `d` does
+	if u.detail == nil {
+		t.Fatalf("no cells for the selected row %q", u.sel.path)
+	}
+	lines, err := u.frame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 12 {
+		t.Fatalf("pane is %d lines, want the 12 the terminal has", len(lines))
+	}
+	joined := strings.Join(lines, "\n")
+	for _, want := range []string{filepath.Base(path), "worktree-exceedingly-verbose-worktree-name", subject} {
+		if !strings.Contains(strings.Join(strings.Fields(joined), " "), want) {
+			t.Errorf("pane doesn't show %q:\n%s", want, joined)
+		}
+	}
+	for _, line := range lines[1 : len(lines)-1] { // the bars carry escapes of their own
+		if got := len([]rune(line)); got > 60 {
+			t.Errorf("pane line is %d columns wide: %q", got, line)
 		}
 	}
 }
@@ -1201,7 +1243,7 @@ func TestConfigColumns(t *testing.T) {
 
 	writeConfig("columns = [\"topic\", \"name\"]\n")
 	var buf bytes.Buffer
-	if _, err := renderList(&buf, false, 0, nil, nil, true); err != nil {
+	if _, _, err := renderList(&buf, false, 0, nil, nil, true); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -1216,7 +1258,7 @@ func TestConfigColumns(t *testing.T) {
 	}
 
 	writeConfig("columns = [\"nmae\"]\n")
-	if _, err := renderList(&buf, false, 0, nil, nil, true); err == nil || !strings.Contains(err.Error(), "nmae") {
+	if _, _, err := renderList(&buf, false, 0, nil, nil, true); err == nil || !strings.Contains(err.Error(), "nmae") {
 		t.Errorf("unknown column: err = %v, want one naming it", err)
 	}
 }
@@ -1312,7 +1354,7 @@ func TestGlobalListSpansProjects(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	got, err := renderList(&buf, false, 0, roots, nil, true)
+	got, _, err := renderList(&buf, false, 0, roots, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1334,7 +1376,7 @@ func TestGlobalListSpansProjects(t *testing.T) {
 	// Folded shut, a project keeps its header — turned around, and still saying
 	// how much is underneath — and contributes no rows at all.
 	buf.Reset()
-	got, err = renderList(&buf, false, 0, roots, map[string]bool{gitRoots[0]: true}, true)
+	got, _, err = renderList(&buf, false, 0, roots, map[string]bool{gitRoots[0]: true}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1389,7 +1431,7 @@ func TestGlobalListOutsideAnyRepo(t *testing.T) {
 	// tty: the markers are the only thing that ever looked at the current
 	// directory, so the complaint only shows up with them turned on.
 	var buf bytes.Buffer
-	_, err = renderList(&buf, true, 0, []string{root}, nil, true)
+	_, _, err = renderList(&buf, true, 0, []string{root}, nil, true)
 	w.Close()
 	if err != nil {
 		t.Fatal(err)

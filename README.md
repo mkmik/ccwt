@@ -115,7 +115,7 @@ so it doesn't flicker, with a status bar along the bottom:
 * * dreamy-foraging-hickey  worktree-dreamy-…-hickey  2h   yes     ✳ Goal was a widget on the dashboard; it's built and…
   ✓ calm-baking-otter       worktree-calm-bak…-otter  1d   no      ⎇ Fix the flux capacitor
 
- ccwt  q:quit  p:pull  /:search  x:new  space:open  r:remove │ main  ↑1 ↓2
+ ccwt  q:quit  p:pull  /:search  x:new  space:open  d:details  r:remove │ main  ↑1 ↓2
 ```
 
 `q` (or Ctrl-C) quits, `p` runs `git pull` and reports the result in the bar. The rest of
@@ -131,6 +131,24 @@ it: `space` opens it as its own Herdr workspace (via `herdr worktree open`, like
 branch, uncommitted changes or a working agent, exactly like `ccwt remove`.
 Clicking a row selects it, and double-clicking opens it. `x` creates a worktree and opens it — the same thing the
 plugin's **New ccwt worktree** action does, without leaving the list.
+
+`d` opens the selected worktree's details over the list: every column's value in full, one per
+line and wrapped to the width, instead of the row the table had to cut down to fit. `esc`
+closes it, and while it's up the other keys do nothing.
+
+```
+ dreamy-foraging-hickey
+
+ NAME    dreamy-foraging-hickey
+ BRANCH  worktree-dreamy-foraging-hickey
+ AGE     2h
+ CLAUDE  yes
+ TOPIC   ✳ Goal was a widget on the dashboard; it's built and wired up, and the
+         numbers on it are still the mocked ones
+```
+
+Every column the table knows about is in there, including any the config leaves out of the
+list — and no border, so a value is a mouse selection away from your clipboard.
 
 Something parked in a pane for days goes on running the binary it started from, so the tui
 watches that binary and says so when it's replaced — by `go install`, by a package manager,
@@ -303,7 +321,7 @@ swallow stderr, or you'll lose the cwd report.
 | `ccwt new [name]` | Create a worktree under `.claude/worktrees/<name>` on a new branch `worktree-<name>`, and print `<name>`. Generates a name if omitted; reuses an existing worktree of the same name. `--switch <branch>` checks the worktree out on an existing branch instead of creating one (`ccwt new` + `git switch <branch>`). When run inside a worktree it returns the enclosing one instead of creating a new one (override with `--force-create`). `--path` prints the worktree's absolute path instead of `<name>`. |
 | `ccwt cd <name>` | `cd` into an existing worktree under `.claude/worktrees/<name>` (with shell integration) — never creates it, errors if it doesn't exist, and the name is required. `ccwt cd ..` is shorthand for `ccwt ..`, and `ccwt cd -` jumps to the previous directory (`$OLDPWD`), like the shell's `cd -`. |
 | `ccwt list` | List the repo's Claude Code worktrees with branch, age, running-session status, and last commit, sorted newest-first. `-g` lists every project in `$XDG_CONFIG_HOME/ccwt/config.toml` instead, a section per project. `--no-headers` leaves out the header row, for feeding the table to `cut`, `awk` or a shell loop. |
-| `ccwt tui` | Show the `ccwt list` table full-screen, refreshing in place without flicker, over a status bar showing how far the current branch is ahead/behind its upstream. `q` (or Ctrl-C) quits, `p` runs `git pull`. Arrow keys (or `j`/`k`) select a worktree, `/` (or `?`) searches for one the way vim does — incrementally, case-insensitive regexp, all matches highlighted, `n`/`N` for the next and previous; `space` opens it as a Herdr workspace, a click on its row selects it and a double-click opens it, and `r` removes it (merged, clean and no agent working in it, closing its workspace first, like `ccwt remove`). `-g` spans the configured projects as a foldable section each (`↵`, or a double-click on the header, folds one shut) and ignores the current directory entirely, every action (`p` included) applying to the selected row's project. `--interval` (default `2s`) sets the refresh rate, `--fetch` (default `1m`) how often `origin/main` is fetched in the background. The bar also says when the `ccwt` binary underneath it has been upgraded, and to which version, since a long-running tui otherwise keeps running the old one. |
+| `ccwt tui` | Show the `ccwt list` table full-screen, refreshing in place without flicker, over a status bar showing how far the current branch is ahead/behind its upstream. `q` (or Ctrl-C) quits, `p` runs `git pull`. Arrow keys (or `j`/`k`) select a worktree, `/` (or `?`) searches for one the way vim does — incrementally, case-insensitive regexp, all matches highlighted, `n`/`N` for the next and previous; `space` opens it as a Herdr workspace, a click on its row selects it and a double-click opens it, `d` shows its column values in full in a pane over the list (`esc` closes it), and `r` removes it (merged, clean and no agent working in it, closing its workspace first, like `ccwt remove`). `-g` spans the configured projects as a foldable section each (`↵`, or a double-click on the header, folds one shut) and ignores the current directory entirely, every action (`p` included) applying to the selected row's project. `--interval` (default `2s`) sets the refresh rate, `--fetch` (default `1m`) how often `origin/main` is fetched in the background. The bar also says when the `ccwt` binary underneath it has been upgraded, and to which version, since a long-running tui otherwise keeps running the old one. |
 | `ccwt remove <name>` | Remove the worktree at `.claude/worktrees/<name>` and delete its branch. `.` means the worktree you're currently in; removing the one you're in cds you to the repo root, like `ccwt ..`. The branch is deleted only if merged: an unmerged branch refuses the whole removal, worktree included, so nothing is stranded, and so does a worktree with uncommitted changes, and so does one Herdr says an agent is working in (the `✳` of `ccwt list`) — except your own workspace, so an agent can still `ccwt done` on itself. Pass `-D` to remove anyway (unmerged branch deleted, uncommitted changes thrown away, working agent interrupted), or `--keep-branch` to remove only the worktree. Under Herdr the workspace open on the worktree is closed first — ending the agent living in it — once those checks pass. |
 | `ccwt done` | Finish with the worktree you're in: `ccwt remove .`, and then — under Herdr — close the workspace you're sitting in, the one `remove` leaves alone. Same checks and same flags (`-D`, `--keep-branch`); a refusal leaves the workspace open. Outside Herdr it's just `ccwt remove .`. |
 | `ccwt gc` | Remove every worktree that's finished with: branch already merged (the `✓` of `ccwt list`), nothing uncommitted in it (no `*`), no agent working in it (no `✳`) and no Claude Code session running in it (a `no` in the `CLAUDE` column). Prints the list it found and asks before touching anything — `-y`/`--yes` skips the question. Each removal is exactly what `ccwt remove <name>` does, branch included. The worktree you're standing in is never removed — it says so on stderr and leaves it to `ccwt remove .`. |

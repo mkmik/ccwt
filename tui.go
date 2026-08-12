@@ -156,6 +156,15 @@ func (c *TuiCmd) Run() error {
 			// comes first: `q` there is a letter, not the quit key.
 			case u.typing:
 				u.edit(k)
+			// The details pane is modal, so it comes next: while it's up, esc
+			// closes it and nothing else reaches the list underneath.
+			case u.detail != nil:
+				switch k {
+				case "\x1b":
+					u.detail = nil
+				case "\x03":
+					return nil
+				}
 			case k == "q", k == "\x03": // \x03 = Ctrl-C, which raw mode delivers as a keystroke
 				return nil
 			case k == "p":
@@ -186,6 +195,9 @@ func (c *TuiCmd) Run() error {
 				}
 			case k == "\r", k == "\n": // folds a section, and does nothing on a worktree
 				u.toggle()
+			case k == "d":
+				// Nothing selected, or a section header: no cells, no pane.
+				u.detail = u.cells[u.sel.path]
 			case k == "r":
 				if path := u.sel.path; path != "" {
 					if err := act("removing "+filepath.Base(path)+"…", func() string {
@@ -241,15 +253,22 @@ type ui struct {
 
 	clicked time.Time // when the last click landed on sel — see click
 
+	// The selected worktree's cells in full, snapshotted when the details pane
+	// was opened over the list; nil when it isn't open. A snapshot rather than a
+	// live read so the values sit still while they're being copied out of, and
+	// so a worktree that goes away underneath doesn't blank the pane.
+	detail []string
+
 	// The last list read, kept so that moving the selection — which changes
 	// nothing but which row is reverse-videoed — doesn't re-run the git and
 	// lsof scan behind it (half a second on a big repo, once per keypress).
 	// stale() drops it whenever something that would change the list happens;
 	// otherwise it's the interval tick that refreshes it.
-	body []string          // rendered table, header line included
-	all  []listRow         // one per body line after the header
-	cols int               // the width body was rendered at
-	div  map[string]string // repo -> its status-bar divergence, same lifetime
+	body  []string            // rendered table, header line included
+	all   []listRow           // one per body line after the header
+	cols  int                 // the width body was rendered at
+	div   map[string]string   // repo -> its status-bar divergence, same lifetime
+	cells map[string][]string // worktree path -> its cells in full, same lifetime
 }
 
 // stale drops the cached list, so the next frame reads it again.
@@ -478,16 +497,29 @@ func (u *ui) dropSelected() {
 func (u *ui) frame() ([]string, error) {
 	cols, rows := termSize()
 
+	// The details pane is modal: it takes the whole frame, and it holds its own
+	// copy of what it shows, so the list underneath needn't be read at all while
+	// it's up — the tick would otherwise re-run the git and lsof scan behind a
+	// list nobody can see.
+	if u.detail != nil {
+		lines := detailPane(u.detail, cols)
+		body := max(rows-1, 1)
+		for len(lines) < body {
+			lines = append(lines, "")
+		}
+		return append(lines[:body], highlight(" esc:close ", cols)), nil
+	}
+
 	// Re-read only when the cache was dropped or the terminal got wider or
 	// narrower, since the table is laid out to the width.
 	if u.body == nil || cols != u.cols {
 		var buf bytes.Buffer
-		listRows, err := renderList(&buf, true, cols, u.projects, u.collapsed, true)
+		listRows, cells, err := renderList(&buf, true, cols, u.projects, u.collapsed, true)
 		if err != nil {
 			return nil, err
 		}
 		u.body = strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-		u.all, u.cols, u.div = listRows, cols, nil
+		u.all, u.cols, u.div, u.cells = listRows, cols, nil, cells
 	}
 
 	body := max(rows-1, 1)
@@ -543,6 +575,65 @@ func (u *ui) frame() ([]string, error) {
 		bar = highlight(p+u.query, cols)
 	}
 	return append(lines[:body], bar), nil
+}
+
+// detailPane is the details modal: the selected worktree's cells laid out one
+// per line and wrapped to the width, rather than as the row the table had to
+// cut them down to fit. Every column the table knows about, not just the ones
+// the config draws — hiding a column from the table is about what the list is
+// for, and the pane is where you go for the value itself.
+//
+// Nothing is drawn around it: a border lands in the middle of any selection
+// made with the mouse, and copying a value out is what this is for. The bar
+// across the top names the worktree and says the pane is up.
+//
+// ponytail: no scrolling — five values fit any terminal worth running the tui
+// in. Give it a window like the list's if the pane grows.
+func detailPane(cells []string, cols int) []string {
+	all := allColumns()
+	label := 0
+	for _, c := range all {
+		label = max(label, len(c.name))
+	}
+	lines := []string{highlight(" "+cells[0]+" ", cols), ""}
+	for _, c := range all {
+		head := fmt.Sprintf(" %-*s  ", label, c.name)
+		for _, l := range wrap(cells[c.i], max(cols-len(head), 1)) {
+			lines = append(lines, head+l)
+			head = strings.Repeat(" ", len(head))
+		}
+	}
+	return lines
+}
+
+// wrap breaks s into lines of at most width runes: at a space where there is
+// one, and mid-word when a single word — a long branch name, a path — is wider
+// than the pane, since a pane that cut it would be no better than the table.
+// Always at least one line, so an empty value still gets its label.
+func wrap(s string, width int) []string {
+	var lines []string
+	var line []rune
+	flush := func() { lines, line = append(lines, string(line)), nil }
+	for _, word := range strings.Fields(s) {
+		w := []rune(word)
+		if len(line) > 0 && len(line)+1+len(w) > width {
+			flush()
+		}
+		if len(line) > 0 {
+			line = append(line, ' ')
+		}
+		for len(line)+len(w) > width {
+			n := width - len(line)
+			line = append(line, w[:n]...)
+			w = w[n:]
+			flush()
+		}
+		line = append(line, w...)
+	}
+	if len(line) > 0 || len(lines) == 0 {
+		flush()
+	}
+	return lines
 }
 
 // checkUpgrade notices that the binary this process was started from has been
@@ -756,7 +847,7 @@ func statusBar(cols int, msg string, sel listRow, div string) string {
 		if herdr {
 			keys += "  space:open"
 		}
-		keys += "  r:remove"
+		keys += "  d:details  r:remove"
 	case sel.project != "":
 		keys += "  ↵:fold"
 	}
