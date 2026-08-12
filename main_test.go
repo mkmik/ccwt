@@ -1798,6 +1798,51 @@ func TestQueueTakesConcurrentWriters(t *testing.T) {
 	}
 }
 
+// A cached lookup must skip the work while the stamp holds and redo it the
+// moment the stamp moves — the whole point being that `git status` and the
+// transcript reads behind a row stop running on every 2-second refresh.
+func TestCachedRecomputesOnlyWhenTheStampMoves(t *testing.T) {
+	var c cached[int]
+	var calls int
+	count := func() int { calls++; return calls }
+
+	if got := c.get("a", "v1", count); got != 1 || calls != 1 {
+		t.Fatalf("first get: %d after %d calls, want 1 after 1", got, calls)
+	}
+	if got := c.get("a", "v1", count); got != 1 || calls != 1 {
+		t.Errorf("same stamp: %d after %d calls, want the cached 1 with no new call", got, calls)
+	}
+	if got := c.get("b", "v1", count); got != 2 || calls != 2 {
+		t.Errorf("other key: %d after %d calls, want a fresh 2", got, calls)
+	}
+	if got := c.get("a", "v2", count); got != 3 || calls != 3 {
+		t.Errorf("moved stamp: %d after %d calls, want a fresh 3", got, calls)
+	}
+
+	// Rows are built concurrently, so the map behind all this is too.
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Go(func() { c.get("c", "v1", func() int { return 7 }) })
+	}
+	wg.Wait()
+	if got := c.get("c", "v1", func() int { return 0 }); got != 7 {
+		t.Errorf("concurrent gets left %d behind, want 7", got)
+	}
+}
+
+func TestWindowNamesOneStretchPerDuration(t *testing.T) {
+	// Everything asked inside one stretch has to agree, or a refresh would
+	// re-run half the scans it was meant to skip.
+	if a, b := window(time.Hour), window(time.Hour); a != b {
+		t.Errorf("two reads of the same hour gave %q and %q", a, b)
+	}
+	before := window(time.Microsecond)
+	time.Sleep(time.Millisecond)
+	if after := window(time.Microsecond); after == before {
+		t.Errorf("a microsecond window still reads %q a millisecond later", after)
+	}
+}
+
 // capture runs cmd with stdout redirected and returns what it printed.
 func capture(t *testing.T, cmd interface{ Run() error }) string {
 	t.Helper()

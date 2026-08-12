@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"text/tabwriter"
@@ -527,6 +528,66 @@ func (r listRow) worktree() bool { return r.path != "" && r.task == 0 }
 // of row there is anything to fold.
 func (r listRow) section() bool { return r.path == "" && r.task == 0 && r.project != "" }
 
+// cached memoizes f per key, recomputing only when stamp changes. Two kinds of
+// stamp are used below: a coarse time window for a lookup that has no cheap way
+// to tell whether its answer moved, and a file's mtime for one that has.
+//
+// The tui re-reads the whole list every couple of seconds, and some of what a
+// row is built from costs far more than that cadence is worth: `git status`
+// across 51 worktrees of a monorepo is ~3s of cpu a round, some 90% of
+// everything the tui spends, to answer "is there unsaved work here?" — which
+// nobody needs to the second.
+type cached[T any] struct {
+	mu sync.Mutex
+	m  map[string]stamped[T]
+}
+
+type stamped[T any] struct {
+	stamp string
+	v     T
+}
+
+func (c *cached[T]) get(key, stamp string, f func() T) T {
+	c.mu.Lock()
+	e, ok := c.m[key]
+	c.mu.Unlock()
+	if ok && e.stamp == stamp {
+		return e.v
+	}
+	v := f()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.m == nil {
+		c.m = map[string]stamped[T]{}
+	}
+	c.m[key] = stamped[T]{stamp, v}
+	return v
+}
+
+// window names the current stretch of d, so that everything asked within one
+// stretch shares an answer. Rows are all built in the same round, so they all
+// land in the same stretch and refresh together.
+func window(d time.Duration) string {
+	return strconv.FormatInt(time.Now().UnixNano()/int64(d), 10)
+}
+
+// How long the tui may go on showing the last answer git gave about a worktree
+// being dirty, or a branch being merged. Both decorate the "can this go?"
+// column, and both cost a full worktree scan to ask.
+//
+// ponytail: a time window, not an fs watcher. Watching would make the glyph
+// instant, at the price of a watcher per worktree and an event loop this has no
+// other use for. The one-shot commands (remove, prune) call gitutil directly
+// and stay exact — a refusal to delete unsaved work must not read a cache.
+const gitScanWindow = 30 * time.Second
+
+var (
+	dirtyCache  cached[bool]
+	mergedCache cached[map[string]bool]
+	commitCache cached[gitutil.Commit]
+	topicCache  cached[string]
+)
+
 // renderList writes the worktree table to w and returns one listRow per body
 // line, in the order the lines were printed, which is what lets `ccwt tui` map
 // a screen line back to what's on it, along with every row's cells in full,
@@ -612,7 +673,18 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 			})
 		})
 		if tty {
-			wg.Go(func() { merged[i] = gitutil.MergedBranches(dir) })
+			// "" is "the repo we're in", which names a different repo from one
+			// working directory to the next — so the cache key is where that
+			// resolves to, not the empty string every such caller passes.
+			key := dir
+			if key == "" {
+				key, _ = os.Getwd()
+			}
+			wg.Go(func() {
+				merged[i] = mergedCache.get(key, window(gitScanWindow), func() map[string]bool {
+					return gitutil.MergedBranches(dir)
+				})
+			})
 		}
 	}
 	wg.Wait()
@@ -656,7 +728,17 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 			if r.branch == "" {
 				r.branch = "(detached)"
 			}
-			if commit, err := gitutil.LastCommit(rf.wt.Path); err == nil {
+			// A zero time is how "git had no answer" is cached; no real commit
+			// has one. AGE is still computed fresh off it every round, so the
+			// column keeps counting between the reads.
+			commit := commitCache.get(rf.wt.Path, window(gitScanWindow), func() gitutil.Commit {
+				c, err := gitutil.LastCommit(rf.wt.Path)
+				if err != nil {
+					return gitutil.Commit{}
+				}
+				return c
+			})
+			if !commit.Time.IsZero() {
 				r.age = humanAge(time.Since(commit.Time))
 				r.subject = commit.Subject
 				r.sortTime = commit.Time
@@ -667,7 +749,9 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 			r.topic = topic(sessionSummary(rf.wt.Path), r.subject)
 			if tty {
 				glyph, on := "✓", rf.merged[rf.wt.Branch]
-				if gitutil.Dirty(rf.wt.Path) {
+				if dirtyCache.get(rf.wt.Path, window(gitScanWindow), func() bool {
+					return gitutil.Dirty(rf.wt.Path)
+				}) {
 					glyph, on = "*", true
 				}
 				if activeIn(rf.wt.Path, busy) {
@@ -1135,6 +1219,7 @@ func sessionSummary(worktreePath string) string {
 	}
 	var newest string
 	var newestMod time.Time
+	var newestSize int64
 	for _, e := range entries {
 		if !strings.HasSuffix(e.Name(), ".jsonl") {
 			continue
@@ -1144,13 +1229,20 @@ func sessionSummary(worktreePath string) string {
 			continue
 		}
 		if info.ModTime().After(newestMod) {
-			newest, newestMod = e.Name(), info.ModTime()
+			newest, newestMod, newestSize = e.Name(), info.ModTime(), info.Size()
 		}
 	}
 	if newest == "" {
 		return ""
 	}
-	return summarizeTranscript(filepath.Join(home, ".claude", "projects", slug, newest))
+	// A transcript runs to megabytes and the tui asks every row for one every
+	// couple of seconds; reading and scanning files that haven't moved is the
+	// bulk of what the tui process itself burns. The directory listing above
+	// already knows whether one moved, so keep the last answer until it does.
+	stamp := fmt.Sprintf("%s %d %d", newest, newestMod.UnixNano(), newestSize)
+	return topicCache.get(worktreePath, stamp, func() string {
+		return summarizeTranscript(filepath.Join(home, ".claude", "projects", slug, newest))
+	})
 }
 
 // summarizeTranscript boils one session transcript down to a single line: the
