@@ -1590,6 +1590,32 @@ func TestZshCommandMenu(t *testing.T) {
 	}
 }
 
+// A bare `ccwt` is the tui, since that's what you reach for most; its flags
+// have to work bare too, and naming a subcommand must still pick that one.
+func TestDefaultCommandIsTui(t *testing.T) {
+	parser, err := kong.New(&cli, kong.Name("ccwt"), kong.Vars{"version": "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{nil, "tui"},
+		{[]string{"-g"}, "tui"},
+		{[]string{"list"}, "list"},
+	} {
+		ctx, err := parser.Parse(tc.args)
+		if err != nil {
+			t.Errorf("parse %q: %v", tc.args, err)
+			continue
+		}
+		if got := ctx.Command(); got != tc.want {
+			t.Errorf("ccwt %q ran %q, want %q", tc.args, got, tc.want)
+		}
+	}
+}
+
 // capture runs cmd with stdout redirected and returns what it printed.
 func capture(t *testing.T, cmd interface{ Run() error }) string {
 	t.Helper()
