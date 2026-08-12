@@ -25,6 +25,24 @@ type Config struct {
 	// Columns are the table columns `list` and `tui` show, in the order they
 	// are named here. Unset (or empty) means all of them.
 	Columns []string `toml:"columns"`
+	// TaskCommand is what a queued prompt is handed to when its worktree is
+	// made: the new pane runs `<task_command> "<the prompt>"`.
+	TaskCommand string `toml:"task_command"`
+}
+
+// defaultTaskCommand is what runs a queued prompt when the config says nothing.
+// Claude Code, since these are Claude Code's worktrees.
+const defaultTaskCommand = "claude"
+
+// taskCommand is the argv a queued prompt is appended to. Split on spaces so
+// that the people who want flags ("claude --permission-mode plan") get theirs
+// through, the same way $EDITOR is read below.
+func taskCommand() ([]string, error) {
+	cfg, err := loadConfig()
+	if err != nil {
+		return nil, err
+	}
+	return strings.Fields(cmp.Or(cfg.TaskCommand, defaultTaskCommand)), nil
 }
 
 // defaultBranchPrefix is what a branch is called when the config says nothing:

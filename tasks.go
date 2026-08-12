@@ -140,10 +140,10 @@ func loadTasks() ([]Task, error) {
 	return tasks, rows.Err()
 }
 
-// doneName is what the stand-in row for a removed worktree is called. It reads
-// as a placeholder rather than a worktree because that is what it is: the work
-// it stood for is over, and all that's left of it is what's queued behind it.
-const doneName = "<done>"
+// newName is what a queued prompt whose worktree is gone calls itself in the
+// NAME column: not a worktree yet, but the one it is waiting for is over, so
+// this is next — and opening the row is what makes it.
+const newName = "<new>"
 
 // taskTree is the queued prompts indexed by what each of them is waiting on,
 // which is what it takes to walk a chain down from its worktree without
@@ -165,24 +165,22 @@ func indexTasks(tasks []Task) taskTree {
 	return tt
 }
 
-// orphans is the worktrees of project that have prompts queued on them but no
-// longer exist, in the order the first prompt on each was queued — a removal
-// mustn't shuffle the rows around under the cursor.
-func (tt taskTree) orphans(project string, live map[string]bool) []string {
-	var paths []string
-	seen := map[string]bool{}
-	for _, ts := range tt.roots {
-		for _, t := range ts {
-			if t.Project == project && !live[t.Worktree] && !seen[t.Worktree] {
-				seen[t.Worktree] = true
-				paths = append(paths, t.Worktree)
+// pending is the prompts of project that were queued on a worktree that no
+// longer exists: what the removal of a worktree promotes, from work waiting
+// under it to work waiting for a worktree of its own. Oldest first, the order
+// they were queued in — a removal mustn't shuffle the rows around under the
+// cursor.
+func (tt taskTree) pending(project string, live map[string]bool) []Task {
+	var ts []Task
+	for _, root := range tt.roots {
+		for _, t := range root {
+			if t.Project == project && !live[t.Worktree] {
+				ts = append(ts, t)
 			}
 		}
 	}
-	slices.SortFunc(paths, func(a, b string) int {
-		return cmp.Compare(tt.roots[a][0].ID, tt.roots[b][0].ID)
-	})
-	return paths
+	slices.SortFunc(ts, func(a, b Task) int { return cmp.Compare(a.ID, b.ID) })
+	return ts
 }
 
 // taskCells is a queued prompt as a row of the table: the tree connector in
@@ -195,9 +193,9 @@ func taskCells(t Task, gutter string, depth int) []string {
 }
 
 // addTask queues prompt behind the given row: behind another queued prompt when
-// that's what's selected, and behind a worktree otherwise — including the
-// "<done>" stand-in, whose path is the removed worktree's, so that a chain can
-// go on growing after the worktree it started under is gone.
+// that's what's selected — a "<new>" row included, so a chain can go on growing
+// after the worktree it started under is gone — and behind a worktree
+// otherwise.
 func addTask(parent listRow, prompt string) error {
 	t := Task{Project: parent.project, Prompt: prompt}
 	if parent.task > 0 {
@@ -231,24 +229,44 @@ func updateTask(id int64, prompt string) error {
 	return err
 }
 
-// dropTasks deletes what the selected row stands for, and — through the
-// schema's cascade — everything queued behind it: a chain waits on the prompt
-// above it, so nothing under a deleted one can still happen. On a "<done>"
-// stand-in that's every chain that was waiting on the removed worktree, which
-// is what makes the row itself go away.
-func dropTasks(row listRow) (string, bool) {
+// dropTask deletes a queued prompt and — through the schema's cascade —
+// everything queued behind it: a chain waits on the prompt above it, so nothing
+// under a deleted one can still happen.
+func dropTask(id int64) (string, bool) {
 	db, err := openTasks()
 	if err != nil {
 		return "delete failed: " + err.Error(), false
 	}
 	defer db.Close()
-	if row.task > 0 {
-		_, err = db.Exec(`DELETE FROM task WHERE id = ?`, row.task)
-	} else {
-		_, err = db.Exec(`DELETE FROM task WHERE project = ? AND worktree = ?`, row.project, row.path)
-	}
-	if err != nil {
+	if _, err := db.Exec(`DELETE FROM task WHERE id = ?`, id); err != nil {
 		return "delete failed: " + err.Error(), false
 	}
 	return "deleted", true
+}
+
+// promoteTask turns a queued prompt into the worktree it is about to run in:
+// what was queued behind it now waits on that worktree instead, and the prompt
+// itself is gone — it isn't waiting any more.
+//
+// One transaction, because the two halves are only safe together: a delete that
+// lands without the re-parent takes the rest of the chain with it through the
+// schema's cascade.
+func promoteTask(id int64, path string) error {
+	db, err := openTasks()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE task SET parent = NULL, worktree = ? WHERE parent = ?`, path, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM task WHERE id = ?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
