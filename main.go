@@ -494,7 +494,7 @@ func (c *ListCmd) Run() error {
 	if tty {
 		width, _, _ = term.GetSize(int(os.Stdout.Fd()))
 	}
-	_, err = renderList(os.Stdout, tty, width, projects, nil, !c.NoHeaders)
+	_, _, err = renderList(os.Stdout, tty, width, projects, nil, !c.NoHeaders)
 	return err
 }
 
@@ -511,7 +511,9 @@ type listRow struct{ project, path string }
 
 // renderList writes the worktree table to w and returns one listRow per body
 // line, in the order the lines were printed, which is what lets `ccwt tui` map
-// a screen line back to what's on it.
+// a screen line back to what's on it, along with every worktree's cells in
+// full, keyed by path — the same values before fitTable cuts them down, which
+// is what the tui's details pane shows.
 //
 // tty selects the human-reader decorations (markers, ✓); the tui always asks
 // for them, plain `list` only when stdout is a terminal. width is the terminal
@@ -521,7 +523,7 @@ type listRow struct{ project, path string }
 // holds the roots whose section is folded shut — only the tui has any, since
 // there is nothing to unfold them with on the command line. headers draws the
 // header row; `list --no-headers` is the only caller that doesn't want it.
-func renderList(out io.Writer, tty bool, width int, projects []string, collapsed map[string]bool, headers bool) ([]listRow, error) {
+func renderList(out io.Writer, tty bool, width int, projects []string, collapsed map[string]bool, headers bool) ([]listRow, map[string][]string, error) {
 	global := projects != nil
 	if !global {
 		// "" is the current directory, which is how git reads "the repo we're in".
@@ -529,7 +531,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	}
 	cols, err := listColumns()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	type row struct {
@@ -597,7 +599,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	}
 	wg.Wait()
 	if err := errors.Join(errs...); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// One flat list of worktrees, each still knowing which project it came from.
@@ -701,9 +703,16 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 		table = append(table, head)
 	}
 	var lines []listRow
+	details := map[string][]string{}
 	emit := func(r row) {
 		lines = append(lines, listRow{r.project, r.path})
-		table = append(table, pick(r.name, r.branch, r.age, r.claude, r.topic))
+		cells := []string{r.name, r.branch, r.age, r.claude, r.topic}
+		table = append(table, pick(cells...)) // pick copies, so cells is ours to keep
+		// The pane names the worktree rather than repeating the row: the two
+		// glyphs the name leads with say where you are and whether it's safe to
+		// remove, and neither is something to copy out of a details view.
+		cells[0] = filepath.Base(r.path)
+		details[r.path] = cells
 	}
 	if !global {
 		for _, r := range rows {
@@ -750,7 +759,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	for _, r := range table {
 		fmt.Fprintln(w, strings.Join(r, "\t"))
 	}
-	return lines, w.Flush()
+	return lines, details, w.Flush()
 }
 
 // The glyphs TOPIC is prefixed with, saying where the line came from: Claude
