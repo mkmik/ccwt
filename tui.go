@@ -502,8 +502,8 @@ func (u *ui) frame() ([]string, error) {
 	// it's up — the tick would otherwise re-run the git and lsof scan behind a
 	// list nobody can see.
 	if u.detail != nil {
-		lines := detailPane(u.detail, cols)
 		body := max(rows-1, 1)
+		lines := detailPane(u.detail, cols, body)
 		for len(lines) < body {
 			lines = append(lines, "")
 		}
@@ -583,27 +583,51 @@ func (u *ui) frame() ([]string, error) {
 // the config draws — hiding a column from the table is about what the list is
 // for, and the pane is where you go for the value itself.
 //
-// Nothing is drawn around it: a border lands in the middle of any selection
-// made with the mouse, and copying a value out is what this is for. The bar
-// across the top names the worktree and says the pane is up.
+// It's drawn as a window inset from the screen edge rather than a screen of
+// its own, so it reads as a look at one row of the list you're still in. The
+// margin gives way first on a small terminal, then the border stays: the
+// values are the point, the framing isn't. Its top edge names the worktree.
+//
+// The border is the price of that: a drag-select that overshoots the value
+// picks up a "│", and copying a value out is what the pane is for. Landing it
+// a cell out from the text keeps an ordinary drag clear of it.
 //
 // ponytail: no scrolling — five values fit any terminal worth running the tui
 // in. Give it a window like the list's if the pane grows.
-func detailPane(cells []string, cols int) []string {
+func detailPane(cells []string, cols, rows int) []string {
 	all := allColumns()
 	label := 0
 	for _, c := range all {
 		label = max(label, len(c.name))
 	}
-	lines := []string{highlight(" "+cells[0]+" ", cols), ""}
+	mx := min(4, max(cols-64, 0)/2) // a few cells of margin, where there's room
+	inner := max(cols-2*mx-2, 1)    // the border takes a cell either side
+	pad := strings.Repeat(" ", mx)
+	row := func(s string) string {
+		r := []rune(s)
+		if len(r) > inner {
+			r = r[:inner]
+		}
+		return pad + "│" + string(r) + strings.Repeat(" ", inner-len(r)) + "│"
+	}
+
+	var body []string
 	for _, c := range all {
 		head := fmt.Sprintf(" %-*s  ", label, c.name)
-		for _, l := range wrap(cells[c.i], max(cols-len(head), 1)) {
-			lines = append(lines, head+l)
+		for _, l := range wrap(cells[c.i], max(inner-len(head)-1, 1)) {
+			body = append(body, row(head+l))
 			head = strings.Repeat(" ", len(head))
 		}
 	}
-	return lines
+
+	title := []rune("─ " + cells[0] + " ")
+	if len(title) > inner {
+		title = title[:inner]
+	}
+	lines := append([]string{pad + "┌" + string(title) + strings.Repeat("─", inner-len(title)) + "┐"}, body...)
+	lines = append(lines, pad+"└"+strings.Repeat("─", inner)+"┘")
+	// Vertical margin only out of what's left over — the values come first.
+	return append(make([]string, min(2, max(rows-len(lines), 0)/2)), lines...)
 }
 
 // wrap breaks s into lines of at most width runes: at a space where there is

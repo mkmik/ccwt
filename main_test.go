@@ -1198,14 +1198,39 @@ func TestDetailPaneShowsWhatTheTableCut(t *testing.T) {
 		t.Fatalf("pane is %d lines, want the 12 the terminal has", len(lines))
 	}
 	joined := strings.Join(lines, "\n")
+	// The pane is a window with a border, so a wrapped value has the frame's
+	// right and left edges between its halves: dropping them is what turns the
+	// pane back into the text it wrapped.
+	text := strings.Join(strings.Fields(strings.ReplaceAll(joined, "│", "")), " ")
 	for _, want := range []string{filepath.Base(path), "worktree-exceedingly-verbose-worktree-name", subject} {
-		if !strings.Contains(strings.Join(strings.Fields(joined), " "), want) {
+		if !strings.Contains(text, want) {
 			t.Errorf("pane doesn't show %q:\n%s", want, joined)
 		}
 	}
 	for _, line := range lines[1 : len(lines)-1] { // the bars carry escapes of their own
 		if got := len([]rune(line)); got > 60 {
 			t.Errorf("pane line is %d columns wide: %q", got, line)
+		}
+	}
+
+	// On a terminal with room to spare the pane sits in from every edge: the
+	// gap is what says it's a look at one row of the list rather than a screen
+	// of its own. A cramped terminal spends that space on the values instead,
+	// which is the 60-column pane above.
+	termSize = func() (int, int) { return 100, 24 }
+	if lines, err = u.frame(); err != nil {
+		t.Fatal(err)
+	}
+	top := slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(strings.TrimSpace(l), "┌") })
+	if top < 1 {
+		t.Fatalf("pane starts on line %d, want it inset from the top:\n%s", top, strings.Join(lines, "\n"))
+	}
+	for _, line := range lines[top : len(lines)-1] {
+		if line == "" {
+			continue // below the pane's bottom edge
+		}
+		if !strings.HasPrefix(line, "  ") || len([]rune(line)) >= 100 {
+			t.Errorf("pane line isn't inset from the sides: %q", line)
 		}
 	}
 }
