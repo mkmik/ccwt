@@ -105,7 +105,7 @@ status bar along the bottom:
 * * dreamy-foraging-hickey  worktree-dreamy-…-hickey  2h   yes     ✳ Goal was a widget on the dashboard; it's built and…
   ✓ calm-baking-otter       worktree-calm-bak…-otter  1d   no      ⎇ Fix the flux capacitor
 
- ccwt  q:quit  p:pull  /:search  x:new  space:open  d:details  r:remove │ main  ↑1 ↓2
+ ccwt  q:quit  p:pull  /:search  x:new  space:open  n:queue  d:details  r:remove │ main ↑1
 ```
 
 `q` (or Ctrl-C) quits, `p` runs `git pull` and reports the result in the bar. The rest of
@@ -121,9 +121,9 @@ appear only under [Herdr](#herdr-integration-optional).
 
 `d` opens the selected worktree's details as a window over the list: every column's value in
 full, one per line and wrapped to the width, instead of the row the table had to cut down to
-fit. It's modal — `esc` closes it, and while it's up the other keys do nothing and the list
-behind it holds still. Every column the table knows about is in there, including any the
-config leaves out of the list.
+fit. It's modal — `esc` closes it, and while it's up the other keys do nothing (bar `e` on a
+[queued prompt](#queued-prompts)) and the list behind it holds still. Every column the table
+knows about is in there, including any the config leaves out of the list.
 
 ```
     NAME                  BRANCH                    AGE  CLAUDE  TOPIC
@@ -137,6 +137,70 @@ config leaves out of the list.
     │         numbers on it are still the mocked ones                                │
     └────────────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Queued prompts
+
+Work you've thought of but can't start yet — because it needs the worktree you're in to be
+finished first — goes on the list as a prompt queued behind it. `n`, for what to do next,
+opens a box over the middle of the list, and what you type there is recorded under the
+selected row:
+
+```
+    NAME                    BRANCH                    AGE  CLAUDE  TOPIC
+* * dreamy-foraging-hickey  worktree-dreamy-…-hickey  2h   yes     ✳ Goal was a widget on…
+  ✓ calm-baking-otter       worktree-calm-bak…-otter  1d   no      ⎇ Fix the flux capacitor
+          ┌─ dreamy-foraging-hickey ──────────────────────────┐
+          │ rebase onto main, open the PR, and then port the  │
+          │ widget to the mobile layout█                      │
+          │                                                   │
+          └───────────────────────────────────────────────────┘
+
+ ↵:queue  esc:cancel
+```
+
+It's three fifths of the terminal, that size whatever is in it — a box that grew as you
+typed would shift the list behind it line by line — and the row the prompt will hang off is
+one of the ones still showing around it. `↵` records it, `esc` throws it away. Behind
+another queued prompt the box's top rule names that prompt instead, since a chain can have
+several links and the worktree's name wouldn't say which one you're extending.
+
+Once recorded it's a row of the list:
+
+```
+    NAME                    BRANCH                    AGE  CLAUDE  TOPIC
+* * dreamy-foraging-hickey  worktree-dreamy-…-hickey  2h   yes     ✳ Goal was a widget on…
+    ↳                                                 4m           rebase onto main and open the PR
+      ↳                                               3m           then port the widget to the mobile layout
+  ✓ calm-baking-otter       worktree-calm-bak…-otter  1d   no      ⎇ Fix the flux capacitor
+```
+
+`n` on a queued prompt queues another one behind *that* one instead, so a chain of "and
+then" is a tree hanging off the worktree it starts from. `d` shows a long prompt in full in
+the details pane, and `r` deletes one — along with everything queued behind it, since
+nothing waiting on a prompt that isn't going to happen can happen either.
+
+`e` in that details pane — where the prompt is legible in full, which is where you notice it
+needs a word changing — reopens it in the same box for rewriting. The edit box takes the
+pane's place rather than stacking on it, `↵` saves, and the prompt stays where it is in the
+chain: whatever was waiting on it still is.
+
+`n` is also vim's next-match key, and while a search pattern is in force that's what it
+stays: `/`, then `n` and `N` to walk the matches, and `esc` to clear the pattern and get the
+queue key back. The bar says which one is live.
+
+Removing the worktree does *not* take the chain with it. What's left is a bare `<done>` row
+where the worktree was, with the prompts still under it:
+
+```
+    NAME                    BRANCH                    AGE  CLAUDE  TOPIC
+  ✓ calm-baking-otter       worktree-calm-bak…-otter  1d   no      ⎇ Fix the flux capacitor
+    <done>                                                         dreamy-foraging-hickey
+    ↳                                                 2h           rebase onto main and open the PR
+```
+
+The queue lives in `$XDG_STATE_HOME/ccwt/tasks.db` (`~/.local/state/ccwt/tasks.db` by
+default) — one SQLite database for every project, so a prompt queued in a project's own tui
+shows up in `tui -g` and the other way round, within a refresh interval either way.
 
 `/` searches, as in vim or less: type a pattern into the bar and the selection moves to the
 match as you type, `enter` accepts it, `esc` puts back the pattern and the row you started
@@ -335,7 +399,7 @@ swallow stderr, or you'll lose the cwd report.
 | `ccwt new [name]` | Create a worktree under `.claude/worktrees/<name>` on a new branch `worktree-<name>`, and print `<name>`. Generates a name if omitted; reuses an existing worktree of the same name. `--switch <branch>` checks the worktree out on an existing branch instead of creating one (`ccwt new` + `git switch <branch>`). When run inside a worktree it returns the enclosing one instead of creating a new one (override with `--force-create`). `--path` prints the worktree's absolute path instead of `<name>`. |
 | `ccwt cd <name>` | `cd` into an existing worktree under `.claude/worktrees/<name>` (with shell integration) — never creates it, errors if it doesn't exist, and the name is required. `ccwt cd ..` is shorthand for `ccwt ..`, and `ccwt cd -` jumps to the previous directory (`$OLDPWD`), like the shell's `cd -`. |
 | `ccwt list` | List the repo's Claude Code worktrees with branch, age, running-session status, and last commit, sorted newest-first. `-g` lists every project in `$XDG_CONFIG_HOME/ccwt/config.toml` instead, a section per project. `--no-headers` leaves out the header row, for feeding the table to `cut`, `awk` or a shell loop. |
-| `ccwt tui` | The default command, so a bare `ccwt` runs it. Show the `ccwt list` table full-screen, refreshing in place without flicker, over a status bar showing how far the current branch is ahead/behind its upstream. `q` (or Ctrl-C) quits, `p` runs `git pull`. Arrow keys (or `j`/`k`) select a worktree, a click on its row selects it, `/` (or `?`) searches the way vim does — incrementally, case-insensitive regexp, all matches highlighted, `n`/`N` for the next and previous; `d` shows the selected worktree's column values in full in a pane over the list (`esc` closes it), and `r` removes it, like `ccwt remove`. `-g` spans the configured projects as a foldable section each (`↵`, or a double-click on the header, folds one shut) and ignores the current directory entirely, every action (`p` included) applying to the selected row's project. `--interval` (default `2s`) sets the refresh rate, `--fetch` (default `1m`) how often `origin/main` is fetched in the background. The bar also says when the `ccwt` binary underneath it has been upgraded, and to which version. Under [Herdr](#herdr-integration-optional) `space` opens the selected worktree as a workspace (double-click does too) and `x` creates one and opens it. |
+| `ccwt tui` | The default command, so a bare `ccwt` runs it. Show the `ccwt list` table full-screen, refreshing in place without flicker, over a status bar showing how far the current branch is ahead/behind its upstream. `q` (or Ctrl-C) quits, `p` runs `git pull`. Arrow keys (or `j`/`k`) select a worktree, a click on its row selects it, `/` (or `?`) searches the way vim does — incrementally, case-insensitive regexp, all matches highlighted, `n`/`N` for the next and previous while a pattern is in force; `d` shows the selected worktree's column values in full in a pane over the list (`esc` closes it), and `r` removes it, like `ccwt remove`. `n` with no pattern in force queues a prompt behind the selected row — work to start once that worktree (or the prompt above it) is finished — typed into a box over the list and drawn as a tree under the row it waits on, kept in `$XDG_STATE_HOME/ccwt/tasks.db` and so shared with every other `ccwt` running; `e` in a queued prompt's details pane rewrites it in place, `r` deletes it and everything queued behind it, and removing the worktree leaves the chain under a `<done>` row. `-g` spans the configured projects as a foldable section each (`↵`, or a double-click on the header, folds one shut) and ignores the current directory entirely, every action (`p` included) applying to the selected row's project. `--interval` (default `2s`) sets the refresh rate, `--fetch` (default `1m`) how often `origin/main` is fetched in the background. The bar also says when the `ccwt` binary underneath it has been upgraded, and to which version. Under [Herdr](#herdr-integration-optional) `space` opens the selected worktree as a workspace (double-click does too) and `x` creates one and opens it. |
 | `ccwt remove <name>` | Remove the worktree at `.claude/worktrees/<name>` and delete its branch. `.` means the worktree you're currently in; removing the one you're in cds you to the repo root, like `ccwt ..`. The branch is deleted only if merged: an unmerged branch refuses the whole removal, worktree included, so nothing is stranded, and so does a worktree with uncommitted changes, and so does one with an agent working in it (the `✳` of `ccwt list`). Pass `-D` to remove anyway (unmerged branch deleted, uncommitted changes thrown away, working agent interrupted), or `--keep-branch` to remove only the worktree. Under [Herdr](#herdr-integration-optional) the worktree's workspace is closed first, once those checks pass. |
 | `ccwt done` | Finish with the worktree you're in: `ccwt remove .`, and then — under [Herdr](#herdr-integration-optional) — close the workspace you're sitting in, the one `remove` leaves alone. Same checks and same flags (`-D`, `--keep-branch`); a refusal leaves the workspace open. Outside Herdr it's just `ccwt remove .`. |
 | `ccwt gc` | Remove every worktree that's finished with: branch already merged (the `✓` of `ccwt list`), nothing uncommitted in it (no `*`), no agent working in it (no `✳`) and no Claude Code session running in it (a `no` in the `CLAUDE` column). Prints the list it found and asks before touching anything — `-y`/`--yes` skips the question. Each removal is exactly what `ccwt remove <name>` does, branch included. The worktree you're standing in is never removed — it says so on stderr and leaves it to `ccwt remove .`. |

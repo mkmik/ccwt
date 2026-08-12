@@ -120,7 +120,7 @@ func (c *TuiCmd) Run() error {
 	}
 	open := func() error {
 		path := u.sel.path
-		if path == "" || !underHerdr() {
+		if !u.sel.worktree() || !underHerdr() {
 			return nil
 		}
 		return act("opening "+filepath.Base(path)+"…", func() string { return herdrOpen(path, "") })
@@ -131,11 +131,11 @@ func (c *TuiCmd) Run() error {
 	// misfire into opening a worktree; a click can't, since it names the row it
 	// means.
 	activate := func() error {
-		if u.sel.path == "" {
-			u.toggle()
-			return nil
+		if u.sel.worktree() {
+			return open()
 		}
-		return open()
+		u.toggle()
+		return nil
 	}
 
 	for {
@@ -152,18 +152,26 @@ func (c *TuiCmd) Run() error {
 			u.checkUpgrade()
 		case k := <-keys:
 			switch {
-			// While the search prompt is up every keystroke is text, so this
-			// comes first: `q` there is a letter, not the quit key.
+			// While either prompt is up every keystroke is text, so these come
+			// first: `q` there is a letter, not the quit key.
+			case u.entry.open:
+				u.queue(k)
 			case u.typing:
 				u.edit(k)
 			// The details pane is modal, so it comes next: while it's up, esc
 			// closes it and nothing else reaches the list underneath.
 			case u.detail != nil:
-				switch k {
-				case "\x1b":
+				switch {
+				case k == "\x1b":
 					u.detail = nil
-				case "\x03":
+				case k == "\x03":
 					return nil
+				// The pane is where a long prompt is legible in full, so it's
+				// where rewriting one belongs. The edit box takes the pane's
+				// place rather than stacking on it: one modal at a time.
+				case k == "e" && u.sel.task > 0:
+					u.entry = entry{parent: u.sel, text: u.detail[4], open: true, id: u.sel.task}
+					u.detail = nil
 				}
 			case k == "q", k == "\x03": // \x03 = Ctrl-C, which raw mode delivers as a keystroke
 				return nil
@@ -183,6 +191,17 @@ func (c *TuiCmd) Run() error {
 				u.prompt(1)
 			case k == "?":
 				u.prompt(-1)
+			// `n` is what to do next: queue a prompt behind the selected row —
+			// a worktree, or another prompt. A section header is not something
+			// work can wait for.
+			//
+			// Unless a search is in force, where `n` is vim's next match, as it
+			// has to be for the pattern you just typed to be walkable at all.
+			// `esc` clears the pattern and gives the key back.
+			case k == "n" && u.query == "":
+				if u.sel.worktree() || u.sel.task != 0 {
+					u.entry = entry{parent: u.sel, open: true}
+				}
 			case k == "n":
 				u.seek(u.dir)
 			case k == "N":
@@ -197,7 +216,17 @@ func (c *TuiCmd) Run() error {
 				u.toggle()
 			case k == "d":
 				// Nothing selected, or a section header: no cells, no pane.
-				u.detail = u.cells[u.sel.path]
+				u.detail = u.cells[u.sel]
+			// `r` removes whatever the row stands for: the worktree, or — on a
+			// queued prompt, and on the "<done>" stand-in that outlived one — the
+			// chain waiting under it.
+			case k == "r" && u.sel.task != 0:
+				msg, ok := dropTasks(u.sel)
+				if ok {
+					u.dropSelected()
+				}
+				u.msg = msg
+				u.stale()
 			case k == "r":
 				if path := u.sel.path; path != "" {
 					if err := act("removing "+filepath.Base(path)+"…", func() string {
@@ -246,6 +275,8 @@ type ui struct {
 	anchor listRow
 	typing bool // the prompt is up and taking keystrokes
 
+	entry entry // the queue prompt, when it's up
+
 	// What the binary on disk looked like when this tui started, and the notice
 	// that goes in the bar once it stops looking like that — see checkUpgrade.
 	stamp   string
@@ -264,19 +295,21 @@ type ui struct {
 	// lsof scan behind it (half a second on a big repo, once per keypress).
 	// stale() drops it whenever something that would change the list happens;
 	// otherwise it's the interval tick that refreshes it.
-	body  []string            // rendered table, header line included
-	all   []listRow           // one per body line after the header
-	cols  int                 // the width body was rendered at
-	div   map[string]string   // repo -> its status-bar divergence, same lifetime
-	cells map[string][]string // worktree path -> its cells in full, same lifetime
+	body  []string             // rendered table, header line included
+	all   []listRow            // one per body line after the header
+	cols  int                  // the width body was rendered at
+	div   map[string]string    // repo -> its status-bar divergence, same lifetime
+	cells map[listRow][]string // row -> its cells in full, same lifetime
 }
 
 // stale drops the cached list, so the next frame reads it again — except while
-// the details pane is up, where the list is the frozen backdrop it sits on: a
-// refresh would shuffle rows nobody can reach, and re-run the git and lsof scan
-// behind a list nobody is reading.
+// a pane is up, where the list is the frozen backdrop it sits on: a refresh
+// would shuffle rows nobody can reach, and re-run the git and lsof scan behind
+// a list nobody is reading. The queue prompt counts: typing a sentence takes
+// long enough for several ticks, and rows sliding about behind the box you're
+// typing into is nothing but distraction.
 func (u *ui) stale() {
-	if u.detail == nil {
+	if u.detail == nil && !u.entry.open {
 		u.body = nil
 	}
 }
@@ -343,12 +376,9 @@ func (u *ui) prompt(d int) {
 	u.anchor, u.msg, u.typing = u.sel, "", true
 }
 
-// edit feeds one keystroke to the prompt: enter accepts the match, escape (and
-// Ctrl-C) abandons the whole search, backspace rubs out a rune, and anything
-// printable is appended — a multi-byte rune arrives as its bytes, in order,
-// which is what this appends. Escape sequences (arrows, mouse reports) are
-// ignored: they're several bytes but only the first is under 0x20, so they'd
-// otherwise land in the pattern as garbage.
+// edit feeds one keystroke to the search prompt: enter accepts the match,
+// escape (and Ctrl-C) abandons the whole search, and anything typeKey takes as
+// text re-runs the search as it goes.
 func (u *ui) edit(k string) {
 	switch k {
 	case "\r", "\n":
@@ -356,17 +386,74 @@ func (u *ui) edit(k string) {
 		u.report(u.preview())
 	case "\x1b", "\x03":
 		u.search, u.sel, u.typing = u.saved, u.anchor, false
-	case "\x7f", "\b":
-		if r := []rune(u.query); len(r) > 0 {
-			u.query = string(r[:len(r)-1])
-			u.preview()
-		}
 	default:
-		if len(k) == 1 && k[0] >= ' ' {
-			u.query += k
+		if q := typeKey(u.query, k); q != u.query {
+			u.query = q
 			u.preview()
 		}
 	}
+}
+
+// entry is the line a queued prompt is typed into: the text so far and the row
+// it will hang off, snapshotted when the prompt opened so that a tick that
+// re-reads the list underneath can't move it. Kept apart from the search prompt
+// because the two share only the typing: a search runs on every keystroke, a
+// queued prompt is recorded once, when it's finished.
+type entry struct {
+	parent listRow
+	text   string
+	open   bool
+	id     int64 // the queued prompt being rewritten; 0 when this is a new one
+}
+
+// queue feeds one keystroke to the queue prompt: enter records what's been
+// typed, escape drops it, and everything else is text. A write that fails
+// leaves the prompt up with the text still in it — retyping a paragraph
+// because the database was busy is not a reasonable thing to ask.
+//
+// Emptying an existing prompt and pressing enter is not a delete: `r` on the
+// row is, and it says so. Here it's the same as escape.
+func (u *ui) queue(k string) {
+	switch k {
+	case "\r", "\n":
+		if u.entry.text == "" { // nothing typed: same as abandoning it
+			u.entry = entry{}
+			return
+		}
+		err, done := error(nil), "queued"
+		if u.entry.id != 0 {
+			err, done = updateTask(u.entry.id, u.entry.text), "saved"
+		} else {
+			err = addTask(u.entry.parent, u.entry.text)
+		}
+		if err != nil {
+			u.msg = done + " failed: " + err.Error()
+			return
+		}
+		u.entry, u.msg = entry{}, done
+		u.stale()
+	case "\x1b", "\x03":
+		u.entry = entry{}
+	default:
+		u.entry.text = typeKey(u.entry.text, k)
+	}
+}
+
+// typeKey applies one keystroke to a line being typed: backspace rubs out a
+// rune, and anything printable is appended — a multi-byte rune arrives as its
+// bytes, in order, which is what this appends. Escape sequences (arrows, mouse
+// reports) are ignored: they're several bytes but only the first is under 0x20,
+// so they'd otherwise land in the text as garbage.
+func typeKey(s, k string) string {
+	switch {
+	case k == "\x7f", k == "\b":
+		if r := []rune(s); len(r) > 0 {
+			return string(r[:len(r)-1])
+		}
+	case len(k) == 1 && k[0] >= ' ':
+		return s + k
+	}
+	return s
 }
 
 // preview is the search as run while it's being typed: always from the row the
@@ -443,7 +530,7 @@ func (u *ui) re() *regexp.Regexp {
 // toggle folds the selected project's section shut, or opens it back up. Only
 // section headers fold, and only -g draws any.
 func (u *ui) toggle() {
-	if u.sel.path != "" || u.sel.project == "" {
+	if !u.sel.section() {
 		return
 	}
 	if u.collapsed == nil {
@@ -567,14 +654,36 @@ func (u *ui) frame() ([]string, error) {
 				lines[i] = l
 			}
 		}
-		return append(lines[:body], highlight(" esc:close ", cols)), nil
+		keys := " esc:close "
+		if u.sel.task > 0 { // a queued prompt: its text is ours to rewrite
+			keys = " e:edit  esc:close "
+		}
+		return append(lines[:body], highlight(keys, cols)), nil
 	}
 
-	// While the prompt is up it takes the whole bar, as it does in vim: the key
-	// hints have nothing to say about a line you're typing into.
+	// The queue prompt is a modal of the same kind, and for the same reason: the
+	// row the prompt will hang off is one of the ones still showing around it.
+	// A search goes in the bar because it acts on the list as you type it; this
+	// doesn't act on anything until it's finished, and it's a sentence rather
+	// than a pattern, so it gets the room to be read back.
+	if u.entry.open {
+		for i, l := range entryPane(u.entry.text, u.entryTitle(), cols, body) {
+			if l != "" && i < body {
+				lines[i] = l
+			}
+		}
+		keys := " ↵:queue  esc:cancel "
+		if u.entry.id != 0 {
+			keys = " ↵:save  esc:cancel "
+		}
+		return append(lines[:body], highlight(keys, cols)), nil
+	}
+
+	// While the search prompt is up it takes the whole bar, as it does in vim:
+	// the key hints have nothing to say about a line you're typing into.
 	// The restart notice outlasts the transient messages but yields to them
 	// while one is up: they're a second old, and it will still be true after.
-	bar := statusBar(cols, cmp.Or(u.msg, u.restart), u.sel, u.divergence())
+	bar := statusBar(cols, cmp.Or(u.msg, u.restart), u.sel, u.divergence(), u.query != "")
 	if u.typing {
 		p := "/"
 		if u.dir < 0 {
@@ -583,6 +692,24 @@ func (u *ui) frame() ([]string, error) {
 		bar = highlight(p+u.query, cols)
 	}
 	return append(lines[:body], bar), nil
+}
+
+// entryTitle is what the queue prompt's top rule says it is queueing behind:
+// the worktree, or — behind another prompt — that prompt, since one worktree's
+// chain can have several links and "after dreamy-foraging-hickey" wouldn't say
+// which. Empty until the list has been drawn once, which in the tui it always
+// has: the prompt opens on a row that was on screen.
+func (u *ui) entryTitle() string {
+	cells := u.cells[u.entry.parent]
+	switch {
+	case u.entry.id != 0:
+		return "edit" // rewriting one, not queueing behind it
+	case len(cells) == 0:
+		return ""
+	case u.entry.parent.task > 0:
+		return cells[4] // TOPIC: the prompt this one waits on
+	}
+	return cells[0] // NAME: the worktree, or the "<done>" it left behind
 }
 
 // detailPane is the details modal: the selected worktree's cells laid out one
@@ -616,13 +743,7 @@ func detailPane(cells []string, cols, rows int) []string {
 	mx := min(4, max(cols-64, 0)/2) // a few cells of margin, where there's room
 	inner := max(cols-2*mx-2, 1)    // the border takes a cell either side
 	pad := strings.Repeat(" ", mx)
-	row := func(s string) string {
-		r := []rune(s)
-		if len(r) > inner {
-			r = r[:inner]
-		}
-		return pad + "│" + string(r) + strings.Repeat(" ", inner-len(r)) + "│"
-	}
+	row := paneRow(pad, inner)
 
 	var body []string
 	for _, c := range all {
@@ -633,14 +754,68 @@ func detailPane(cells []string, cols, rows int) []string {
 		}
 	}
 
-	title := []rune("─ " + cells[0] + " ")
-	if len(title) > inner {
-		title = title[:inner]
-	}
-	lines := append([]string{pad + "┌" + string(title) + strings.Repeat("─", inner-len(title)) + "┐"}, body...)
-	lines = append(lines, pad+"└"+strings.Repeat("─", inner)+"┘")
+	lines := paneBox(pad, inner, cells[0], body)
 	// Vertical margin only out of what's left over — the values come first.
 	return append(make([]string, min(2, max(rows-len(lines), 0)/2)), lines...)
+}
+
+// paneRow draws one line of a pane's interior: s inside the border, cut or
+// padded to the pane's width. Shared by the panes so their edges line up.
+func paneRow(pad string, inner int) func(string) string {
+	return func(s string) string {
+		r := []rune(s)
+		if len(r) > inner {
+			r = r[:inner]
+		}
+		return pad + "│" + string(r) + strings.Repeat(" ", inner-len(r)) + "│"
+	}
+}
+
+// paneBox puts the rules on the top and bottom of a pane's body, with title in
+// the top one.
+func paneBox(pad string, inner int, title string, body []string) []string {
+	t := []rune("─ " + title + " ")
+	if len(t) > inner {
+		t = t[:inner]
+	}
+	lines := append([]string{pad + "┌" + string(t) + strings.Repeat("─", inner-len(t)) + "┐"}, body...)
+	return append(lines, pad+"└"+strings.Repeat("─", inner)+"┘")
+}
+
+// entryPane is the queue prompt: the text as it's typed, in a window over the
+// middle of the list. A window rather than a line in the status bar because
+// what you type here isn't a pattern acting on the list as it goes — it's a
+// sentence, worth the room to read back before committing to it, and the row
+// it will hang off is one of the ones still showing around the box.
+//
+// Three fifths of the terminal, centred, and that size whatever is in it: a box
+// that grew as you typed would shift the list behind it line by line. Text past
+// what it holds scrolls, keeping the end — where the caret is — in view.
+//
+// ponytail: the text is word-wrapped with the details pane's wrap(), so a run
+// of spaces shows as one space. What's stored is exactly what was typed; only
+// the drawing collapses. Write a space-preserving wrap if that ever grates.
+func entryPane(text, title string, cols, rows int) []string {
+	w := min(max(cols*3/5, 24), cols)
+	h := min(max(rows*3/5, 3), rows)
+	inner := max(w-2, 1)
+	pad := strings.Repeat(" ", max(cols-w, 0)/2)
+	row := paneRow(pad, inner)
+
+	// The caret is drawn rather than left to the terminal's own: the tui hides
+	// that one, and moving it would mean tracking where on the screen the text
+	// happens to have wrapped to.
+	var body []string
+	for _, l := range wrap(text+"█", max(inner-2, 1)) {
+		body = append(body, row(" "+l))
+	}
+	for len(body) < h-2 {
+		body = append(body, row(""))
+	}
+	body = body[len(body)-max(h-2, 0):]
+
+	lines := paneBox(pad, inner, title, body)
+	return append(make([]string, max(rows-len(lines), 0)/2), lines...)
 }
 
 // wrap breaks s into lines of at most width runes: at a space where there is
@@ -873,18 +1048,30 @@ func splitKeys(s string) []string {
 // and the herdr ones only when there's a herdr to open a workspace in. A
 // section header has nothing to open and nothing to remove — ↵ folds it, and
 // that's all it takes.
-func statusBar(cols int, msg string, sel listRow, div string) string {
+//
+// searching says a pattern is in force, which is the one thing on this line
+// that changes what a key does rather than just whether it applies: `n` walks
+// the matches then, and queues a prompt the rest of the time. The bar is where
+// that's visible, so it says which.
+func statusBar(cols int, msg string, sel listRow, div string, searching bool) string {
 	herdr := underHerdr()
 	keys := " ccwt  q:quit  p:pull  /:search"
+	queue := "  n:queue"
+	if searching {
+		keys += "  n:next  N:prev"
+		queue = ""
+	}
 	if herdr {
 		keys += "  x:new"
 	}
 	switch {
-	case sel.path != "":
+	case sel.worktree():
 		if herdr {
 			keys += "  space:open"
 		}
-		keys += "  d:details  r:remove"
+		keys += queue + "  d:details  r:remove"
+	case sel.task != 0: // a queued prompt, or the stand-in for a removed worktree
+		keys += queue + "  d:details  r:delete"
 	case sel.project != "":
 		keys += "  ↵:fold"
 	}
