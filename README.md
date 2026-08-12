@@ -26,9 +26,7 @@ snippet from your shell's rc file:
 source <(ccwt init zsh)
 ```
 
-The snippet defines a thin `ccwt` shell function that wraps the binary and performs the
-`cd` for you. Everything still works without it — you just won't get the automatic
-directory change.
+Everything still works without it — you just won't get the automatic directory change.
 
 Under zsh the same snippet also installs completion: `ccwt <TAB>` lists the commands,
 and `ccwt cd <TAB>` (like `remove` and `lock`) lists the worktrees of the repo you're
@@ -49,25 +47,20 @@ ccwt remove .       # ... or the one you're in: deletes it and cds you out
 ccwt gc             # ... or all the finished ones at once, after confirming
 ```
 
+## Creating worktrees
+
 `ccwt new` creates a worktree at `.claude/worktrees/<name>` on a new branch
-`worktree-<name>` (the prefix is [configurable](#several-projects-at-once)). With no name it
-generates one (e.g. `dreamy-foraging-hickey`); pass a name to choose your own. Run from inside an existing worktree, `ccwt new` returns that
-worktree instead of nesting a new one.
-
-`--switch <branch>` checks the new worktree out on an **existing** branch instead of
-creating `worktree-<name>` — the equivalent of `ccwt new` followed by `git switch <branch>`:
+`worktree-<name>` (the prefix is [configurable](#several-projects-at-once)). With no name
+it generates one (e.g. `dreamy-foraging-hickey`); pass a name to choose your own. Run from
+inside an existing worktree, it returns that worktree instead of nesting a new one.
 
 ```sh
-ccwt new --switch foobar          # .claude/worktrees/dreamy-foraging-hickey, on branch foobar
-ccwt new mywt --switch foobar     # .claude/worktrees/mywt, on branch foobar
+ccwt new --switch foobar          # check out an existing branch instead of creating one
+ccwt new mywt --switch foobar     # ... in a worktree of your own name
+ccwt new --path                   # print the absolute path instead of the name
 ```
 
-`--path` prints the worktree's absolute path instead of its name — handy for scripts
-that need to `cd` there or pass it to another tool:
-
-```sh
-ccwt new --path                   # /path/to/repo/.claude/worktrees/dreamy-foraging-hickey
-```
+## Listing worktrees
 
 `ccwt list` renders a table of the repo's worktrees with their branch, age, whether a
 Claude Code session is currently running in each, and what each one is about:
@@ -79,33 +72,29 @@ Claude Code session is currently running in each, and what each one is about:
 ```
 
 Every row leads with two glyphs. The first is a `*` on the worktree you're currently in.
-The second says whether the worktree can go: a `✓` means its branch is already merged into
-`main` (or `master`), so the worktree is safe to `ccwt remove`; a `*` there instead means
-the worktree has uncommitted changes, which isn't safe to remove whatever git makes of the
-branch. A `✳` beats both: [Herdr](https://herdr.dev)
-says an agent is working in there right now — the case git can't see at all, since a branch
-made a minute ago with nothing committed to it is merged and clean. That comes from Herdr
-rather than from Claude Code, so it holds for whatever agent is running in the worktree.
+The second says whether the worktree can go: `✓` means its branch is already merged into
+`main` (or `master`), so it's safe to `ccwt remove`; `*` means it has uncommitted changes,
+which isn't safe to remove whatever git makes of the branch; `✳` beats both and means an
+agent is working in there right now — see [Herdr integration](#herdr-integration-optional).
 The glyphs are omitted when stdout isn't a terminal, so piped output stays parseable.
 
-TOPIC says what the worktree is about, and the glyph says where that came from. `✳` is a
+TOPIC says what the worktree is about, and its glyph says where that came from. `✳` is a
 Claude Code session — the newest transcript for that worktree, showing the last recap it
 produced (`/recap`, or one Claude wrote on its own), or the first prompt you typed when it
-never recapped. `⎇` is the last commit, for a worktree nobody has run a session in — where
-the commit is all there is to go on.
+never recapped. `⎇` is the last commit, for a worktree nobody has run a session in.
 
 The table is sized to your terminal, so it never wraps. BRANCH is kept narrow even when
 there's room — it's usually the worktree's own name with a `worktree-` in front — and the
-space goes to TOPIC. When the table has to give up more it takes it from whichever column
-is widest at the time; branches and commit subjects lose their middle rather than their
-tail, since the last word is usually what tells them apart, while a session summary is a
-sentence and simply stops:
+space goes to TOPIC. Branches and commit subjects lose their middle rather than their tail,
+since the last word is usually what tells them apart, while a session summary simply stops:
 
 ```
     NAME                     BRANCH                   AGE  CLAUDE  TOPIC
 * * dreamy-foraging-hickey   worktree-dreamy-…-hickey 2h   yes     ✳ Goal was a widget on…
   ✓ calm-baking-otter        worktree-calm-b…-otter   1d   no      ⎇ Fix the flux ca… (#41)
 ```
+
+## The tui
 
 `ccwt tui` — or just `ccwt`, which is what a bare invocation runs — shows that same table
 full-screen and keeps it up to date, repainting in place so it doesn't flicker, with a
@@ -122,21 +111,19 @@ status bar along the bottom:
 `q` (or Ctrl-C) quits, `p` runs `git pull` and reports the result in the bar. The rest of
 the bar is the branch you launched it from and how far it has drifted from its upstream
 (`↑` ahead, `↓` behind). Those counts are kept honest by a background `git fetch` of
-`origin/main` alone; `--fetch` (default `1m`) sets how often, or `0` never.
-`--interval` (default `2s`) sets the refresh rate. It's meant to be parked in a pane — e.g. the main pane of a
-[Herdr](https://herdr.dev) workspace — as a live view of what's running where.
+`origin/main` alone; `--fetch` (default `1m`) sets how often, or `0` never. `--interval`
+(default `2s`) sets the refresh rate.
 
 The arrow keys (or `j`/`k`) select a worktree, and the bar grows the actions that apply to
-it: `space` opens it as its own Herdr workspace (via `herdr worktree open`, like the plugin in
-`herdr-plugin/`), and `r` removes it — closing its workspace first, and refusing an unmerged
-branch, uncommitted changes or a working agent, exactly like `ccwt remove`.
-Clicking a row selects it, and double-clicking opens it. `x` creates a worktree and opens it — the same thing the
-plugin's **New ccwt worktree** action does, without leaving the list.
+it: `r` removes it, refusing an unmerged branch, uncommitted changes or a working agent,
+exactly like `ccwt remove`. Clicking a row selects it. Two more keys — `x` and `space` —
+appear only under [Herdr](#herdr-integration-optional).
 
 `d` opens the selected worktree's details as a window over the list: every column's value in
 full, one per line and wrapped to the width, instead of the row the table had to cut down to
 fit. It's modal — `esc` closes it, and while it's up the other keys do nothing and the list
-behind it holds still.
+behind it holds still. Every column the table knows about is in there, including any the
+config leaves out of the list.
 
 ```
     NAME                  BRANCH                    AGE  CLAUDE  TOPIC
@@ -151,8 +138,17 @@ behind it holds still.
     └────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Every column the table knows about is in there, including any the config leaves out of the
-list.
+`/` searches, as in vim or less: type a pattern into the bar and the selection moves to the
+match as you type, `enter` accepts it, `esc` puts back the pattern and the row you started
+from, and `n`/`N` walk the rest of the matches forwards and back, wrapping around the ends.
+`?` searches upwards instead. Every match on screen is picked out, not just the selected
+one; a bare `esc` clears them.
+
+The pattern is a [regular expression](https://pkg.go.dev/regexp/syntax), always
+case-insensitive, matched against the whole line as drawn — name, branch, age and topic
+alike, so `/✓` finds the worktrees whose branch is merged and `/yes` the ones with Claude
+running in them. One that doesn't compile simply matches nothing, which is what half of one
+is while you're still typing it.
 
 Something parked in a pane for days goes on running the binary it started from, so the tui
 watches that binary and says so when it's replaced — by `go install`, by a package manager,
@@ -164,26 +160,6 @@ by a downloaded release:
 
 The notice stays up until you do restart it, and the version is the one you'd be restarting
 into (asked of the new binary itself; it's dropped from the line if it won't answer).
-
-`/` searches, as in vim or less: type a pattern into the bar and the selection moves to the
-match as you type, `enter` accepts it, `esc` puts back the pattern and the row you started
-from, and `n`/`N` walk the rest of the matches forwards and back, wrapping around the ends.
-`?` searches upwards instead, and `n` then follows it up the list. Every match on screen is
-picked out, not just the selected one; a bare `esc` clears them.
-
-The pattern is a [regular expression](https://pkg.go.dev/regexp/syntax), always
-case-insensitive, matched against the whole line as drawn — name, branch, age and topic
-alike, so `/✓` finds the worktrees whose branch is merged and `/yes` the ones with Claude
-running in them. One that doesn't compile simply matches nothing, which is what half of one
-is while you're still typing it.
-
-A workspace opened on a *new* worktree is named after the worktree: Herdr would otherwise
-list it under its repo by branch, prefix and all. Reopening one leaves its name alone, so a
-workspace you've renamed yourself stays renamed.
-
-The Herdr actions (`x`, `space`, double-click-to-open) only exist when the tui is itself running in a
-Herdr pane; elsewhere there's no session to open a workspace in, so they're dropped from the
-bar and their keys do nothing.
 
 ## Several projects at once
 
@@ -207,11 +183,11 @@ folded shut. Folding has its own key so that it can't misfire into opening a wor
 It works from anywhere — including outside a git repository — and the directory you launch
 it in takes no part in it: under `-g` the repos are the configured ones and nothing else.
 Every action applies to the project the selected row belongs to: `r` removes from that
-repo, `space` opens that worktree, `x` creates one in that project — on a section header too,
-which is how you make the first worktree in a project that has none — `p` pulls it, and the
-status bar shows that project's branch state. With nothing selected yet there's no repo to
-act on, so those keys say so instead of reaching for the current directory. The background
-`--fetch` covers every configured project.
+repo, `x` creates one in that project — on a section header too, which is how you make the
+first worktree in a project that has none — `p` pulls it, and the status bar shows that
+project's branch state. With nothing selected yet there's no repo to act on, so those keys
+say so instead of reaching for the current directory. The background `--fetch` covers every
+configured project.
 
 The projects come from `$XDG_CONFIG_HOME/ccwt/config.toml` (`~/.config/ccwt/config.toml`
 when that variable isn't set) — each entry the main checkout of a repo, the one whose
@@ -247,6 +223,40 @@ The `*`/`✓`/`✳` markers ride on `name`, so leaving it out leaves them out to
 
 `ccwt config view` prints that file and `ccwt config edit` opens it in `$EDITOR`, either one
 creating an empty file first when you don't have one yet.
+
+## Herdr integration (optional)
+
+[Herdr](https://herdr.dev) manages terminal workspaces for coding agents. `ccwt` doesn't need
+it — everything above works on its own. When Herdr *is* running, these extras appear, and
+this section is the whole of it:
+
+**The `✳` marker.** In `ccwt list` and the tui, `✳` in the leading glyphs means Herdr says an
+agent is working in that worktree right now. It outranks `*` and `✓`, and it's the case git
+can't see at all: a branch made a minute ago with nothing committed to it is merged and clean.
+It comes from Herdr rather than from Claude Code, so it holds for whatever agent is running
+there. `ccwt remove`, `ccwt done` and `ccwt gc` all refuse a worktree marked this way
+(`ccwt remove -D` interrupts the agent anyway).
+
+**Opening workspaces from the tui.** `space` opens the selected worktree as its own Herdr
+workspace (via `herdr worktree open`), and a double-click on its row does the same. `x`
+creates a worktree and opens it without leaving the list. These keys only exist when the tui
+is itself running in a Herdr pane — elsewhere there's no session to open a workspace in, so
+they're dropped from the bar and do nothing.
+
+**Workspace naming.** A workspace opened on a *new* worktree is named after the worktree:
+Herdr would otherwise list it under its repo by branch, prefix and all. Reopening one leaves
+its name alone, so a workspace you've renamed yourself stays renamed.
+
+**Closing workspaces on removal.** Once its checks pass, `ccwt remove` closes the workspace
+open on the worktree, ending the agent living in it. Your own workspace is the exception, so
+an agent can still `ccwt done` on itself — `ccwt done` is `ccwt remove .` plus closing the
+workspace you're sitting in.
+
+**The plugin in `herdr-plugin/`** adds a **New ccwt worktree** action to Herdr — the same
+thing the tui's `x` does.
+
+The tui is meant to be parked in a pane — e.g. the main pane of a Herdr workspace — as a live
+view of what's running where.
 
 ## Using ccwt with Claude Code
 
@@ -325,9 +335,9 @@ swallow stderr, or you'll lose the cwd report.
 | `ccwt new [name]` | Create a worktree under `.claude/worktrees/<name>` on a new branch `worktree-<name>`, and print `<name>`. Generates a name if omitted; reuses an existing worktree of the same name. `--switch <branch>` checks the worktree out on an existing branch instead of creating one (`ccwt new` + `git switch <branch>`). When run inside a worktree it returns the enclosing one instead of creating a new one (override with `--force-create`). `--path` prints the worktree's absolute path instead of `<name>`. |
 | `ccwt cd <name>` | `cd` into an existing worktree under `.claude/worktrees/<name>` (with shell integration) — never creates it, errors if it doesn't exist, and the name is required. `ccwt cd ..` is shorthand for `ccwt ..`, and `ccwt cd -` jumps to the previous directory (`$OLDPWD`), like the shell's `cd -`. |
 | `ccwt list` | List the repo's Claude Code worktrees with branch, age, running-session status, and last commit, sorted newest-first. `-g` lists every project in `$XDG_CONFIG_HOME/ccwt/config.toml` instead, a section per project. `--no-headers` leaves out the header row, for feeding the table to `cut`, `awk` or a shell loop. |
-| `ccwt tui` | The default command, so a bare `ccwt` runs it. Show the `ccwt list` table full-screen, refreshing in place without flicker, over a status bar showing how far the current branch is ahead/behind its upstream. `q` (or Ctrl-C) quits, `p` runs `git pull`. Arrow keys (or `j`/`k`) select a worktree, `/` (or `?`) searches for one the way vim does — incrementally, case-insensitive regexp, all matches highlighted, `n`/`N` for the next and previous; `space` opens it as a Herdr workspace, a click on its row selects it and a double-click opens it, `d` shows its column values in full in a pane over the list (`esc` closes it), and `r` removes it (merged, clean and no agent working in it, closing its workspace first, like `ccwt remove`). `-g` spans the configured projects as a foldable section each (`↵`, or a double-click on the header, folds one shut) and ignores the current directory entirely, every action (`p` included) applying to the selected row's project. `--interval` (default `2s`) sets the refresh rate, `--fetch` (default `1m`) how often `origin/main` is fetched in the background. The bar also says when the `ccwt` binary underneath it has been upgraded, and to which version, since a long-running tui otherwise keeps running the old one. |
-| `ccwt remove <name>` | Remove the worktree at `.claude/worktrees/<name>` and delete its branch. `.` means the worktree you're currently in; removing the one you're in cds you to the repo root, like `ccwt ..`. The branch is deleted only if merged: an unmerged branch refuses the whole removal, worktree included, so nothing is stranded, and so does a worktree with uncommitted changes, and so does one Herdr says an agent is working in (the `✳` of `ccwt list`) — except your own workspace, so an agent can still `ccwt done` on itself. Pass `-D` to remove anyway (unmerged branch deleted, uncommitted changes thrown away, working agent interrupted), or `--keep-branch` to remove only the worktree. Under Herdr the workspace open on the worktree is closed first — ending the agent living in it — once those checks pass. |
-| `ccwt done` | Finish with the worktree you're in: `ccwt remove .`, and then — under Herdr — close the workspace you're sitting in, the one `remove` leaves alone. Same checks and same flags (`-D`, `--keep-branch`); a refusal leaves the workspace open. Outside Herdr it's just `ccwt remove .`. |
+| `ccwt tui` | The default command, so a bare `ccwt` runs it. Show the `ccwt list` table full-screen, refreshing in place without flicker, over a status bar showing how far the current branch is ahead/behind its upstream. `q` (or Ctrl-C) quits, `p` runs `git pull`. Arrow keys (or `j`/`k`) select a worktree, a click on its row selects it, `/` (or `?`) searches the way vim does — incrementally, case-insensitive regexp, all matches highlighted, `n`/`N` for the next and previous; `d` shows the selected worktree's column values in full in a pane over the list (`esc` closes it), and `r` removes it, like `ccwt remove`. `-g` spans the configured projects as a foldable section each (`↵`, or a double-click on the header, folds one shut) and ignores the current directory entirely, every action (`p` included) applying to the selected row's project. `--interval` (default `2s`) sets the refresh rate, `--fetch` (default `1m`) how often `origin/main` is fetched in the background. The bar also says when the `ccwt` binary underneath it has been upgraded, and to which version. Under [Herdr](#herdr-integration-optional) `space` opens the selected worktree as a workspace (double-click does too) and `x` creates one and opens it. |
+| `ccwt remove <name>` | Remove the worktree at `.claude/worktrees/<name>` and delete its branch. `.` means the worktree you're currently in; removing the one you're in cds you to the repo root, like `ccwt ..`. The branch is deleted only if merged: an unmerged branch refuses the whole removal, worktree included, so nothing is stranded, and so does a worktree with uncommitted changes, and so does one with an agent working in it (the `✳` of `ccwt list`). Pass `-D` to remove anyway (unmerged branch deleted, uncommitted changes thrown away, working agent interrupted), or `--keep-branch` to remove only the worktree. Under [Herdr](#herdr-integration-optional) the worktree's workspace is closed first, once those checks pass. |
+| `ccwt done` | Finish with the worktree you're in: `ccwt remove .`, and then — under [Herdr](#herdr-integration-optional) — close the workspace you're sitting in, the one `remove` leaves alone. Same checks and same flags (`-D`, `--keep-branch`); a refusal leaves the workspace open. Outside Herdr it's just `ccwt remove .`. |
 | `ccwt gc` | Remove every worktree that's finished with: branch already merged (the `✓` of `ccwt list`), nothing uncommitted in it (no `*`), no agent working in it (no `✳`) and no Claude Code session running in it (a `no` in the `CLAUDE` column). Prints the list it found and asks before touching anything — `-y`/`--yes` skips the question. Each removal is exactly what `ccwt remove <name>` does, branch included. The worktree you're standing in is never removed — it says so on stderr and leaves it to `ccwt remove .`. |
 | `ccwt new-worktree-name` | Print a generated worktree name (`adjective-verb-noun`) without creating anything. |
 | `ccwt repo-root` | Print the root of the current git repository. Add `--root-worktree` to print the *enclosing* repo root when you're inside a `.claude/worktrees/<name>` worktree. |
