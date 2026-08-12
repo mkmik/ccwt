@@ -118,12 +118,20 @@ func (c *TuiCmd) Run() error {
 		u.stale() // the command may well have changed the list
 		return nil
 	}
+	// open is what space does: show the worktree as a workspace, and on a
+	// "<new>" row make the worktree that prompt has been waiting for first.
 	open := func() error {
 		path := u.sel.path
-		if !u.sel.worktree() || !underHerdr() {
+		if !underHerdr() {
 			return nil
 		}
-		return act("opening "+filepath.Base(path)+"…", func() string { return herdrOpen(path, "") })
+		switch {
+		case u.sel.pending():
+			return act("starting…", u.startPending)
+		case u.sel.worktree():
+			return act("opening "+filepath.Base(path)+"…", func() string { return herdrOpen(path, "") })
+		}
+		return nil
 	}
 	// activate is what a double-click does to whatever row it landed on: fold a
 	// project section shut, or open a worktree as a workspace. The keyboard keeps
@@ -131,7 +139,7 @@ func (c *TuiCmd) Run() error {
 	// misfire into opening a worktree; a click can't, since it names the row it
 	// means.
 	activate := func() error {
-		if u.sel.worktree() {
+		if u.sel.worktree() || u.sel.pending() {
 			return open()
 		}
 		u.toggle()
@@ -218,10 +226,10 @@ func (c *TuiCmd) Run() error {
 				// Nothing selected, or a section header: no cells, no pane.
 				u.detail = u.cells[u.sel]
 			// `r` removes whatever the row stands for: the worktree, or — on a
-			// queued prompt, and on the "<done>" stand-in that outlived one — the
-			// chain waiting under it.
+			// queued prompt, "<new>" ones included — the prompt and the chain
+			// waiting under it.
 			case k == "r" && u.sel.task != 0:
-				msg, ok := dropTasks(u.sel)
+				msg, ok := dropTask(u.sel.task)
 				if ok {
 					u.dropSelected()
 				}
@@ -709,7 +717,7 @@ func (u *ui) entryTitle() string {
 	case u.entry.parent.task > 0:
 		return cells[4] // TOPIC: the prompt this one waits on
 	}
-	return cells[0] // NAME: the worktree, or the "<done>" it left behind
+	return cells[0] // NAME: the worktree
 }
 
 // detailPane is the details modal: the selected worktree's cells laid out one
@@ -1070,7 +1078,12 @@ func statusBar(cols int, msg string, sel listRow, div string, searching bool) st
 			keys += "  space:open"
 		}
 		keys += queue + "  d:details  r:remove"
-	case sel.task != 0: // a queued prompt, or the stand-in for a removed worktree
+	case sel.pending(): // a queued prompt whose worktree space would make
+		if herdr {
+			keys += "  space:start"
+		}
+		keys += queue + "  d:details  r:delete"
+	case sel.task != 0: // a queued prompt
 		keys += queue + "  d:details  r:delete"
 	case sel.project != "":
 		keys += "  ↵:fold"
@@ -1195,6 +1208,88 @@ func (u *ui) newWorktree() string {
 		return "new failed: " + err.Error()
 	}
 	return herdrOpen(path, filepath.Base(path))
+}
+
+// startPending is what opening a "<new>" row does: make the worktree its prompt
+// has been waiting for, hand it whatever was queued behind that prompt, open it
+// as a workspace, and set the prompt running there. That is the whole of what
+// the row stood for, so the prompt itself goes — from here on the row is a
+// worktree like any other.
+//
+// The prompt comes from the row's cells rather than a re-read of the database:
+// it is on screen, and it is the same value the details pane and the edit box
+// take.
+func (u *ui) startPending() string {
+	cells := u.cells[u.sel]
+	if len(cells) < 5 {
+		return "start failed: no prompt on that row"
+	}
+	prompt := cells[4]
+	argv, err := taskCommand()
+	if err != nil {
+		return "start failed: " + err.Error()
+	}
+	root, err := u.root()
+	if err != nil {
+		return "start failed: " + err.Error()
+	}
+	path, _, err := (&NewWorktreeBranchCmd{ForceCreate: true}).create(root)
+	if err != nil {
+		return "start failed: " + err.Error()
+	}
+	msg := herdrOpen(path, filepath.Base(path))
+	pane := herdrPane(path)
+	if pane == "" {
+		return msg // no pane to run in: whatever herdrOpen said went wrong
+	}
+	if out, err := exec.Command(herdrBin(), append([]string{"pane", "run", pane}, append(argv, prompt)...)...).CombinedOutput(); err != nil {
+		return "start failed: " + lastLine(out, err)
+	}
+	// Last, once the prompt is actually running: a promote is a delete, and
+	// until this point every failure above is one the row survives — the "<new>"
+	// row is still there, with the prompt still on it, to try again from.
+	if err := promoteTask(u.sel.task, path); err != nil {
+		return "started, but the queue still lists it: " + err.Error()
+	}
+	// The row the prompt was on has just become this worktree, so the selection
+	// follows it there rather than being cleared by the next frame.
+	u.sel = listRow{project: u.sel.project, path: path}
+	return "started " + filepath.Base(path)
+}
+
+// herdrPane is the pane sitting in the worktree at path, which after a
+// `worktree open` is the one it just made — where the queued prompt is to run.
+// "" when herdr hasn't got one, which is the same answer as an open that
+// failed, and is handled as one.
+//
+// Retried for a second, since the pane is spawned by the open we have just
+// returned from and takes a moment to show up in the list: giving up on the
+// first look would drop the prompt on the floor on a loaded machine.
+func herdrPane(path string) string {
+	for wait := 50 * time.Millisecond; ; wait *= 2 {
+		out, err := exec.Command(herdrBin(), "pane", "list").Output()
+		if err == nil {
+			var resp struct {
+				Result struct {
+					Panes []struct {
+						ID  string `json:"pane_id"`
+						Cwd string `json:"cwd"`
+					} `json:"panes"`
+				} `json:"result"`
+			}
+			if err := json.Unmarshal(out, &resp); err == nil {
+				for _, p := range resp.Result.Panes {
+					if p.Cwd == path {
+						return p.ID
+					}
+				}
+			}
+		}
+		if wait > time.Second {
+			return ""
+		}
+		time.Sleep(wait)
+	}
 }
 
 // herdrOpen opens the worktree at path as its own herdr workspace, the same way

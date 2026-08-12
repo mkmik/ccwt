@@ -1661,9 +1661,9 @@ func typeInto(u *ui, prompt string) {
 
 // A queued prompt is work waiting on something else to finish, so it is drawn
 // under the row it waits on, and a prompt queued behind it under that in turn.
-// It outlives what it was waiting for: removing the worktree leaves a "<done>"
-// stand-in with the chain still hanging off it, since deleting the work is not
-// the same as cancelling what was queued behind it.
+// It outlives what it was waiting for: removing the worktree promotes what was
+// waiting on it to a "<new>" row of its own — its turn has come — since
+// deleting the work is not the same as cancelling what was queued behind it.
 func TestQueuedPromptsHangOffTheirWorktree(t *testing.T) {
 	initRepo(t)
 	capture(t, &NewWorktreeBranchCmd{Name: "alpha", Path: true})
@@ -1713,20 +1713,97 @@ func TestQueuedPromptsHangOffTheirWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows, body = render()
-	if len(rows) != 3 || rows[0].task != doneRow {
-		t.Fatalf("rows after the worktree went = %v, want a <done> stand-in and the chain", rows)
+	if len(rows) != 2 || !rows[0].pending() {
+		t.Fatalf("rows after the worktree went = %v, want a <new> row and what waits on it", rows)
 	}
-	if !strings.Contains(body, doneName) || !strings.Contains(body, "and then cut a release") {
-		t.Errorf("the orphaned chain isn't drawn under a %s row:\n%s", doneName, body)
+	lines = strings.Split(strings.TrimRight(body, "\n"), "\n")
+	if !strings.Contains(lines[0], newName) || !strings.Contains(lines[0], "then update the docs") {
+		t.Errorf("the promoted prompt isn't a %s row:\n%s", newName, body)
+	}
+	if !strings.Contains(lines[1], "and then cut a release") {
+		t.Errorf("what was queued behind it didn't come along:\n%s", body)
 	}
 
-	// `r` on the stand-in drops every chain that was waiting on the worktree —
-	// the one behind it goes with the one it was waiting on.
-	if msg, ok := dropTasks(rows[0]); !ok {
-		t.Fatalf("dropping the orphaned chain: %s", msg)
+	// `r` on it drops the chain — the one behind it goes with the one it was
+	// waiting on.
+	if msg, ok := dropTask(rows[0].task); !ok {
+		t.Fatalf("dropping the chain: %s", msg)
 	}
 	if rows, body = render(); len(rows) != 0 {
 		t.Errorf("rows after deleting the chain = %v, want none:\n%s", rows, body)
+	}
+}
+
+// Opening a "<new>" row is what finally makes its worktree: a fresh one, a
+// workspace on it, the prompt running there, and the rest of the chain now
+// waiting on that worktree rather than on a prompt that has started.
+func TestStartingAPendingPromptMakesItsWorktree(t *testing.T) {
+	initRepo(t)
+	capture(t, &NewWorktreeBranchCmd{Name: "alpha", Path: true})
+
+	dir := t.TempDir()
+	log := filepath.Join(dir, "calls")
+	herdr := filepath.Join(dir, "herdr")
+	// A herdr that logs what it was asked and, for `pane list`, answers with a
+	// pane sitting in the worktree the `worktree open` before it named — which
+	// is the pane the prompt is meant to run in.
+	script := fmt.Sprintf(`#!/bin/sh
+echo "$@" >> %[1]q
+case "$1 $2" in
+"pane list")
+  p=$(sed -n 's/.*--path \([^ ]*\).*/\1/p' %[1]q | tail -1)
+  printf '{"result":{"panes":[{"pane_id":"w1:p1","cwd":"%%s"}]}}' "$p" ;;
+"worktree list") printf '{"result":{"worktrees":[]}}' ;;
+"agent list")    printf '{"result":{"agents":[]}}' ;;
+esac
+`, log)
+	if err := os.WriteFile(herdr, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_BIN_PATH", herdr)
+
+	var u ui
+	rows, _ := renderRows(t)
+	u.entry = entry{parent: rows[0], open: true}
+	typeInto(&u, "then update the docs")
+	rows, _ = renderRows(t)
+	u.entry = entry{parent: rows[1], open: true}
+	typeInto(&u, "and then cut a release")
+
+	if err := (&RemoveCmd{Name: "alpha", Force: true}).remove(rows[0].project); err != nil {
+		t.Fatal(err)
+	}
+	// What the tui has when a key is pressed: the rows of the last frame and
+	// their cells, which is where startPending reads the prompt from.
+	rows, cells, err := renderList(io.Discard, false, 0, nil, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u = ui{sel: rows[0], cells: cells}
+
+	msg := u.startPending()
+	name, ok := strings.CutPrefix(msg, "started ")
+	if !ok {
+		t.Fatalf("startPending: %s", msg)
+	}
+	calls, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(calls), "pane run w1:p1 claude then update the docs") {
+		t.Errorf("herdr calls = %q, want the prompt run in the new pane", calls)
+	}
+
+	rows, body := renderRows(t)
+	if len(rows) != 2 || !rows[0].worktree() || rows[1].task <= 0 {
+		t.Fatalf("rows after starting = %v, want the new worktree and the rest of the chain under it", rows)
+	}
+	if !strings.Contains(body, name) || strings.Contains(body, newName) {
+		t.Errorf("the %s row didn't become the worktree %s:\n%s", newName, name, body)
+	}
+	if !strings.Contains(body, "and then cut a release") || strings.Contains(body, "then update the docs") {
+		t.Errorf("the started prompt should be gone and the one behind it kept:\n%s", body)
 	}
 }
 

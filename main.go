@@ -500,10 +500,11 @@ func (c *ListCmd) Run() error {
 }
 
 // listRow identifies one body line of the table: a worktree by its path, a
-// queued prompt by its task id, the "<done>" stand-in for a removed worktree by
-// both, or — under -g — a project's section header, with neither. All of them
-// carry the project they belong to, as the repo's main worktree, which is what
-// an action on the row resolves against.
+// queued prompt by its task id, a "<new>" one — a prompt whose worktree has
+// been removed, waiting for one of its own — by both, or, under -g, a project's
+// section header, with neither. All of them carry the project they belong to,
+// as the repo's main worktree, which is what an action on the row resolves
+// against.
 //
 // A worktree by path rather than by name because with -g two projects can each
 // have a worktree called "fix-tests", and the path is also the only thing an
@@ -511,18 +512,18 @@ func (c *ListCmd) Run() error {
 // header shows, for the same reason: two checkouts can share a basename.
 type listRow struct {
 	project, path string
-	task          int64 // a queued prompt's id, or doneRow; 0 for the other rows
+	task          int64 // a queued prompt's id; 0 for the other rows
 }
-
-// doneRow marks the stand-in row for a worktree that was removed with prompts
-// still queued behind it. Its path is the removed worktree's, which is both what
-// tells two stand-ins apart and what keeps the orphaned chain attached to it.
-const doneRow = -1
 
 // worktree reports whether the row is a live worktree — the rows the
 // per-worktree keys apply to. Everything else on screen is something you can
 // land on but not open, pull or remove.
 func (r listRow) worktree() bool { return r.path != "" && r.task == 0 }
+
+// pending reports whether the row is a "<new>": a queued prompt with no
+// worktree left under it — the path it still carries is the removed one's — and
+// so the one row where opening means creating.
+func (r listRow) pending() bool { return r.path != "" && r.task > 0 }
 
 // section reports whether the row is a project's section header, the only kind
 // of row there is anything to fold.
@@ -852,19 +853,21 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 			emitTask(filepath.Base(r.path), t, 0)
 		}
 	}
-	// emitOrphans draws what is left of a chain whose worktree has been removed:
-	// a bare "<done>" stand-in with the chain still under it, one per removed
-	// worktree, after the live ones. Deleting the work is not the same as
-	// cancelling what was queued behind it, and a prompt with nowhere to hang
-	// would otherwise just vanish.
-	emitOrphans := func(project string) {
-		for _, path := range queue.orphans(project, live) {
-			id := listRow{project: project, path: path, task: doneRow}
-			cells := []string{gutter + gutter + doneName, "", "", "", filepath.Base(path)}
+	// emitPending draws what is left of a chain whose worktree has been removed:
+	// each prompt that was waiting on it stands on its own row now, named
+	// "<new>" for the worktree it hasn't got yet, with whatever was queued
+	// behind it still under it — drawn like the worktree it is about to become,
+	// since that is what opening the row does. Deleting the work is not the same
+	// as cancelling what was queued behind it.
+	emitPending := func(project string) {
+		for _, t := range queue.pending(project, live) {
+			id := listRow{project: project, path: t.Worktree, task: t.ID}
+			cells := []string{gutter + gutter + newName, "", humanAge(time.Since(t.Created)), "", t.Prompt}
 			add(id, cells)
+			cells[0] = newName
 			details[id] = cells
-			for _, t := range queue.roots[path] {
-				emitTask(doneName, t, 0)
+			for _, k := range queue.kids[t.ID] {
+				emitTask(newName, k, 0)
 			}
 		}
 	}
@@ -872,7 +875,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 		for _, r := range rows {
 			emit(r)
 		}
-		emitOrphans(roots[0])
+		emitPending(roots[0])
 	} else {
 		// Sections in the order the config lists the projects: stable, unlike an
 		// order derived from the worktrees, which would shuffle the sections
@@ -906,7 +909,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 			for _, r := range mine {
 				emit(r)
 			}
-			emitOrphans(root)
+			emitPending(root)
 		}
 	}
 	fitTable(table, width, cols)
