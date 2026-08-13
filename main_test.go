@@ -1790,7 +1790,9 @@ esac
 	var u ui
 	rows, _ := renderRows(t)
 	u.entry = newEntry(rows[0], "", 0)
-	typeInto(&u, "then update the docs")
+	// An apostrophe in the prompt, since what reaches the pane is a shell line:
+	// the whole prompt has to arrive as one argument, quotes and all.
+	typeInto(&u, "then update Bob's docs")
 	rows, _ = renderRows(t)
 	u.entry = newEntry(rows[1], "", 0)
 	typeInto(&u, "and then cut a release")
@@ -1815,8 +1817,8 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(calls), "pane run w1:p1 claude then update the docs") {
-		t.Errorf("herdr calls = %q, want the prompt run in the new pane", calls)
+	if !strings.Contains(string(calls), `pane run w1:p1 claude 'then update Bob'\''s docs'`) {
+		t.Errorf("herdr calls = %q, want the whole prompt quoted as one argument", calls)
 	}
 
 	rows, body := renderRows(t)
@@ -1826,7 +1828,7 @@ esac
 	if !strings.Contains(body, name) || strings.Contains(body, newName) {
 		t.Errorf("the %s row didn't become the worktree %s:\n%s", newName, name, body)
 	}
-	if !strings.Contains(body, "and then cut a release") || strings.Contains(body, "then update the docs") {
+	if !strings.Contains(body, "and then cut a release") || strings.Contains(body, "Bob's docs") {
 		t.Errorf("the started prompt should be gone and the one behind it kept:\n%s", body)
 	}
 }
