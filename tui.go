@@ -1388,7 +1388,7 @@ func (u *ui) startPending() string {
 	if pane == "" {
 		return msg // no pane to run in: whatever herdrOpen said went wrong
 	}
-	if out, err := exec.Command(herdrBin(), append([]string{"pane", "run", pane}, append(argv, prompt)...)...).CombinedOutput(); err != nil {
+	if out, err := exec.Command(herdrBin(), append([]string{"pane", "run", pane}, append(argv, shellQuote(prompt))...)...).CombinedOutput(); err != nil {
 		return "start failed: " + lastLine(out, err)
 	}
 	// Last, once the prompt is actually running: a promote is a delete, and
@@ -1401,6 +1401,15 @@ func (u *ui) startPending() string {
 	// follows it there rather than being cleared by the next frame.
 	u.sel = listRow{project: u.sel.project, path: path}
 	return "started " + filepath.Base(path)
+}
+
+// shellQuote wraps s in single quotes for `herdr pane run`, which joins its
+// COMMAND words with spaces and types the line at the pane's shell prompt.
+// Unquoted, a multi-word prompt arrives at `claude` as several argv entries and
+// only the first of them is taken as the prompt. ponytail: single quotes and
+// the '\'' trick, the one escape that needs no table of shell metacharacters.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // herdrPane is the pane sitting in the worktree at path, which after a
