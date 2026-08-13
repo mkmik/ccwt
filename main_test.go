@@ -1732,6 +1732,21 @@ func TestQueuedPromptsHangOffTheirWorktree(t *testing.T) {
 	if rows, body = render(); len(rows) != 0 {
 		t.Errorf("rows after deleting the chain = %v, want none:\n%s", rows, body)
 	}
+
+	// Off the list, still in the table: dropping marks the whole chain deleted
+	// rather than removing it, so a mistaken `r` can be undone with an UPDATE.
+	db, err := openTasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var live, dropped int
+	if err := db.QueryRow(`SELECT COUNT(*) FILTER (WHERE deleted = 0), COUNT(*) FILTER (WHERE deleted > 0) FROM task`).Scan(&live, &dropped); err != nil {
+		t.Fatal(err)
+	}
+	if live != 0 || dropped != 2 {
+		t.Errorf("%d prompts still queued and %d marked deleted, want 0 and both of them", live, dropped)
+	}
 }
 
 // Opening a "<new>" row is what finally makes its worktree: a fresh one, a
