@@ -1669,7 +1669,7 @@ func statusBar(cols int, msg string, sel listRow, div string, searching, global 
 		if herdr {
 			keys += "  space:open"
 		}
-		keys += queue + "  g:review  d:details  r:remove"
+		keys += queue + "  g:vcs  d:details  r:remove"
 	case sel.pending(): // a queued prompt whose worktree space would make
 		if herdr {
 			keys += "  space:start"

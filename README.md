@@ -107,7 +107,7 @@ status bar along the bottom:
 * * dreamy-foraging-hickey  worktree-dreamy-…-hickey  2h   yes     ✳ Goal was a widget on the dashboard; it's built and…
   ✓ calm-baking-otter       worktree-calm-bak…-otter  1d   no      ⎇ Fix the flux capacitor
 
- ccwt  q:quit  p:pull  /:search  l:log  x:new  space:open  n:queue  g:review  d:details  r:remove │ main ↑1
+ ccwt  q:quit  p:pull  /:search  l:log  x:new  space:open  n:queue  g:vcs  d:details  r:remove │ main ↑1
 ```
 
 `q` (or Ctrl-C) quits, `p` runs `git pull` and reports the result in the bar. The rest of
