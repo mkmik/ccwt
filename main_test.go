@@ -948,6 +948,23 @@ func TestMoveReusesTheList(t *testing.T) {
 	}
 }
 
+// The interval tick must leave the list alone while it's being walked: a
+// re-sort that slides rows about under the arrows is what makes one hard to
+// navigate. A removal still shows at once — that goes through stale() directly.
+func TestNavigationHoldsTheListStill(t *testing.T) {
+	u := ui{body: []string{"header", "alpha"}, nav: time.Now()}
+	u.refresh()
+	if u.body == nil {
+		t.Error("the tick re-read the list mid-navigation")
+	}
+
+	u.nav = time.Now().Add(-navQuiet)
+	u.refresh()
+	if u.body != nil {
+		t.Error("the tick did not re-read the list after navQuiet")
+	}
+}
+
 // Only a left-button press opens a worktree: releases, wheel ticks and plain
 // keystrokes all have to fall through to the ordinary key handling.
 func TestMouseRow(t *testing.T) {
