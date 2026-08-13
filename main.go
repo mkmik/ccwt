@@ -584,6 +584,7 @@ const gitScanWindow = 30 * time.Second
 
 var (
 	dirtyCache  cached[bool]
+	pushedCache cached[bool]
 	mergedCache cached[map[string]bool]
 	commitCache cached[gitutil.Commit]
 	topicCache  cached[string]
@@ -708,10 +709,12 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 
 	// Two glyphs lead the name. First the "* " of the worktree we're running
 	// in, then the one saying whether the worktree is safe to remove: a "✓ "
-	// when its branch is already merged — or a "* " when the worktree has
-	// uncommitted changes, which beats the "✓": whatever git says about the
-	// branch, there's unsaved work here and it isn't safe to delete. An agent
-	// working in it beats both, with the "✳ " of a live session: git sees a
+	// when its branch is already merged — a "☐ " when it isn't but everything
+	// here is pushed, so the ball is in a reviewer's court and there is nothing
+	// to do but wait — or a "* " when the worktree has uncommitted changes,
+	// which beats both: whatever git says about the branch or the remote,
+	// there's unsaved work here and it isn't safe to delete. An agent
+	// working in it beats all three, with the "✳ " of a live session: git sees a
 	// fresh branch with nothing on it, which is precisely what an agent that
 	// has just started looks like. Both ride at the head of the row because
 	// "where am I?" and "can this go?" are the actionable things on the line,
@@ -750,6 +753,11 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 			r.topic = topic(sessionSummary(rf.wt.Path), r.subject)
 			if tty {
 				glyph, on := "✓", rf.merged[rf.wt.Branch]
+				if !on && pushedCache.get(rf.wt.Path, window(gitScanWindow), func() bool {
+					return gitutil.Pushed(rf.wt.Path)
+				}) {
+					glyph, on = reviewGlyph, true
+				}
 				if dirtyCache.get(rf.wt.Path, window(gitScanWindow), func() bool {
 					return gitutil.Dirty(rf.wt.Path)
 				}) {
@@ -929,10 +937,18 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 // taskGlyph is the odd one out: it leads a queued prompt's NAME rather than its
 // TOPIC, because on that row the structure is the thing to say — what this is
 // waiting for is which row it hangs under.
+//
+// reviewGlyph is the odd one out twice over: it only leads NAME, and it says
+// nothing about where a line came from — an unchecked box for a branch that is
+// pushed and quiet, i.e. waiting on a review or on CI, and read against the "✓"
+// it sits in the same column as: sign-off pending rather than granted.
+// Single-width, like the rest: the leading gutter is two columns and emoji are
+// two on their own.
 const (
 	sessionGlyph = "✳"
 	commitGlyph  = "⎇"
 	taskGlyph    = "↳"
+	reviewGlyph  = "☐"
 )
 
 // topic is what the worktree is about in one line: what the last Claude Code

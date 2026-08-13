@@ -289,6 +289,18 @@ func BranchExists(dir, branch string) bool {
 	return git(dir, "show-ref", "--verify", "--quiet", "refs/heads/"+branch).Run() == nil
 }
 
+// Pushed reports whether the branch at repoPath has an upstream that already
+// contains every commit it does — work that has left your hands and is waiting
+// on someone else. No upstream, or commits the remote hasn't got, reads as not
+// pushed, and so does a git failure: this only decorates a listing.
+//
+// The upstream is whatever the branch is tracking, stale ref and all: the
+// answer is "have I pushed?", which is about the last push, not the last fetch.
+func Pushed(repoPath string) bool {
+	out, err := git(repoPath, "rev-list", "--count", "@{upstream}..HEAD").Output()
+	return err == nil && strings.TrimSpace(string(out)) == "0"
+}
+
 // Dirty reports whether the worktree at repoPath has uncommitted changes,
 // untracked files included. A git failure reads as clean: this only decorates
 // a listing, and is not worth failing it over.
