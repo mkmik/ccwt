@@ -638,7 +638,7 @@ func TestStatusBarIsExactlyOneLineWide(t *testing.T) {
 	for _, msg := range []string{"", "ok", strings.Repeat("x", 200)} {
 		for _, sel := range []listRow{{}, {path: "some-worktree"}, {project: "some-project"}, {task: 1}} {
 			for _, searching := range []bool{false, true} {
-				bar := statusBar(40, msg, sel, "main  in sync", searching)
+				bar := statusBar(40, msg, sel, "main  in sync", searching, false)
 				bar = strings.TrimSuffix(strings.TrimPrefix(bar, "\x1b[7m"), "\x1b[0m")
 				if got := len([]rune(bar)); got != 40 {
 					t.Errorf("statusBar(40, %.10q, %v) is %d cols wide, want 40", msg, sel, got)
@@ -656,7 +656,7 @@ func TestStatusBarShowsHerdrActionsOnlyUnderHerdr(t *testing.T) {
 		want bool
 	}{{"", false}, {"1", true}} {
 		t.Setenv("HERDR_ENV", tc.env)
-		bar := statusBar(200, "", listRow{path: "some-worktree"}, "", false)
+		bar := statusBar(200, "", listRow{path: "some-worktree"}, "", false, false)
 		for _, key := range []string{"x:new", "space:open"} {
 			if strings.Contains(bar, key) != tc.want {
 				t.Errorf("HERDR_ENV=%q: %q in the bar = %v, want %v", tc.env, key, !tc.want, tc.want)
@@ -673,11 +673,26 @@ func TestStatusBarShowsHerdrActionsOnlyUnderHerdr(t *testing.T) {
 // has to keep up.
 func TestStatusBarSaysWhichNIsInForce(t *testing.T) {
 	sel := listRow{path: "some-worktree"}
-	if bar := statusBar(200, "", sel, "", false); !strings.Contains(bar, "n:queue") || strings.Contains(bar, "n:next") {
+	if bar := statusBar(200, "", sel, "", false, false); !strings.Contains(bar, "n:queue") || strings.Contains(bar, "n:next") {
 		t.Errorf("with no pattern the bar is %q, want n:queue on it", bar)
 	}
-	if bar := statusBar(200, "", sel, "", true); !strings.Contains(bar, "n:next") || strings.Contains(bar, "n:queue") {
+	if bar := statusBar(200, "", sel, "", true, false); !strings.Contains(bar, "n:next") || strings.Contains(bar, "n:queue") {
 		t.Errorf("with a pattern in force the bar is %q, want n:next on it", bar)
+	}
+}
+
+// With nothing selected `n` queues a prompt that waits on nothing — so the bar
+// offers it there too. The exception is -g with nothing selected, where the key
+// has no project to make the worktree in and so nothing to do.
+func TestStatusBarOffersTheQueueKeyWithNothingSelected(t *testing.T) {
+	if bar := statusBar(200, "", listRow{}, "", false, false); !strings.Contains(bar, "n:queue") {
+		t.Errorf("with nothing selected the bar is %q, want n:queue on it", bar)
+	}
+	if bar := statusBar(200, "", listRow{}, "", false, true); strings.Contains(bar, "n:queue") {
+		t.Errorf("under -g with nothing selected the bar is %q, want no n:queue on it", bar)
+	}
+	if bar := statusBar(200, "", listRow{project: "some-project"}, "", false, true); !strings.Contains(bar, "n:queue") {
+		t.Errorf("under -g on a section header the bar is %q, want n:queue on it", bar)
 	}
 }
 
@@ -1785,6 +1800,48 @@ func TestQueuedPromptsHangOffTheirWorktree(t *testing.T) {
 	}
 	if live != 0 || dropped != 2 {
 		t.Errorf("%d prompts still queued and %d marked deleted, want 0 and both of them", live, dropped)
+	}
+}
+
+// Work that isn't waiting on anything has no row to hang off, so queueing it
+// with nothing selected puts it straight on the list as a "<new>" row: the
+// worktree it is asking for, waiting to be made. Under -g that takes a project
+// selected — a section header will do — since with several repos on screen
+// nothing else says whose worktree it is to be.
+func TestQueueingWithNothingSelectedMakesANewRow(t *testing.T) {
+	repo := initRepo(t)
+
+	global := ui{projects: []string{repo}}
+	if parent, err := global.queueParent(); err == nil {
+		t.Errorf("queueParent() under -g with nothing selected = %v, want the project asked for", parent)
+	}
+	if parent, err := (&ui{projects: []string{repo}, sel: listRow{project: repo}}).queueParent(); err != nil {
+		t.Errorf("queueParent() on a section header: %v", err)
+	} else if parent.project != repo || parent.path != "" || parent.task != 0 {
+		t.Errorf("queueParent() on a section header = %v, want the project and nothing to wait on", parent)
+	}
+
+	// Outside -g the repo the tui is running in is the only answer there is.
+	local := ui{}
+	parent, err := local.queueParent()
+	if err != nil {
+		t.Fatalf("queueParent() outside -g: %v", err)
+	}
+	local.entry = newEntry(parent, "", 0)
+	typeInto(&local, "write the release notes")
+	if local.msg != "queued" {
+		t.Fatalf("queueing: %s", local.msg)
+	}
+
+	rows, body := renderRows(t)
+	if len(rows) != 1 || !rows[0].pending() {
+		t.Fatalf("rows = %v, want one <new> row, the worktree it is waiting to become:\n%s", rows, body)
+	}
+	if !strings.Contains(body, newName) || !strings.Contains(body, "write the release notes") {
+		t.Errorf("the queued prompt isn't a %s row:\n%s", newName, body)
+	}
+	if strings.Contains(body, queuedName) {
+		t.Errorf("the row says %s, but it isn't waiting for anything:\n%s", queuedName, body)
 	}
 }
 
