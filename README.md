@@ -265,7 +265,8 @@ shows up in `tui -g` and the other way round, within a refresh interval either w
 match as you type, `enter` accepts it, `esc` puts back the pattern and the row you started
 from, and `n`/`N` walk the rest of the matches forwards and back, wrapping around the ends.
 `?` searches upwards instead. Every match on screen is picked out, not just the selected
-one; a bare `esc` clears them.
+one; a bare `esc` clears them, and clears the selection with them — nothing is selected
+again, and the bar drops the keys that only apply to a row.
 
 The pattern is a [regular expression](https://pkg.go.dev/regexp/syntax), always
 case-insensitive, matched against the whole line as drawn — name, branch, age and topic
