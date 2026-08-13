@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/alecthomas/kong"
 	"github.com/mkmik/ccwt/internal/gitutil"
@@ -1674,7 +1675,7 @@ func TestQueuedPromptsHangOffTheirWorktree(t *testing.T) {
 	var u ui
 	queue := func(parent listRow, prompt string) {
 		t.Helper()
-		u.entry = entry{parent: parent, open: true}
+		u.entry = newEntry(parent, "", 0)
 		typeInto(&u, prompt)
 		if u.msg != "queued" {
 			t.Fatalf("queueing %q: %s", prompt, u.msg)
@@ -1780,10 +1781,10 @@ esac
 
 	var u ui
 	rows, _ := renderRows(t)
-	u.entry = entry{parent: rows[0], open: true}
+	u.entry = newEntry(rows[0], "", 0)
 	typeInto(&u, "then update the docs")
 	rows, _ = renderRows(t)
-	u.entry = entry{parent: rows[1], open: true}
+	u.entry = newEntry(rows[1], "", 0)
 	typeInto(&u, "and then cut a release")
 
 	if err := (&RemoveCmd{Name: "alpha", Force: true}).remove(rows[0].project); err != nil {
@@ -1831,21 +1832,27 @@ func TestEditingAQueuedPromptLeavesItWhereItIs(t *testing.T) {
 
 	var u ui
 	rows, _ := renderRows(t)
-	u.entry = entry{parent: rows[0], open: true}
+	u.entry = newEntry(rows[0], "", 0)
 	typeInto(&u, "port the widget")
 
 	rows, _ = renderRows(t)
 	first := rows[1]
-	u.entry = entry{parent: first, open: true}
+	u.entry = newEntry(first, "", 0)
 	typeInto(&u, "then write the docs")
 
 	// What `e` opens: the prompt as the details pane shows it, and the id of the
-	// row it came from. Rub out "widget", type something else.
-	u.entry = entry{parent: first, text: "port the widget", open: true, id: first.task}
-	for range len("widget") {
-		u.queue("\x7f")
+	// row it came from. The word that wants changing is the last one here, but
+	// it's edited the way one in the middle would be — caret back a word, the
+	// new noun typed in front of the old, the old one deleted from under the
+	// caret — since that's the whole point of the box being an editor.
+	u.entry = newEntry(first, "port the widget", first.task)
+	for _, k := range splitKeys("\x1b[1;5Dsidebar") {
+		u.queue(k)
 	}
-	typeInto(&u, "sidebar")
+	for range len("widget") {
+		u.queue("\x1b[3~")
+	}
+	u.queue("\r")
 	if u.msg != "saved" {
 		t.Fatalf("editing: %s", u.msg)
 	}
@@ -1860,6 +1867,113 @@ func TestEditingAQueuedPromptLeavesItWhereItIs(t *testing.T) {
 	}
 	if !strings.Contains(lines[2], "then write the docs") {
 		t.Errorf("the prompt waiting on it moved or lost its text:\n%s", body)
+	}
+}
+
+// The box a prompt is typed into is a line editor: the caret moves, text goes
+// in where it is, and each delete takes the rune on its own side of it. The
+// keys arrive the way the tty delivers them — an escape sequence for the
+// arrows, a byte for everything else, a byte at a time for a multi-byte rune.
+func TestLineEditor(t *testing.T) {
+	for _, tc := range []struct {
+		start, keys, want string
+		cur               int
+	}{
+		// Typing and backspace at the end: what it did before there was a caret.
+		{start: "port the", keys: " widget", want: "port the widget", cur: 15},
+		{start: "port the widget", keys: "\x7f\x7f", want: "port the widg", cur: 13},
+		// The caret walks runes rather than bytes, so a delete either side of a
+		// multi-byte one takes all of it.
+		{start: "a é b", keys: "\x1b[D\x1b[D\x7f", want: "a  b", cur: 2},
+		{start: "a é b", keys: "\x01\x1b[C\x1b[C\x1b[3~", want: "a  b", cur: 2},
+		// Text goes in at the caret, wherever it's been moved to.
+		{start: "port the widget", keys: "\x1b[1;5Dnew ", want: "port the new widget", cur: 13},
+		{start: "port the widget", keys: "\x01\x1b[1;5C\x1b[1;5Cx", want: "port thex widget", cur: 9},
+		{start: "abc", keys: "\x1b[Hx", want: "xabc", cur: 1},
+		{start: "abc", keys: "\x01x\x05y", want: "xabcy", cur: 5},
+		// Ctrl-W, Ctrl-U, Ctrl-K: the word before the caret, everything before
+		// it, everything after it.
+		{start: "port the widget", keys: "\x17", want: "port the ", cur: 9},
+		{start: "port the widget", keys: "\x1b[1;5D\x15", want: "widget", cur: 0},
+		{start: "port the widget", keys: "\x1b[1;5D\x0b", want: "port the ", cur: 9},
+		// A multi-byte rune is two keystrokes, and both of its bytes are text.
+		{start: "caf", keys: "é", want: "café", cur: 5},
+		// Sequences it doesn't know are ignored rather than typed — a mouse
+		// report is one — and the ends of the line are the ends of it.
+		{start: "abc", keys: "\x1b[<0;12;5M", want: "abc", cur: 3},
+		{start: "abc", keys: "\x1b[C\x1b[3~", want: "abc", cur: 3},
+		{start: "abc", keys: "\x1b[H\x1b[D\x7f", want: "abc", cur: 0},
+	} {
+		got, cur := tc.start, len(tc.start)
+		for _, k := range splitKeys(tc.keys) {
+			got, cur = lineEdit(got, cur, k)
+		}
+		if got != tc.want || cur != tc.cur {
+			t.Errorf("%q + %q = %q with the caret at %d, want %q at %d", tc.start, tc.keys, got, cur, tc.want, tc.cur)
+		}
+	}
+}
+
+// The box scrolls to wherever the caret is rather than to the end of the text:
+// on a prompt taller than the box, rewriting the first sentence is exactly what
+// the editing keys are for.
+func TestEntryPaneFollowsTheCaret(t *testing.T) {
+	text := strings.TrimSpace(strings.Repeat("word ", 60)) // taller than the box
+	for _, cur := range []int{0, len(text) / 2, len(text)} {
+		pane := entryPane(text, cur, "edit", 40, 10)
+		at := slices.IndexFunc(pane, func(l string) bool { return strings.Contains(l, caretOn) })
+		if at < 0 {
+			t.Fatalf("the caret at %d isn't in the box at all:\n%s", cur, strings.Join(pane, "\n"))
+		}
+		// And what's drawn from the caret on is the text from the caret on: it
+		// sits on the character it's in front of, not next to it.
+		after := strings.TrimRight(caretOff.Replace(pane[at][strings.Index(pane[at], caretOn)+len(caretOn):]), " │")
+		if !strings.HasPrefix(text[cur:], after) {
+			t.Errorf("the caret at %d has %q drawn from it on, want the start of %q", cur, after, text[cur:])
+		}
+	}
+}
+
+// How the caret is drawn: reverse video on the character it's in front of.
+var (
+	caretOn  = "\x1b[7m"
+	caretOff = strings.NewReplacer(caretOn, "", "\x1b[0m", "")
+)
+
+// Moving the caret moves the caret and nothing else. It's drawn on a character
+// rather than between two of them because a block of its own would take a
+// column, shunting the rest of the line along — and re-wrapping it — with every
+// press of an arrow key, which is exactly the shimmer a caret shouldn't have.
+func TestTheCaretDoesNotShiftTheText(t *testing.T) {
+	const text = "port the widget to the mobile layout, and mind  the  double  spaces"
+	var want []string
+	for cur := range len(text) + 1 {
+		var plain []string
+		for _, l := range entryPane(text, cur, "edit", 40, 12) { // the whole text fits
+			plain = append(plain, caretOff.Replace(l))
+		}
+		if want == nil {
+			want = plain
+		}
+		if !slices.Equal(plain, want) {
+			t.Fatalf("the caret at %d redrew the text:\n%s\nwant\n%s", cur, strings.Join(plain, "\n"), strings.Join(want, "\n"))
+		}
+
+		// And it's on the character it's in front of — on a space of its own
+		// past the end of the text.
+		joined := strings.Join(entryPane(text, cur, "edit", 40, 12), "\n")
+		i := strings.Index(joined, caretOn)
+		if i < 0 {
+			t.Fatalf("the caret at %d isn't drawn at all:\n%s", cur, joined)
+		}
+		got, _ := utf8.DecodeRuneInString(joined[i+len(caretOn):])
+		wantRune := ' '
+		if cur < len(text) {
+			wantRune, _ = utf8.DecodeRuneInString(text[cur:])
+		}
+		if got != wantRune {
+			t.Errorf("the caret at %d is on %q, want %q", cur, got, wantRune)
+		}
 	}
 }
 

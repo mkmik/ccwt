@@ -19,6 +19,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/term"
 
@@ -178,7 +180,7 @@ func (c *TuiCmd) Run() error {
 				// where rewriting one belongs. The edit box takes the pane's
 				// place rather than stacking on it: one modal at a time.
 				case k == "e" && u.sel.task > 0:
-					u.entry = entry{parent: u.sel, text: u.detail[4], open: true, id: u.sel.task}
+					u.entry = newEntry(u.sel, u.detail[4], u.sel.task)
 					u.detail = nil
 				}
 			case k == "q", k == "\x03": // \x03 = Ctrl-C, which raw mode delivers as a keystroke
@@ -208,7 +210,7 @@ func (c *TuiCmd) Run() error {
 			// `esc` clears the pattern and gives the key back.
 			case k == "n" && u.query == "":
 				if u.sel.worktree() || u.sel.task != 0 {
-					u.entry = entry{parent: u.sel, open: true}
+					u.entry = newEntry(u.sel, "", 0)
 				}
 			case k == "n":
 				u.seek(u.dir)
@@ -410,12 +412,23 @@ func (u *ui) edit(k string) {
 type entry struct {
 	parent listRow
 	text   string
+	cur    int // the caret, as a byte offset into text
 	open   bool
 	id     int64 // the queued prompt being rewritten; 0 when this is a new one
 }
 
+// newEntry opens the box on text — empty for a new prompt, the prompt itself
+// when a queued one is being rewritten — with the caret at the end of it, which
+// is where typing carries on from. A constructor rather than a literal so that
+// prefilled text can't be left with the caret sitting in front of it.
+func newEntry(parent listRow, text string, id int64) entry {
+	return entry{parent: parent, text: text, cur: len(text), open: true, id: id}
+}
+
 // queue feeds one keystroke to the queue prompt: enter records what's been
-// typed, escape drops it, and everything else is text. A write that fails
+// typed, escape drops it, and everything else is for the line editor — a
+// prompt is a sentence, and the word that needs changing is rarely the last
+// one. A write that fails
 // leaves the prompt up with the text still in it — retyping a paragraph
 // because the database was busy is not a reasonable thing to ask.
 //
@@ -443,24 +456,83 @@ func (u *ui) queue(k string) {
 	case "\x1b", "\x03":
 		u.entry = entry{}
 	default:
-		u.entry.text = typeKey(u.entry.text, k)
+		u.entry.text, u.entry.cur = lineEdit(u.entry.text, u.entry.cur, k)
 	}
 }
 
-// typeKey applies one keystroke to a line being typed: backspace rubs out a
-// rune, and anything printable is appended — a multi-byte rune arrives as its
-// bytes, in order, which is what this appends. Escape sequences (arrows, mouse
-// reports) are ignored: they're several bytes but only the first is under 0x20,
-// so they'd otherwise land in the text as garbage.
-func typeKey(s, k string) string {
-	switch {
-	case k == "\x7f", k == "\b":
-		if r := []rune(s); len(r) > 0 {
-			return string(r[:len(r)-1])
-		}
-	case len(k) == 1 && k[0] >= ' ':
-		return s + k
+// lineEdit applies one keystroke to a line being typed and says where the caret
+// ends up, as a byte offset into the line. Printable text goes in at the caret,
+// the arrows and the readline keys move it about, and backspace and delete take
+// the rune on either side of it.
+//
+// By byte rather than by rune because that's how a multi-byte rune arrives —
+// its bytes, in order — and putting them in one after another is what makes the
+// rune. The caret walks whole runes even so, so backspace can't leave half of
+// one behind.
+//
+// Escape sequences this doesn't name (mouse reports, the function keys) are
+// ignored rather than typed: they're several bytes but only the first is under
+// 0x20, so they'd otherwise land in the text as garbage.
+//
+// ponytail: ours rather than bubbles/textarea, which would mean a bubbletea
+// rewrite of the frame painter, the mouse handling and the list — a new event
+// loop for the box in the middle of it. Worth reaching for if this box ever
+// wants ↑/↓ across the wrap, a selection, or undo; not for a caret.
+func lineEdit(s string, cur int, k string) (string, int) {
+	cur = min(max(cur, 0), len(s))
+	back := func() int { _, n := utf8.DecodeLastRuneInString(s[:cur]); return cur - n }
+	fwd := func() int { _, n := utf8.DecodeRuneInString(s[cur:]); return cur + n }
+	switch k {
+	case "\x1b[D", "\x02": // ←, Ctrl-B
+		return s, back()
+	case "\x1b[C", "\x06": // →, Ctrl-F
+		return s, fwd()
+	case "\x1b[1;5D", "\x1b[1;3D": // Ctrl-← and Alt-←, as terminals report them
+		return s, wordLeft(s[:cur])
+	case "\x1b[1;5C", "\x1b[1;3C":
+		return s, wordRight(s, cur)
+	case "\x1b[H", "\x1b[1~", "\x01": // home, Ctrl-A
+		return s, 0
+	case "\x1b[F", "\x1b[4~", "\x05": // end, Ctrl-E
+		return s, len(s)
+	case "\x7f", "\b": // backspace: the rune before the caret
+		at := back()
+		return s[:at] + s[cur:], at
+	case "\x1b[3~", "\x04": // delete, Ctrl-D: the one after it
+		return s[:cur] + s[fwd():], cur
+	case "\x17": // Ctrl-W: the word before it
+		at := wordLeft(s[:cur])
+		return s[:at] + s[cur:], at
+	case "\x15": // Ctrl-U: all of it before
+		return s[cur:], 0
+	case "\x0b": // Ctrl-K: all of it after
+		return s[:cur], cur
 	}
+	if len(k) == 1 && k[0] >= ' ' {
+		return s[:cur] + k + s[cur:], cur + 1
+	}
+	return s, cur
+}
+
+// wordLeft is where the word at the end of s starts, over any spaces first —
+// what Ctrl-W rubs out, and what Ctrl-← steps back to.
+func wordLeft(s string) int {
+	s = strings.TrimRightFunc(s, unicode.IsSpace)
+	return len(strings.TrimRightFunc(s, notSpace))
+}
+
+// wordRight is the far end of the word after cur, the same way round.
+func wordRight(s string, cur int) int {
+	rest := strings.TrimLeftFunc(s[cur:], unicode.IsSpace)
+	return len(s) - len(strings.TrimLeftFunc(rest, notSpace))
+}
+
+func notSpace(r rune) bool { return !unicode.IsSpace(r) }
+
+// typeKey applies one keystroke to a line with no caret to move — the search
+// prompt, where the text only ever grows and shrinks at its end.
+func typeKey(s, k string) string {
+	s, _ = lineEdit(s, len(s), k)
 	return s
 }
 
@@ -675,7 +747,7 @@ func (u *ui) frame() ([]string, error) {
 	// doesn't act on anything until it's finished, and it's a sentence rather
 	// than a pattern, so it gets the room to be read back.
 	if u.entry.open {
-		for i, l := range entryPane(u.entry.text, u.entryTitle(), cols, body) {
+		for i, l := range entryPane(u.entry.text, u.entry.cur, u.entryTitle(), cols, body) {
 			if l != "" && i < body {
 				lines[i] = l
 			}
@@ -798,32 +870,106 @@ func paneBox(pad string, inner int, title string, body []string) []string {
 //
 // Three fifths of the terminal, centred, and that size whatever is in it: a box
 // that grew as you typed would shift the list behind it line by line. Text past
-// what it holds scrolls, keeping the end — where the caret is — in view.
-//
-// ponytail: the text is word-wrapped with the details pane's wrap(), so a run
-// of spaces shows as one space. What's stored is exactly what was typed; only
-// the drawing collapses. Write a space-preserving wrap if that ever grates.
-func entryPane(text, title string, cols, rows int) []string {
+// what it holds scrolls, keeping the caret in view.
+func entryPane(text string, cur int, title string, cols, rows int) []string {
 	w := min(max(cols*3/5, 24), cols)
 	h := min(max(rows*3/5, 3), rows)
 	inner := max(w-2, 1)
 	pad := strings.Repeat(" ", max(cols-w, 0)/2)
 	row := paneRow(pad, inner)
 
-	// The caret is drawn rather than left to the terminal's own: the tui hides
-	// that one, and moving it would mean tracking where on the screen the text
-	// happens to have wrapped to.
-	var body []string
-	for _, l := range wrap(text+"█", max(inner-2, 1)) {
+	lines, at, col := wrapEdit(text, max(inner-2, 1), min(max(cur, 0), len(text)))
+
+	// The window follows the caret rather than the end of the text: a prompt
+	// too tall for the box is exactly the one worth rewriting the middle of.
+	//
+	// ponytail: which leaves the caret on the bottom edge for as long as the
+	// text above it is taller than the box, a window with no memory of where it
+	// was last having nothing to scroll from. Keep a top in the entry if that
+	// ever grates.
+	visible := max(h-2, 0)
+	top := max(at-visible+1, 0)
+	body := make([]string, 0, visible)
+	for _, l := range lines[top:] {
+		if len(body) == visible {
+			break
+		}
 		body = append(body, row(" "+l))
 	}
-	for len(body) < h-2 {
+	for len(body) < visible {
 		body = append(body, row(""))
 	}
-	body = body[len(body)-max(h-2, 0):]
 
-	lines := paneBox(pad, inner, title, body)
-	return append(make([]string, max(rows-len(lines), 0)/2), lines...)
+	// The caret is drawn rather than left to the terminal's own: the tui hides
+	// that one, and moving it would mean tracking where on the screen the text
+	// happens to have wrapped to. It goes on the character it's in front of, in
+	// reverse video, the way draw() picks out a match — a block between the
+	// characters would take a column of its own, shunting the rest of the line
+	// along and re-wrapping it every time the caret moved. Past the end of the
+	// text there's a space under it, which is the block it used to be.
+	//
+	// The offset is into the line as it will be printed: the margin, the border,
+	// and the space the text is inset by.
+	if i := at - top; i >= 0 && i < len(body) {
+		body[i] = invert(body[i], len(pad)+2+col)
+	}
+
+	return append(make([]string, max(rows-visible-2, 0)/2), paneBox(pad, inner, title, body)...)
+}
+
+// invert puts the ith rune of line in reverse video, and hands back the rest of
+// it untouched — same width, same characters, one of them lit up.
+func invert(line string, i int) string {
+	r := []rune(line)
+	if i < 0 || i >= len(r) {
+		return line
+	}
+	return string(r[:i]) + "\x1b[7m" + string(r[i]) + "\x1b[0m" + string(r[i+1:])
+}
+
+// wrapEdit lays out a line being typed: the text in lines of at most width
+// runes, and where the caret — a byte offset into it — has come to rest, as a
+// line and a column of that line.
+//
+// Every character is kept, spaces included, unlike the details pane's wrap():
+// a box you type into can't collapse a run of spaces without the caret landing
+// somewhere the keys didn't put it. The breaks go where wrap() puts them — at a
+// space, or mid-word when a single word is wider than the box.
+//
+// The caret is placed after the break rather than before it, so that a caret in
+// front of a word that has just been pushed onto the next line goes with the
+// word rather than staying behind on the line it left.
+func wrapEdit(s string, width, cur int) (lines []string, row, col int) {
+	var line []rune
+	flush := func() { lines, line = append(lines, string(line)), nil }
+	space := true // the text starts a word the way a space would
+	for i, r := range s {
+		// A word that would run off the end starts the next line — and if it's
+		// wider than a line, it runs on and gets broken by the full check.
+		pushed := space && r != ' ' && len(line) > 0 && len(line)+wordWidth(s[i:]) > width
+		if len(line) == width || pushed {
+			flush()
+		}
+		if i == cur {
+			row, col = len(lines), len(line)
+		}
+		line, space = append(line, r), r == ' '
+	}
+	if cur >= len(s) { // the end of the text, which the loop never reaches
+		row, col = len(lines), len(line)
+	}
+	if len(line) > 0 || len(lines) == 0 {
+		flush()
+	}
+	return lines, row, col
+}
+
+// wordWidth is how many runes the word at the start of s takes.
+func wordWidth(s string) int {
+	if i := strings.IndexByte(s, ' '); i >= 0 {
+		s = s[:i]
+	}
+	return utf8.RuneCountInString(s)
 }
 
 // wrap breaks s into lines of at most width runes: at a space where there is
