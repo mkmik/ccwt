@@ -1229,15 +1229,19 @@ func activeIn(worktreePath string, cwds map[string]bool) bool {
 	return false
 }
 
-// sessionSummary describes in one line what the most recent Claude Code
-// session in worktreePath was about, or "" when that worktree has never had
-// one. Claude Code keeps its session transcripts as JSONL files under
-// ~/.claude/projects/<cwd with every non-alphanumeric character replaced by
-// "-">/, one per session, so "most recent" is simply the newest file there.
-func sessionSummary(worktreePath string) string {
+// newestTranscript is the most recent Claude Code session run in worktreePath —
+// the file it was recorded in, and a stamp that changes whenever that file does
+// — or ("", "") when that worktree has never had one. Claude Code keeps its
+// session transcripts as JSONL files under ~/.claude/projects/<cwd with every
+// non-alphanumeric character replaced by "-">/, one per session, so "most
+// recent" is simply the newest file there.
+//
+// Keyed by the path and kept under the home directory, which is why a removed
+// worktree still has one to show: the transcript outlives the tree it was about.
+func newestTranscript(worktreePath string) (path, stamp string) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	slug := strings.Map(func(r rune) rune {
 		switch {
@@ -1248,9 +1252,10 @@ func sessionSummary(worktreePath string) string {
 		}
 	}, worktreePath)
 
-	entries, err := os.ReadDir(filepath.Join(home, ".claude", "projects", slug))
+	dir := filepath.Join(home, ".claude", "projects", slug)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	var newest string
 	var newestMod time.Time
@@ -1268,16 +1273,24 @@ func sessionSummary(worktreePath string) string {
 		}
 	}
 	if newest == "" {
+		return "", ""
+	}
+	return filepath.Join(dir, newest), fmt.Sprintf("%s %d %d", newest, newestMod.UnixNano(), newestSize)
+}
+
+// sessionSummary describes in one line what the most recent Claude Code
+// session in worktreePath was about, or "" when that worktree has never had
+// one.
+func sessionSummary(worktreePath string) string {
+	path, stamp := newestTranscript(worktreePath)
+	if path == "" {
 		return ""
 	}
 	// A transcript runs to megabytes and the tui asks every row for one every
 	// couple of seconds; reading and scanning files that haven't moved is the
 	// bulk of what the tui process itself burns. The directory listing above
 	// already knows whether one moved, so keep the last answer until it does.
-	stamp := fmt.Sprintf("%s %d %d", newest, newestMod.UnixNano(), newestSize)
-	return topicCache.get(worktreePath, stamp, func() string {
-		return summarizeTranscript(filepath.Join(home, ".claude", "projects", slug, newest))
-	})
+	return topicCache.get(worktreePath, stamp, func() string { return summarizeTranscript(path) })
 }
 
 // summarizeTranscript boils one session transcript down to a single line: the
@@ -1336,6 +1349,109 @@ func summarizeTranscript(path string) string {
 	// prompt can be paragraphs of text — either way a table cell gets one line.
 	recap = strings.Join(strings.Fields(recap), " ")
 	return strings.TrimSpace(strings.TrimSuffix(recap, "(disable recaps in /config)"))
+}
+
+// transcriptLines is a whole session transcript as something to read: what was
+// asked, what Claude said back, and the tools it reached for in between, in the
+// order they happened. Who said what is the indentation — a prompt flush left
+// behind a "›", the answer set in under it — since a pane has no colours to
+// spare and a transcript is mostly the answer.
+//
+// Tool results are left out, and they are the bulk of the megabytes: what a
+// session did reads perfectly well from the prompts, the prose and the calls,
+// and the output of a `git status` from last Tuesday is not what anyone is
+// scrolling back for. Parsing every line in full is fine here, unlike
+// summarizeTranscript's hot path — this runs once, on the keystroke that opens
+// the page.
+func transcriptLines(path string) []string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+
+	var out []string
+	// One turn is one paragraph: a blank line in front of it, and its own text
+	// broken at its newlines — a frame line holding one would scroll the screen
+	// out from under the cursor arithmetic every later frame relies on. The
+	// control characters go for the same reason: each is one rune to the width
+	// arithmetic and something else entirely on the screen.
+	say := func(prefix, text string) {
+		text = strings.Map(func(r rune) rune {
+			switch {
+			case r == '\n':
+				return r
+			case r == '\t':
+				return ' '
+			case r < ' ', r == 0x7f:
+				return -1
+			}
+			return r
+		}, text)
+		if strings.TrimSpace(text) == "" {
+			return
+		}
+		out = append(out, "")
+		for _, l := range strings.Split(strings.Trim(text, "\n"), "\n") {
+			out = append(out, prefix+l)
+		}
+	}
+
+	for line := range strings.SplitSeq(string(data), "\n") {
+		var e struct {
+			Type    string `json:"type"`
+			IsMeta  bool   `json:"isMeta"`
+			Message struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal([]byte(line), &e) != nil {
+			continue
+		}
+		switch {
+		case e.Type == "user" && !e.IsMeta:
+			// A typed prompt is a bare JSON string, the same way summarizeTranscript
+			// finds the first one: everything else the session feeds back as a user
+			// turn is an array, and slash commands are a "<command-name>…" blob.
+			var text string
+			if json.Unmarshal(e.Message.Content, &text) == nil && !strings.HasPrefix(text, "<") {
+				say("› ", text)
+			}
+		case e.Type == "assistant":
+			var blocks []struct {
+				Type  string         `json:"type"`
+				Text  string         `json:"text"`
+				Name  string         `json:"name"`
+				Input map[string]any `json:"input"`
+			}
+			if json.Unmarshal(e.Message.Content, &blocks) != nil {
+				continue
+			}
+			for _, b := range blocks {
+				switch b.Type {
+				case "text":
+					say("  ", b.Text)
+				case "tool_use":
+					say("  ⚒ ", b.Name+toolArg(b.Input))
+				}
+			}
+		}
+	}
+	return out
+}
+
+// toolArg is the one argument of a tool call worth a line of the page: the
+// command a Bash ran, the file a Read read. First of the usual names that's
+// there wins, flattened and cut — the page is a read of what happened, not a
+// transcript of how to do it again. Written from ~, since a tool called in a
+// worktree names its files by the whole way there and half of that is the home
+// directory the reader is sitting in.
+func toolArg(input map[string]any) string {
+	for _, k := range []string{"command", "file_path", "path", "pattern", "url", "prompt", "description"} {
+		if s, ok := input[k].(string); ok && strings.TrimSpace(s) != "" {
+			return ": " + truncate(shortenHome(strings.Join(strings.Fields(s), " ")), 100)
+		}
+	}
+	return ""
 }
 
 type InitCmd struct {

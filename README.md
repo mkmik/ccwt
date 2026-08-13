@@ -150,6 +150,8 @@ prompts, and every removal goes in: `ccwt remove`, `ccwt done`, `ccwt gc`, and `
 tui.
 
 `l` shows that log as a window over the list, newest first; `esc` (or `l` again) closes it.
+Its rows select like the list's — the arrows (or `j`/`k`) walk them, a click lands on one —
+and `↵` opens the selected removal's page.
 
 ```
     NAME                  BRANCH                    AGE  CLAUDE  TOPIC
@@ -160,6 +162,34 @@ tui.
     │ 1d   dreamy-foraging-hickey  ⎇ Quote a queued prompt on its way to th… (#79)   │
     └────────────────────────────────────────────────────────────────────────────────┘
 ```
+
+That page is everything left to know about one removed worktree: what the log recorded, and
+then the whole of the last Claude Code session that ran in it — the prompts, what Claude
+said back, and the tools it reached for, which survive the removal because Claude Code files
+transcripts under your home directory rather than in the tree they were about. It scrolls:
+the arrows (or `j`/`k`) by a line, `space`/`b` by a screenful, `g`/`G` to either end, `esc`
+back to the log.
+
+```
+    ┌─ dreamy-foraging-hickey ───────────────────────────────────────────────────────┐
+    │ NAME     dreamy-foraging-hickey                                                │
+    │ PROJECT  /Users/you/src/ccwt                                                   │
+    │ REMOVED  1d ago, 2026-08-12 09:31                                              │
+    │ PATH     /Users/you/src/ccwt/.claude/worktrees/dreamy-foraging-hickey          │
+    │ TOPIC    ⎇ Quote a queued prompt on its way to the pane (#79)                  │
+    │ SESSION  ~/.claude/projects/-Users-you-src-ccwt--claude-worktrees-dreamy-…     │
+    │                                                                                │
+    │ › the prompt reaches the pane unquoted, fix it                                 │
+    │                                                                                │
+    │   The prompt is pasted into a shell line, so it needs shell quoting.           │
+    │                                                                                │
+    │   ⚒ Read: tui.go                                                               │
+    └────────────────────────────────────────────────────────────────────────────────┘
+```
+
+Tool *results* are left out — they are the bulk of the megabytes, and what a session did
+reads perfectly well from the prompts, the prose and the calls. The `SESSION` line says
+where the raw transcript is if you want the rest of it.
 
 `ccwt worklog` prints the same table on the command line, `-n` (default 20) saying how many
 lines of it. `-g` spans every configured project instead of this repo's, and adds a
@@ -475,7 +505,7 @@ swallow stderr, or you'll lose the cwd report.
 | `ccwt new [name]` | Create a worktree under `.claude/worktrees/<name>` on a new branch `worktree-<name>`, and print `<name>`. Generates a name if omitted; reuses an existing worktree of the same name. `--switch <branch>` checks the worktree out on an existing branch instead of creating one (`ccwt new` + `git switch <branch>`). When run inside a worktree it returns the enclosing one instead of creating a new one (override with `--force-create`). `--path` prints the worktree's absolute path instead of `<name>`. |
 | `ccwt cd <name>` | `cd` into an existing worktree under `.claude/worktrees/<name>` (with shell integration) — never creates it, errors if it doesn't exist, and the name is required. `ccwt cd ..` is shorthand for `ccwt ..`, and `ccwt cd -` jumps to the previous directory (`$OLDPWD`), like the shell's `cd -`. |
 | `ccwt list` | List the repo's Claude Code worktrees with branch, age, running-session status, and last commit, sorted newest-first. `-g` lists every project in `$XDG_CONFIG_HOME/ccwt/config.toml` instead, a section per project. `--no-headers` leaves out the header row, for feeding the table to `cut`, `awk` or a shell loop. |
-| `ccwt tui` | The default command, so a bare `ccwt` runs it. Show the `ccwt list` table full-screen, refreshing in place without flicker, over a status bar showing how far the current branch is ahead/behind its upstream. `q` (or Ctrl-C) quits, `p` runs `git pull`. Arrow keys (or `j`/`k`) select a worktree, a click on its row selects it, `/` (or `?`) searches the way vim does — incrementally, case-insensitive regexp, all matches highlighted, `n`/`N` for the next and previous while a pattern is in force; `d` shows the selected worktree's column values in full in a pane over the list (`esc` closes it), and `r` removes it, like `ccwt remove`. `l` shows the [worklog](#the-worklog) — the worktrees already removed and what they were about — in a pane of the same kind. `n` with no pattern in force queues a prompt behind the selected row — work to start once that worktree (or the prompt above it) is finished — typed into a box over the list and drawn as a tree under the row it waits on, kept in `$XDG_STATE_HOME/ccwt/tasks.db` and so shared with every other `ccwt` running; `e` in a queued prompt's details pane rewrites it in place — the box is a line editor, with the arrows, `home`/`end` and Ctrl-W/U/K, and Ctrl-G finishes the prompt in `$EDITOR`, as it does in Claude Code — `r` deletes it and everything queued behind it, and removing the worktree promotes what was queued on it to `<new>` rows — worktrees waiting to be made, which `space` makes and starts the prompt in. `n` with nothing selected queues a prompt that waits on nothing, which is a `<new>` row from the start; under `-g` that takes a project selected, its section header included. `-g` spans the configured projects as a foldable section each (`↵`, or a double-click on the header, folds one shut) and ignores the current directory entirely, every action (`p` included) applying to the selected row's project. `--interval` (default `2s`) sets the refresh rate, `--fetch` (default `1m`) how often `origin/main` is fetched in the background. The bar also says when the `ccwt` binary underneath it has been upgraded, and to which version. Under [Herdr](#herdr-integration-optional) `space` opens the selected worktree as a workspace (double-click does too) and `x` creates one and opens it. |
+| `ccwt tui` | The default command, so a bare `ccwt` runs it. Show the `ccwt list` table full-screen, refreshing in place without flicker, over a status bar showing how far the current branch is ahead/behind its upstream. `q` (or Ctrl-C) quits, `p` runs `git pull`. Arrow keys (or `j`/`k`) select a worktree, a click on its row selects it, `/` (or `?`) searches the way vim does — incrementally, case-insensitive regexp, all matches highlighted, `n`/`N` for the next and previous while a pattern is in force; `d` shows the selected worktree's column values in full in a pane over the list (`esc` closes it), and `r` removes it, like `ccwt remove`. `l` shows the [worklog](#the-worklog) — the worktrees already removed and what they were about — in a pane of the same kind, whose rows select like the list's; `↵` (or a double-click) opens the selected removal's page, which is what the log recorded about it followed by the whole Claude Code session that ran in it, scrolled with the arrows, `space`/`b` and `g`/`G`. `n` with no pattern in force queues a prompt behind the selected row — work to start once that worktree (or the prompt above it) is finished — typed into a box over the list and drawn as a tree under the row it waits on, kept in `$XDG_STATE_HOME/ccwt/tasks.db` and so shared with every other `ccwt` running; `e` in a queued prompt's details pane rewrites it in place — the box is a line editor, with the arrows, `home`/`end` and Ctrl-W/U/K, and Ctrl-G finishes the prompt in `$EDITOR`, as it does in Claude Code — `r` deletes it and everything queued behind it, and removing the worktree promotes what was queued on it to `<new>` rows — worktrees waiting to be made, which `space` makes and starts the prompt in. `n` with nothing selected queues a prompt that waits on nothing, which is a `<new>` row from the start; under `-g` that takes a project selected, its section header included. `-g` spans the configured projects as a foldable section each (`↵`, or a double-click on the header, folds one shut) and ignores the current directory entirely, every action (`p` included) applying to the selected row's project. `--interval` (default `2s`) sets the refresh rate, `--fetch` (default `1m`) how often `origin/main` is fetched in the background. The bar also says when the `ccwt` binary underneath it has been upgraded, and to which version. Under [Herdr](#herdr-integration-optional) `space` opens the selected worktree as a workspace (double-click does too) and `x` creates one and opens it. |
 | `ccwt remove <name>` | Remove the worktree at `.claude/worktrees/<name>` and delete its branch. `.` means the worktree you're currently in; removing the one you're in cds you to the repo root, like `ccwt ..`. The branch is deleted only if merged: an unmerged branch refuses the whole removal, worktree included, so nothing is stranded, and so does a worktree with uncommitted changes, and so does one with an agent working in it (the `✳` of `ccwt list`). Pass `-D` to remove anyway (unmerged branch deleted, uncommitted changes thrown away, working agent interrupted), or `--keep-branch` to remove only the worktree. Under [Herdr](#herdr-integration-optional) the worktree's workspace is closed first, once those checks pass. |
 | `ccwt done` | Finish with the worktree you're in: `ccwt remove .`, and then — under [Herdr](#herdr-integration-optional) — close the workspace you're sitting in, the one `remove` leaves alone. Same checks and same flags (`-D`, `--keep-branch`); a refusal leaves the workspace open. Outside Herdr it's just `ccwt remove .`. |
 | `ccwt gc` | Remove every worktree that's finished with: branch already merged (the `✓` of `ccwt list`), nothing uncommitted in it (no `*`), no agent working in it (no `✳`) and no Claude Code session running in it (a `no` in the `CLAUDE` column). Prints the list it found and asks before touching anything — `-y`/`--yes` skips the question. Each removal is exactly what `ccwt remove <name>` does, branch included. The worktree you're standing in is never removed — it says so on stderr and leaves it to `ccwt remove .`. |

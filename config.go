@@ -193,3 +193,17 @@ func expandHome(path string) string {
 	}
 	return filepath.Join(home, rest)
 }
+
+// shortenHome writes a path the way a config file would, which is the way it
+// fits on a line: expandHome the other way round.
+func shortenHome(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	rest, ok := strings.CutPrefix(path, home+string(filepath.Separator))
+	if !ok {
+		return path
+	}
+	return "~/" + rest
+}
