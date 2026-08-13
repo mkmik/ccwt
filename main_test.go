@@ -2401,6 +2401,73 @@ func writeTranscript(t *testing.T, home, path string, lines ...string) string {
 	return file
 }
 
+// The hamburger's menu is the status bar stood on end: the same actions, picked
+// with the mouse instead of typed. What a pick hands back is the key itself, so
+// the entry can't do anything the key doesn't.
+func TestHamburgerMenuPicksTheSameKeysTheBarLists(t *testing.T) {
+	initRepo(t)
+	t.Setenv("HERDR_ENV", "") // the herdr keys come and go; these don't
+	defer func(old func() (int, int)) { termSize = old }(termSize)
+	termSize = func() (int, int) { return 120, 40 }
+
+	u := ui{menu: actions(listRow{}, false, false), menuSel: 0} // what a click on the ☰ does
+	lines, err := u.frame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	screen := strings.Join(lines, "\n")
+	for _, want := range []string{"q:quit", "p:pull", "/:search", "l:log", "n:queue"} {
+		if !strings.Contains(screen, want) {
+			t.Errorf("the menu doesn't offer %q:\n%s", want, screen)
+		}
+	}
+	// It hangs off the corner it was clicked in: flush left, sitting on the bar,
+	// which keeps the ☰ so that clicking it again shuts the menu.
+	if bottom := lines[len(lines)-2]; !strings.HasPrefix(bottom, "└") {
+		t.Errorf("the menu's bottom rule isn't on the bar: %q", bottom)
+	}
+	if bar := lines[len(lines)-1]; !strings.Contains(bar, hamburger) {
+		t.Errorf("the bar lost the ☰ while the menu is up: %q", bar)
+	}
+
+	// A click lands on the entry it hit — the frame has just said where they are
+	// — and picking one sends its key on and shuts the menu.
+	click := func(row int) string { return fmt.Sprintf("\x1b[<0;1;%dM", row) }
+	if got := u.menuPick(click(u.menuFirst)); got != "q" || u.menu != nil {
+		t.Errorf("a click on the first entry = %q (menu open: %v), want q and shut", got, u.menu != nil)
+	}
+
+	// The arrows walk it and ↵ picks, for a hand that went back to the keyboard.
+	u.menu, u.menuSel = actions(listRow{}, false, false), 0
+	u.menuPick("\x1b[B")
+	if got := u.menuPick("\r"); got != "p" {
+		t.Errorf("↓ then ↵ = %q, want the second entry's key p", got)
+	}
+
+	// A click anywhere else shuts it without picking, and so does esc; any other
+	// key shuts it and goes through as itself, the menu being a list of keys.
+	for _, tc := range []struct{ key, want string }{
+		{click(1), ""},   // the list behind the menu
+		{"\x1b", ""},     // esc
+		{"\x03", "\x03"}, // Ctrl-C, which nothing may swallow
+		{"d", "d"},
+	} {
+		u.menu, u.menuSel = actions(listRow{}, false, false), 0
+		if got := u.menuPick(tc.key); got != tc.want || u.menu != nil {
+			t.Errorf("%q with the menu up = %q, want %q and the menu shut", tc.key, got, tc.want)
+		}
+	}
+
+	// The click that opened the menu still has a release to come, and a wheel
+	// has ticks: neither is a pick, and neither may shut what just opened.
+	for _, k := range []string{"\x1b[<0;1;40m", "\x1b[<64;1;20M"} {
+		u.menu, u.menuSel = actions(listRow{}, false, false), 0
+		if got := u.menuPick(k); got != "" || u.menu == nil {
+			t.Errorf("%q with the menu up = %q (menu shut: %v), want it left alone", k, got, u.menu == nil)
+		}
+	}
+}
+
 // The worklog's rows select and open like the list's, and what they open is the
 // only account of the work left anywhere: what the log recorded, and the
 // session that produced it — which survives the removal because Claude Code

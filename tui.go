@@ -190,7 +190,14 @@ func (c *TuiCmd) Run() error {
 			u.checkUpgrade()
 		case k := <-keys:
 			u.nav = time.Now() // hold the list still while it's being walked
+			// The menu gets first refusal, and what it hands back is a key like
+			// any other — the one it was picked for — which the switch below
+			// then runs. "" is a keystroke it dealt with itself.
+			if u.menu != nil {
+				k = u.menuPick(k)
+			}
 			switch {
+			case k == "": // the menu dealt with it itself
 			// While either prompt is up every keystroke is text, so these come
 			// first: `q` there is a letter, not the quit key.
 			case u.entry.open && k == "\x07": // Ctrl-G: finish the prompt in $EDITOR
@@ -355,9 +362,17 @@ func (c *TuiCmd) Run() error {
 					}
 				}
 			default:
+				col, row := mouseAt(k)
+				_, rows := termSize()
+				hit := u.at(row)
+				switch {
+				// The hamburger, in the bar's own corner: the keys the bar
+				// lists, as something to click through instead.
+				case row == rows && col <= hamburgerCols:
+					u.menu, u.menuSel = actions(u.sel, u.query != "", u.projects != nil), 0
 				// A click selects the row it landed on; it takes a second one to
 				// act on it, as it does in any other list.
-				if row := u.at(mouseRow(k)); row != (listRow{}) && u.click(row) {
+				case hit != (listRow{}) && u.click(hit):
 					if err := activate(); err != nil {
 						return err
 					}
@@ -429,6 +444,14 @@ type ui struct {
 	// run in it included. nil when there is none.
 	page *page
 
+	// The hamburger's menu: the actions it was opened on, which of them is
+	// selected, and the screen line the first one came out on — what turns a
+	// click into the entry it landed on, as logFirst does for the worklog. nil
+	// when the menu is shut.
+	menu      []action
+	menuSel   int
+	menuFirst int
+
 	// The last list read, kept so that moving the selection — which changes
 	// nothing but which row is reverse-videoed — doesn't re-run the git and
 	// lsof scan behind it (half a second on a big repo, once per keypress).
@@ -448,7 +471,7 @@ type ui struct {
 // long enough for several ticks, and rows sliding about behind the box you're
 // typing into is nothing but distraction.
 func (u *ui) stale() {
-	if u.detail == nil && !u.entry.open && !u.logOpen {
+	if u.detail == nil && !u.entry.open && !u.logOpen && u.menu == nil {
 		u.body = nil
 	}
 }
@@ -884,6 +907,54 @@ func (u *ui) logClick(i int) bool {
 	return double
 }
 
+// menuPick is the open menu's turn at a keystroke: it walks and closes on its
+// own keys, and hands back the key of whatever was picked — for the ordinary
+// key handling to run, so that picking an entry does exactly what the key does,
+// because it is the key. "" is "the menu dealt with it".
+//
+// A click anywhere but on an entry shuts the menu, the hamburger that opened it
+// included, which is how it toggles. Any other key shuts it and goes through as
+// itself rather than being swallowed: the menu is a list of keys, so typing one
+// of them is picking it — and that leaves nothing, Ctrl-C included, that the
+// menu can hold onto.
+func (u *ui) menuPick(k string) string {
+	switch k {
+	case "\x1b":
+		u.menu = nil
+	case "\x1b[A", "k":
+		u.menuSel = max(u.menuSel-1, 0)
+	case "\x1b[B", "j":
+		u.menuSel = min(u.menuSel+1, len(u.menu)-1)
+	case "\r", "\n", " ":
+		return u.take(u.menuSel)
+	default:
+		// The rest of what the mouse says is neither a pick nor a keystroke, and
+		// mustn't be taken for one: the click that opened the menu ends in a
+		// release, and a menu that shut on that would never be up long enough to
+		// pick anything from.
+		if strings.HasPrefix(k, "\x1b[<") {
+			row := mouseRow(k)
+			if i := row - u.menuFirst; row > 0 && i >= 0 && i < len(u.menu) {
+				return u.take(i)
+			}
+			if row > 0 {
+				u.menu = nil
+			}
+			return ""
+		}
+		u.menu = nil
+		return k
+	}
+	return ""
+}
+
+// take shuts the menu and hands back entry i's key.
+func (u *ui) take(i int) string {
+	k := u.menu[i].key
+	u.menu = nil
+	return k
+}
+
 // openPage opens the selected removal's page over the worklog. An empty log has
 // nothing to open, which is the ordinary state of a fresh install.
 func (u *ui) openPage() {
@@ -1053,6 +1124,20 @@ func (u *ui) frame() ([]string, error) {
 		return append(lines[:body], highlight(keys+u.msg, cols)), nil
 	}
 
+	// The menu is a modal of the same kind, over the same standing list — the
+	// bar's own actions, dropped out of the corner they're listed in. The bar
+	// keeps the ☰ while it's up, since clicking that again is how it shuts.
+	if u.menu != nil {
+		pane, first := menuPane(u.menu, u.menuSel, cols, body)
+		for i, l := range pane {
+			if l != "" && i < body {
+				lines[i] = l
+			}
+		}
+		u.menuFirst = first + 1 // +1: a mouse counts from 1
+		return append(lines[:body], highlight(hamburger+"  ↑↓:select  ↵:do  esc:close ", cols)), nil
+	}
+
 	// While the search prompt is up it takes the whole bar, as it does in vim:
 	// the key hints have nothing to say about a line you're typing into.
 	// The restart notice outlasts the transient messages but yields to them
@@ -1171,6 +1256,35 @@ func logPane(log []Removal, sel, top, cols, rows int) (lines []string, first int
 // two rules and the table's header take a line each. The frame needs the same
 // number to keep the selection inside the window, so there is one of it.
 func logFits(rows int) int { return max(rows-3, 1) }
+
+// menuPane is the hamburger's menu: the actions the bar lists, one per line, in
+// a box hanging off the corner the ☰ is in — flush left and sitting on the bar,
+// so it reads as having dropped out of it. It's as wide as its widest entry, no
+// margin: a menu is the size of what's in it.
+//
+// first is the line the topmost entry came out on, which is what turns a click
+// on it back into the entry it hit.
+func menuPane(menu []action, sel, cols, rows int) (lines []string, first int) {
+	inner := 0
+	for _, a := range menu {
+		inner = max(inner, len([]rune(a.name()+":"+a.label))+2)
+	}
+	inner = min(inner, max(cols-2, 1))
+	row := paneRow("", inner)
+
+	var body []string
+	for i, a := range menu {
+		l := row(" " + a.name() + ":" + a.label)
+		if i == sel {
+			l = band(l)
+		}
+		body = append(body, l)
+	}
+
+	box := paneBox("", inner, "menu", body)
+	top := max(rows-len(box), 0) // the bottom rule sits on the status bar
+	return append(make([]string, top), box...), top + 1
+}
 
 // page is a read of something far longer than a pane: a title, the text as it
 // was built, and a window onto it. The worklog's is the one there is — what was
@@ -1580,22 +1694,31 @@ func draw(line string, cols int, re *regexp.Regexp, bar string) string {
 func highlight(line string, cols int) string { return draw(line, cols, nil, "\x1b[7m") }
 
 // mouseRow returns the 1-based screen row of a left-button press in the SGR
-// mouse report k (ESC [ < button ; col ; row M), or 0 when k is anything else
-// — a release (which ends in "m"), a wheel tick, or an ordinary keystroke.
+// mouse report k, or 0 when k is anything else. Most of the screen is rows of
+// things, so the column is only asked for where it matters.
 func mouseRow(k string) int {
+	_, row := mouseAt(k)
+	return row
+}
+
+// mouseAt is the 1-based column and row of a left-button press in the SGR mouse
+// report k (ESC [ < button ; col ; row M), or 0, 0 when k is anything else — a
+// release (which ends in "m"), a wheel tick, or an ordinary keystroke.
+func mouseAt(k string) (col, row int) {
 	rest, ok := strings.CutPrefix(k, "\x1b[<")
 	if !ok || !strings.HasSuffix(rest, "M") {
-		return 0
+		return 0, 0
 	}
 	f := strings.Split(strings.TrimSuffix(rest, "M"), ";")
 	if len(f) != 3 || f[0] != "0" {
-		return 0
+		return 0, 0
 	}
-	row, err := strconv.Atoi(f[2])
-	if err != nil {
-		return 0
+	col, cerr := strconv.Atoi(f[1])
+	row, rerr := strconv.Atoi(f[2])
+	if cerr != nil || rerr != nil {
+		return 0, 0
 	}
-	return row
+	return col, row
 }
 
 // readKeys pumps stdin into a channel, one keystroke per message, and waits to
@@ -1655,56 +1778,96 @@ func splitKeys(s string) []string {
 	return keys
 }
 
-// statusBar is one reverse-video line: what the keys do, then either a
-// transient message (the result of a pull) or div, how far the branch has
-// drifted from its upstream, cut or padded to exactly the terminal width. The
-// per-worktree actions only appear once there's a worktree to apply them to,
-// and the herdr ones only when there's a herdr to open a workspace in. A
-// section header has nothing to open and nothing to remove — ↵ folds it, and
-// that's all it takes.
-//
-// searching says a pattern is in force, which is the one thing on this line
-// that changes what a key does rather than just whether it applies: `n` walks
-// the matches then, and queues a prompt the rest of the time. The bar is where
-// that's visible, so it says which.
+// statusBar is one reverse-video line: the hamburger, what the keys do, then
+// either a transient message (the result of a pull) or div, how far the branch
+// has drifted from its upstream, cut or padded to exactly the terminal width.
+// Which keys apply is actions()' business.
 func statusBar(cols int, msg string, sel listRow, div string, searching, global bool) string {
-	herdr := underHerdr()
-	keys := " ccwt  q:quit  p:pull  /:search  l:log"
-	// `n` queues behind whatever is selected, or as a "<new>" row of its own when
-	// that's nothing — which under -g takes a project selected to say whose, so
-	// there it's the one state the key has nothing to do in.
-	queue := "  n:queue"
-	if searching {
-		keys += "  n:next  N:prev"
-		queue = ""
-	} else if global && sel.project == "" {
-		queue = ""
-	}
-	if herdr {
-		keys += "  x:new"
-	}
-	switch {
-	case sel.worktree():
-		if herdr {
-			keys += "  space:open"
-		}
-		keys += queue + "  g:vcs  d:details  r:remove"
-	case sel.pending(): // a queued prompt whose worktree space would make
-		if herdr {
-			keys += "  space:start"
-		}
-		keys += queue + "  d:details  r:delete"
-	case sel.task != 0: // a queued prompt
-		keys += queue + "  d:details  r:delete"
-	case sel.project != "":
-		keys += queue + "  ↵:fold"
-	default: // nothing selected: the queue key is all that's left
-		keys += queue
+	keys := hamburger
+	for _, a := range actions(sel, searching, global) {
+		keys += "  " + a.name() + ":" + a.label
 	}
 	if msg == "" {
 		msg = div
 	}
 	return highlight(keys+" │ "+msg+" ", cols)
+}
+
+// hamburger is the bar's left corner: the menu that lists the same actions the
+// rest of the bar does, for a hand that's on the mouse rather than the keys.
+const hamburger = " ☰"
+
+// hamburgerCols is how far along the bar a click still counts as hitting it —
+// the ☰ and a cell either side, since a corner is aimed at roughly.
+const hamburgerCols = 3
+
+// action is one thing the tui can be asked to do: the key that does it, and
+// what it's called. The bar lists them along the bottom and the menu lists them
+// down the corner, both from here — and the menu sends the key rather than
+// doing anything itself, so an entry can't drift from what the key does.
+type action struct {
+	key   string
+	label string
+}
+
+// name is the key as it reads on screen, for the two that aren't their own name.
+func (a action) name() string {
+	switch a.key {
+	case " ":
+		return "space"
+	case "\r":
+		return "↵"
+	}
+	return a.key
+}
+
+// actions is what the keys do right now. The per-worktree ones only appear once
+// there's a worktree to apply them to, and the herdr ones only when there's a
+// herdr to open a workspace in. A section header has nothing to open and nothing
+// to remove — ↵ folds it, and that's all it takes.
+//
+// searching says a pattern is in force, which is the one thing here that changes
+// what a key does rather than just whether it applies: `n` walks the matches
+// then, and queues a prompt the rest of the time.
+func actions(sel listRow, searching, global bool) []action {
+	herdr := underHerdr()
+	as := []action{{"q", "quit"}, {"p", "pull"}, {"/", "search"}, {"l", "log"}}
+	// `n` queues behind whatever is selected, or as a "<new>" row of its own when
+	// that's nothing — which under -g takes a project selected to say whose, so
+	// there it's the one state the key has nothing to do in.
+	queue := []action{{"n", "queue"}}
+	if searching {
+		as = append(as, action{"n", "next"}, action{"N", "prev"})
+		queue = nil
+	} else if global && sel.project == "" {
+		queue = nil
+	}
+	if herdr {
+		as = append(as, action{"x", "new"})
+	}
+	switch {
+	case sel.worktree():
+		if herdr {
+			as = append(as, action{" ", "open"})
+		}
+		as = append(as, queue...)
+		as = append(as, action{"g", "vcs"}, action{"d", "details"}, action{"r", "remove"})
+	case sel.pending(): // a queued prompt whose worktree space would make
+		if herdr {
+			as = append(as, action{" ", "start"})
+		}
+		as = append(as, queue...)
+		as = append(as, action{"d", "details"}, action{"r", "delete"})
+	case sel.task != 0: // a queued prompt
+		as = append(as, queue...)
+		as = append(as, action{"d", "details"}, action{"r", "delete"})
+	case sel.project != "":
+		as = append(as, queue...)
+		as = append(as, action{"\r", "fold"})
+	default: // nothing selected: the queue key is all that's left
+		as = append(as, queue...)
+	}
+	return as
 }
 
 // gitDivergence reports dir's branch and how far it has drifted from its
