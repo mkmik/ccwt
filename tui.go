@@ -252,8 +252,12 @@ func (c *TuiCmd) Run() error {
 				u.seek(u.dir)
 			case k == "N":
 				u.seek(-u.dir)
+			// esc backs out of what the list is holding onto: the pattern, and
+			// the selection with it — which is how the per-row keys, and the bar
+			// that lists them, go away again.
 			case k == "\x1b":
 				u.search = search{} // :nohlsearch, near enough
+				u.sel = listRow{}
 			case k == " ": // opens a worktree, and does nothing on a section header
 				if err := open(); err != nil {
 					return err
