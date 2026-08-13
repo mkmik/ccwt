@@ -144,6 +144,36 @@ func TestListMarksMerged(t *testing.T) {
 	}
 }
 
+// TestListMarksWaitingForReview: a branch whose commits are all on its upstream
+// gets the "☐" glyph — pushed, nothing left to do here but wait. A branch with
+// a commit the upstream hasn't got is still the author's problem and stays bare.
+func TestListMarksWaitingForReview(t *testing.T) {
+	repo := initRepo(t)
+	git(t, "remote", "add", "origin", repo)
+	for _, name := range []string{"pushed", "unpushed"} {
+		path := capture(t, &NewWorktreeBranchCmd{Name: name, Path: true})
+		git(t, "-C", path, "commit", "--allow-empty", "-m", name)
+		branch := "worktree-" + name
+		// The branch as pushed, then a commit on top of it for "unpushed".
+		git(t, "update-ref", "refs/remotes/origin/"+branch, "refs/heads/"+branch)
+		git(t, "config", "branch."+branch+".remote", "origin")
+		git(t, "config", "branch."+branch+".merge", "refs/heads/"+branch)
+		if name == "unpushed" {
+			git(t, "-C", path, "commit", "--allow-empty", "-m", "more")
+		}
+	}
+
+	defer func(orig func() bool) { stdoutIsTTY = orig }(stdoutIsTTY)
+	stdoutIsTTY = func() bool { return true }
+	for _, line := range strings.Split(capture(t, &ListCmd{}), "\n") {
+		name, _, _ := strings.Cut(strings.TrimLeft(line, "✓*"+reviewGlyph+" "), " ")
+		want := name == "pushed"
+		if got := strings.HasPrefix(line, "  "+reviewGlyph+" "); got != want {
+			t.Errorf("review glyph on %q = %v, want %v: %q", name, got, want, line)
+		}
+	}
+}
+
 // TestListRowsStayPaired: `list` looks each worktree up concurrently, so pin
 // the invariant that breaks if a result ever lands on the wrong row — every
 // name must still be printed next to its own branch and its own commit.

@@ -73,8 +73,10 @@ Claude Code session is currently running in each, and what each one is about:
 
 Every row leads with two glyphs. The first is a `*` on the worktree you're currently in.
 The second says whether the worktree can go: `✓` means its branch is already merged into
-`main` (or `master`), so it's safe to `ccwt remove`; `*` means it has uncommitted changes,
-which isn't safe to remove whatever git makes of the branch; `✳` beats both and means an
+`main` (or `master`), so it's safe to `ccwt remove`; `☐` means it isn't merged but every
+commit is already on its upstream, so nothing here is waiting on you — it's waiting on a
+review or on CI; `*` means it has uncommitted changes, which isn't safe to remove whatever
+git makes of the branch or the remote; `✳` beats them all and means an
 agent is working in there right now — see [Herdr integration](#herdr-integration-optional).
 The glyphs are omitted when stdout isn't a terminal, so piped output stays parseable.
 
@@ -306,7 +308,7 @@ it — remove it with `git branch -D` if you want it gone.
 columns = ["name", "age", "topic"]
 ```
 
-The `*`/`✓`/`✳` markers ride on `name`, so leaving it out leaves them out too.
+The `*`/`✓`/`☐`/`✳` markers ride on `name`, so leaving it out leaves them out too.
 
 `task_command` is what a [queued prompt](#queued-prompts) is handed to when its worktree is
 made — `claude` when unset, split on spaces so flags get through:
@@ -325,7 +327,7 @@ it — everything above works on its own. When Herdr *is* running, these extras 
 this section is the whole of it:
 
 **The `✳` marker.** In `ccwt list` and the tui, `✳` in the leading glyphs means Herdr says an
-agent is working in that worktree right now. It outranks `*` and `✓`, and it's the case git
+agent is working in that worktree right now. It outranks `*`, `☐` and `✓`, and it's the case git
 can't see at all: a branch made a minute ago with nothing committed to it is merged and clean.
 It comes from Herdr rather than from Claude Code, so it holds for whatever agent is running
 there. `ccwt remove`, `ccwt done` and `ccwt gc` all refuse a worktree marked this way
