@@ -96,6 +96,66 @@ func TestListNoHeaders(t *testing.T) {
 	}
 }
 
+// Freshness is the younger of a worktree's last commit and its last session, so
+// the one an agent has been working in all afternoon without committing comes
+// out above the one with the newer commit that nobody has touched since.
+// --sort=commit is git's answer alone, and the flag beats the config file.
+func TestListSortsByFreshness(t *testing.T) {
+	// Every commit at a fixed date, so "younger" is decided by what the test
+	// sets rather than by when it happens to run.
+	t.Setenv("GIT_AUTHOR_DATE", "2024-01-01T00:00:00Z")
+	t.Setenv("GIT_COMMITTER_DATE", "2024-01-01T00:00:00Z")
+	initRepo(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	session := capture(t, &NewWorktreeBranchCmd{Name: "session", Path: true})
+	committed := capture(t, &NewWorktreeBranchCmd{Name: "committed", Path: true})
+	t.Setenv("GIT_COMMITTER_DATE", "2024-01-03T00:00:00Z") // %ct is what the list reads
+	git(t, "-C", committed, "commit", "--allow-empty", "-m", "newer commit")
+	transcript := writeTranscript(t, home, session, `{"type":"user","message":{"role":"user","content":"still going"}}`)
+	// The transcript as it would be mid-session: written after that commit.
+	when := time.Date(2024, 1, 5, 0, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(transcript, when, when); err != nil {
+		t.Fatal(err)
+	}
+
+	first := func(cmd *ListCmd) string {
+		t.Helper()
+		return strings.Fields(capture(t, cmd))[0]
+	}
+	if got := first(&ListCmd{NoHeaders: true}); got != "session" {
+		t.Errorf("top row = %q, want the worktree with the live session on top by default", got)
+	}
+	if got := first(&ListCmd{NoHeaders: true, Sort: "commit"}); got != "committed" {
+		t.Errorf("--sort=commit top row = %q, want the newest commit", got)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(configPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath(), []byte("sort = \"commit\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := first(&ListCmd{NoHeaders: true}); got != "committed" {
+		t.Errorf("top row = %q, want the config's sort order honoured", got)
+	}
+	if got := first(&ListCmd{NoHeaders: true, Sort: "freshness"}); got != "session" {
+		t.Errorf("--sort=freshness top row = %q, want the flag to beat the config", got)
+	}
+
+	// A typo silently sorting some other way is one you'd never find.
+	if err := os.WriteFile(configPath(), []byte("sort = \"freshnes\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&ListCmd{}).Run(); err == nil || !strings.Contains(err.Error(), "freshnes") {
+		t.Errorf("unknown sort order in the config: err = %v, want one naming it", err)
+	}
+	if err := (&ListCmd{Sort: "whenever"}).Run(); err == nil || !strings.Contains(err.Error(), "--sort") {
+		t.Errorf("unknown --sort: err = %v, want one naming the flag", err)
+	}
+}
+
 // TestRemoveCurrent covers `ccwt remove .` from inside the worktree it names:
 // the worktree goes away and the command prints (and asks the wrapper to cd to)
 // the repo root, instead of refusing.
@@ -1272,7 +1332,7 @@ func TestListFitsTerminalWidth(t *testing.T) {
 
 	for _, width := range []int{20, 50, 60, 80, 100, 200} {
 		var buf bytes.Buffer
-		if _, _, err := renderList(&buf, true, width, nil, nil, true); err != nil {
+		if _, _, err := renderList(&buf, true, width, nil, nil, true, ""); err != nil {
 			t.Fatal(err)
 		}
 		// Every column bottoms out at minCol, so a terminal narrower than that
@@ -1404,7 +1464,7 @@ func TestConfigColumns(t *testing.T) {
 
 	writeConfig("columns = [\"topic\", \"name\"]\n")
 	var buf bytes.Buffer
-	if _, _, err := renderList(&buf, false, 0, nil, nil, true); err != nil {
+	if _, _, err := renderList(&buf, false, 0, nil, nil, true, ""); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -1419,7 +1479,7 @@ func TestConfigColumns(t *testing.T) {
 	}
 
 	writeConfig("columns = [\"nmae\"]\n")
-	if _, _, err := renderList(&buf, false, 0, nil, nil, true); err == nil || !strings.Contains(err.Error(), "nmae") {
+	if _, _, err := renderList(&buf, false, 0, nil, nil, true, ""); err == nil || !strings.Contains(err.Error(), "nmae") {
 		t.Errorf("unknown column: err = %v, want one naming it", err)
 	}
 }
@@ -1515,7 +1575,7 @@ func TestGlobalListSpansProjects(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	got, _, err := renderList(&buf, false, 0, roots, nil, true)
+	got, _, err := renderList(&buf, false, 0, roots, nil, true, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1537,7 +1597,7 @@ func TestGlobalListSpansProjects(t *testing.T) {
 	// Folded shut, a project keeps its header — turned around, and still saying
 	// how much is underneath — and contributes no rows at all.
 	buf.Reset()
-	got, _, err = renderList(&buf, false, 0, roots, map[string]bool{gitRoots[0]: true}, true)
+	got, _, err = renderList(&buf, false, 0, roots, map[string]bool{gitRoots[0]: true}, true, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1592,7 +1652,7 @@ func TestGlobalListOutsideAnyRepo(t *testing.T) {
 	// tty: the markers are the only thing that ever looked at the current
 	// directory, so the complaint only shows up with them turned on.
 	var buf bytes.Buffer
-	_, _, err = renderList(&buf, true, 0, []string{root}, nil, true)
+	_, _, err = renderList(&buf, true, 0, []string{root}, nil, true, "")
 	w.Close()
 	if err != nil {
 		t.Fatal(err)
@@ -1739,7 +1799,7 @@ func TestDefaultCommandIsTui(t *testing.T) {
 func renderRows(t *testing.T) ([]listRow, string) {
 	t.Helper()
 	var buf bytes.Buffer
-	rows, _, err := renderList(&buf, false, 0, nil, nil, false)
+	rows, _, err := renderList(&buf, false, 0, nil, nil, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1939,7 +1999,7 @@ esac
 	}
 	// What the tui has when a key is pressed: the rows of the last frame and
 	// their cells, which is where startPending reads the prompt from.
-	rows, cells, err := renderList(io.Discard, false, 0, nil, nil, false)
+	rows, cells, err := renderList(io.Discard, false, 0, nil, nil, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2299,10 +2359,11 @@ func TestRemoveLogsWhatTheWorktreeWasAbout(t *testing.T) {
 }
 
 // writeTranscript files lines as a Claude Code session run in the worktree at
-// path: under $HOME/.claude/projects, in a directory named for that path with
-// every non-alphanumeric character replaced by "-", which is Claude Code's own
-// convention and the only way back to a removed worktree's transcript.
-func writeTranscript(t *testing.T, home, path string, lines ...string) {
+// path, and returns the file it wrote: under $HOME/.claude/projects, in a
+// directory named for that path with every non-alphanumeric character replaced
+// by "-", which is Claude Code's own convention and the only way back to a
+// removed worktree's transcript.
+func writeTranscript(t *testing.T, home, path string, lines ...string) string {
 	t.Helper()
 	slug := strings.Map(func(r rune) rune {
 		switch {
@@ -2316,9 +2377,11 @@ func writeTranscript(t *testing.T, home, path string, lines ...string) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "session.jsonl"), []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+	file := filepath.Join(dir, "session.jsonl")
+	if err := os.WriteFile(file, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	return file
 }
 
 // The worklog's rows select and open like the list's, and what they open is the

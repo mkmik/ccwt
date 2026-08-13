@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -28,6 +29,8 @@ type Config struct {
 	// TaskCommand is what a queued prompt is handed to when its worktree is
 	// made: the new pane runs `<task_command> "<the prompt>"`.
 	TaskCommand string `toml:"task_command"`
+	// Sort is the order `list` and `tui` put the worktrees in; see sortOrders.
+	Sort string `toml:"sort"`
 	// Forges maps the host of a remote to the cli that knows about its reviews
 	// — "gh" or "glab" — for the tui's `g` key. Only a host whose name doesn't
 	// say which it is needs a line here, a self-hosted GitLab most of all:
@@ -35,6 +38,42 @@ type Config struct {
 	//	[forges]
 	//	"code.example.com" = "glab"
 	Forges map[string]string `toml:"forges"`
+}
+
+// sortOrders are the orders the worktree list can be in, the first being the
+// default. Freshness is the younger of the two things that say something
+// happened in a worktree — its last commit, and the last line written to its
+// newest session transcript — which is the question a list you are picking your
+// next thing to look at off is really asking: an agent that has been working
+// for an hour without committing is not stale, and a worktree whose branch was
+// last touched in March is, whatever else git has to say about it. Commit is
+// git's answer on its own, which is what the list was before there was a
+// choice.
+const (
+	sortFreshness = "freshness"
+	sortCommit    = "commit"
+)
+
+var sortOrders = []string{sortFreshness, sortCommit}
+
+// sortOrder resolves how to sort: the flag if there is one, else the config,
+// else freshness. An unknown name is an error rather than a silent fallback,
+// the same way an unknown column is — and it says where it read it, since a
+// typo in a hand-written config is otherwise invisible.
+func sortOrder(flag string) (string, error) {
+	cfg, err := loadConfig()
+	if err != nil {
+		return "", err
+	}
+	order := cmp.Or(flag, cfg.Sort, sortOrders[0])
+	if !slices.Contains(sortOrders, order) {
+		where := "--sort"
+		if flag == "" {
+			where = configPath() + ": `sort`"
+		}
+		return "", fmt.Errorf("%s: unknown sort order %q (have %s)", where, order, strings.Join(sortOrders, ", "))
+	}
+	return order, nil
 }
 
 // defaultTaskCommand is what runs a queued prompt when the config says nothing.
