@@ -319,6 +319,10 @@ func (c *RemoveCmd) remove(root string) error {
 		}
 	}
 
+	// What the worktree was about, read while it is still there to read it from:
+	// the session transcript is keyed by its path and the last commit is in it.
+	entry := Removal{Project: root, Name: name, Topic: worktreeTopic(worktreePath), At: time.Now()}
+
 	if _, err := os.Stat(worktreePath); err == nil {
 		if err := gitutil.RemoveWorktree(root, worktreePath); err != nil {
 			return err
@@ -330,6 +334,13 @@ func (c *RemoveCmd) remove(root string) error {
 	if err := gitutil.PruneWorktrees(root); err != nil {
 		return err
 	}
+
+	// The worktree is gone by now, so a log that can't be written is not a
+	// removal that failed: saying so would have the tui report a refusal for
+	// work it actually did. ponytail: dropped rather than reported — the log is
+	// a convenience, and the state directory being unwritable will be obvious
+	// from `ccwt worklog` coming back empty.
+	_ = logRemoval(entry)
 
 	if !c.KeepBranch {
 		// Force-delete: the check above is the safety valve, and it is the only
@@ -1504,6 +1515,7 @@ var cli struct {
 	Remove            RemoveCmd            `cmd:"" name:"remove" help:"Delete a worktree under .claude/worktrees/<name> and its branch (merged, clean and no agent working in it; -D to remove anyway, --keep-branch to remove only the worktree). Under herdr its workspace is closed first. Use \".\" for the current worktree; removing it cds to the repo root."`
 	Done              DoneCmd              `cmd:"" name:"done" help:"Finish with the worktree you're in: remove it and its branch (same checks and flags as \"remove .\"), then under herdr close the workspace you're sitting in."`
 	Lock              LockCmd              `cmd:"" name:"lock" help:"Lock a worktree the way \"ccwt new\" does, so \"git worktree prune\" can't reclaim it while its directory is unavailable. Use \".\" for the worktree you're currently in."`
+	Worklog           WorklogCmd           `cmd:"" name:"worklog" help:"Show the worktrees that have been removed, newest first, with what each one was about — what you were working on lately, after the worktree itself is gone."`
 	Gc                GcCmd                `cmd:"" name:"gc" help:"Remove every worktree whose branch is already merged, with nothing uncommitted, no agent working in it and no Claude Code session running in it, branches included — except the one you're in. Prints what it found and asks first, unless -y."`
 	RepoRoot          RepoRootCmd          `cmd:"" name:"repo-root" help:"Print the root directory of the current git repository."`
 	DotDot            DotDotCmd            `cmd:"" name:".." help:"Print the enclosing repo root, stripping any .claude/worktrees/<name> suffix (shorthand for repo-root --root-worktree)."`

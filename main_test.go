@@ -2107,3 +2107,55 @@ func capture(t *testing.T, cmd interface{ Run() error }) string {
 	}
 	return strings.TrimRight(string(out), "\n")
 }
+
+// The worklog is what a removal leaves behind, and the only thing that still
+// knows what the worktree was about: the branch is deleted, the directory is
+// gone, and the session transcript is keyed by the path that no longer exists.
+// Only the repo asked about answers — the log spans projects under -g, so the
+// filtering is what keeps one repo's removals out of another's list.
+func TestRemoveLogsWhatTheWorktreeWasAbout(t *testing.T) {
+	initRepo(t)
+	path := capture(t, &NewWorktreeBranchCmd{Name: "alpha", Path: true})
+	git(t, "-C", path, "commit", "--allow-empty", "-m", "teach the parser about commas")
+	// git's own spelling of the repo root, which is what the log is keyed by:
+	// on macOS the temp directory initRepo made is /var/..., and git says
+	// /private/var/....
+	repo, err := gitutil.RepoRoot("", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := logRemoval(Removal{Project: "/elsewhere", Name: "bravo", Topic: "not ours", At: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&RemoveCmd{Name: "alpha", Force: true}).Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	log, err := loadWorklog([]string{repo}, worklogLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(log) != 1 {
+		t.Fatalf("%d entries logged for %s, want just the removed worktree: %v", len(log), repo, log)
+	}
+	if log[0].Name != "alpha" {
+		t.Errorf("logged %q, want the removed worktree alpha", log[0].Name)
+	}
+	if !strings.Contains(log[0].Topic, "teach the parser about commas") {
+		t.Errorf("logged topic %q, want what the worktree was about", log[0].Topic)
+	}
+
+	// Newest first, and a log spanning repos says which one each row was in.
+	both, err := loadWorklog([]string{repo, "/elsewhere"}, worklogLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(both) != 2 || both[0].Name != "alpha" {
+		t.Fatalf("the log across both projects is %v, want the newest removal first", both)
+	}
+	table := strings.Join(worklogTable(both, 0), "\n")
+	if !strings.Contains(table, "PROJECT") || !strings.Contains(table, "elsewhere") {
+		t.Errorf("a table of two projects doesn't say which is which:\n%s", table)
+	}
+}

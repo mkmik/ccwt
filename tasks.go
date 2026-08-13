@@ -106,6 +106,12 @@ func openTasks() (*sql.DB, error) {
 			// column gets it here, one made by the schema above rejects the
 			// statement as a duplicate column, and either way we're done.
 			_, _ = db.Exec(`ALTER TABLE task ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0`)
+			// The worklog shares the file: one thing that outlives the process,
+			// one place to keep it, and the pragmas above cover both tables.
+			if _, err = db.Exec(worklogSchema); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("%s: %w", path, err)
+			}
 			return db, nil
 		}
 		if wait > 64*time.Millisecond {
