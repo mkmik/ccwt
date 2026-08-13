@@ -28,6 +28,13 @@ type Config struct {
 	// TaskCommand is what a queued prompt is handed to when its worktree is
 	// made: the new pane runs `<task_command> "<the prompt>"`.
 	TaskCommand string `toml:"task_command"`
+	// Forges maps the host of a remote to the cli that knows about its reviews
+	// — "gh" or "glab" — for the tui's `g` key. Only a host whose name doesn't
+	// say which it is needs a line here, a self-hosted GitLab most of all:
+	//
+	//	[forges]
+	//	"code.example.com" = "glab"
+	Forges map[string]string `toml:"forges"`
 }
 
 // defaultTaskCommand is what runs a queued prompt when the config says nothing.
