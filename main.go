@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -880,7 +881,11 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	// as cancelling what was queued behind it.
 	emitPending := func(project string) {
 		for _, t := range queue.pending(project, live) {
-			id := listRow{project: project, path: t.Worktree, task: t.ID}
+			// A prompt queued with nothing selected never had a worktree to wait
+			// on, so the project stands in as the row's path: the row is a
+			// worktree of that project, waiting to be made, which is what the
+			// removed one's path says for the rest of them.
+			id := listRow{project: project, path: cmp.Or(t.Worktree, project), task: t.ID}
 			cells := []string{gutter + gutter + newName, "", humanAge(time.Since(t.Created)), "", t.Prompt}
 			add(id, cells)
 			cells[0] = newName

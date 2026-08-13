@@ -238,15 +238,23 @@ func (c *TuiCmd) Run() error {
 			case k == "?":
 				u.prompt(-1)
 			// `n` is what to do next: queue a prompt behind the selected row —
-			// a worktree, or another prompt. A section header is not something
-			// work can wait for.
+			// a worktree, or another prompt.
+			//
+			// Behind nothing at all when nothing is selected: work that isn't
+			// waiting for anything, so it goes straight on the list as a "<new>"
+			// row — a worktree waiting to be made, which `space` then makes. A
+			// section header is the same thing under -g, where the header is how
+			// you say which project's worktree it is to be; with nothing selected
+			// there, there's nothing to say it.
 			//
 			// Unless a search is in force, where `n` is vim's next match, as it
 			// has to be for the pattern you just typed to be walkable at all.
 			// `esc` clears the pattern and gives the key back.
 			case k == "n" && u.query == "":
-				if u.sel.worktree() || u.sel.task != 0 {
-					u.entry = newEntry(u.sel, "", 0)
+				if parent, err := u.queueParent(); err != nil {
+					u.msg = "queue: " + err.Error()
+				} else {
+					u.entry = newEntry(parent, "", 0)
 				}
 			case k == "n":
 				u.seek(u.dir)
@@ -738,6 +746,25 @@ func (u *ui) root() (string, error) {
 	return gitutil.RepoRoot("", true)
 }
 
+// queueParent is the row a new prompt hangs off: the selected worktree, or the
+// selected prompt when a chain is being extended — and with nothing selected,
+// no row at all, only the project it belongs to, which is what makes it a
+// "<new>" row of its own rather than something waiting on a row above it.
+//
+// Under -g that project has to be selected, its section header being enough:
+// with a dozen repos on screen there is otherwise nothing to say which one's
+// worktree the prompt is asking for.
+func (u *ui) queueParent() (listRow, error) {
+	if u.sel.worktree() || u.sel.task != 0 {
+		return u.sel, nil
+	}
+	root, err := u.root()
+	if err != nil {
+		return listRow{}, errors.New("select a project first")
+	}
+	return listRow{project: root}, nil
+}
+
 // worklog is the removals of the projects in view, newest first: the repo the
 // tui is running in, or all the configured ones under -g — the same span the
 // list itself covers, since the pane is a look back at that list.
@@ -889,7 +916,7 @@ func (u *ui) frame() ([]string, error) {
 	// the key hints have nothing to say about a line you're typing into.
 	// The restart notice outlasts the transient messages but yields to them
 	// while one is up: they're a second old, and it will still be true after.
-	bar := statusBar(cols, cmp.Or(u.msg, u.restart), u.sel, u.divergence(), u.query != "")
+	bar := statusBar(cols, cmp.Or(u.msg, u.restart), u.sel, u.divergence(), u.query != "", u.projects != nil)
 	if u.typing {
 		p := "/"
 		if u.dir < 0 {
@@ -910,6 +937,8 @@ func (u *ui) entryTitle() string {
 	switch {
 	case u.entry.id != 0:
 		return "edit" // rewriting one, not queueing behind it
+	case u.entry.parent.path == "" && u.entry.parent.task == 0:
+		return newName // behind nothing: it is the row it will become
 	case len(cells) == 0:
 		return ""
 	case u.entry.parent.task > 0:
@@ -1369,12 +1398,17 @@ func splitKeys(s string) []string {
 // that changes what a key does rather than just whether it applies: `n` walks
 // the matches then, and queues a prompt the rest of the time. The bar is where
 // that's visible, so it says which.
-func statusBar(cols int, msg string, sel listRow, div string, searching bool) string {
+func statusBar(cols int, msg string, sel listRow, div string, searching, global bool) string {
 	herdr := underHerdr()
 	keys := " ccwt  q:quit  p:pull  /:search  l:log"
+	// `n` queues behind whatever is selected, or as a "<new>" row of its own when
+	// that's nothing — which under -g takes a project selected to say whose, so
+	// there it's the one state the key has nothing to do in.
 	queue := "  n:queue"
 	if searching {
 		keys += "  n:next  N:prev"
+		queue = ""
+	} else if global && sel.project == "" {
 		queue = ""
 	}
 	if herdr {
@@ -1394,7 +1428,9 @@ func statusBar(cols int, msg string, sel listRow, div string, searching bool) st
 	case sel.task != 0: // a queued prompt
 		keys += queue + "  d:details  r:delete"
 	case sel.project != "":
-		keys += "  ↵:fold"
+		keys += queue + "  ↵:fold"
+	default: // nothing selected: the queue key is all that's left
+		keys += queue
 	}
 	if msg == "" {
 		msg = div
