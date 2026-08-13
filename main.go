@@ -478,8 +478,9 @@ func gcCandidates(root string, active map[string]bool) ([]string, error) {
 }
 
 type ListCmd struct {
-	Global    bool `short:"g" help:"List the worktrees of every project listed in $XDG_CONFIG_HOME/ccwt/config.toml, not just this repo's."`
-	NoHeaders bool `help:"Leave out the header row, for feeding the table to cut, awk, or a shell loop."`
+	Global    bool   `short:"g" help:"List the worktrees of every project listed in $XDG_CONFIG_HOME/ccwt/config.toml, not just this repo's."`
+	NoHeaders bool   `help:"Leave out the header row, for feeding the table to cut, awk, or a shell loop."`
+	Sort      string `help:"Order the worktrees by \"freshness\" — the last commit or the last thing written to the newest Claude Code session there, whichever is younger — or by \"commit\" alone. Overrides sort in the config file (freshness when neither says)."`
 }
 
 // marker returns the flag glyph, or the blank gutter of the same width so
@@ -507,7 +508,7 @@ func (c *ListCmd) Run() error {
 	if tty {
 		width, _, _ = term.GetSize(int(os.Stdout.Fd()))
 	}
-	_, _, err = renderList(os.Stdout, tty, width, projects, nil, !c.NoHeaders)
+	_, _, err = renderList(os.Stdout, tty, width, projects, nil, !c.NoHeaders, c.Sort)
 	return err
 }
 
@@ -616,13 +617,18 @@ var (
 // holds the roots whose section is folded shut — only the tui has any, since
 // there is nothing to unfold them with on the command line. headers draws the
 // header row; `list --no-headers` is the only caller that doesn't want it.
-func renderList(out io.Writer, tty bool, width int, projects []string, collapsed map[string]bool, headers bool) ([]listRow, map[listRow][]string, error) {
+// sort is the order to put the worktrees in, or "" for whatever the config says.
+func renderList(out io.Writer, tty bool, width int, projects []string, collapsed map[string]bool, headers bool, sort string) ([]listRow, map[listRow][]string, error) {
 	global := projects != nil
 	if !global {
 		// "" is the current directory, which is how git reads "the repo we're in".
 		projects = []string{""}
 	}
 	cols, err := listColumns()
+	if err != nil {
+		return nil, nil, err
+	}
+	order, err := sortOrder(sort)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -762,7 +768,15 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 				r.age = "?"
 				r.subject = "(no commits)"
 			}
-			r.topic = topic(sessionSummary(rf.wt.Path), r.subject)
+			session, stamp, wrote := newestTranscript(rf.wt.Path)
+			r.topic = topic(transcriptSummary(rf.wt.Path, session, stamp), r.subject)
+			// Under freshness the session counts too, and a worktree with no
+			// commits at all — an agent that started twenty minutes ago — goes
+			// to the top on the transcript alone rather than to the bottom on
+			// its zero commit time.
+			if order == sortFreshness && wrote.After(r.sortTime) {
+				r.sortTime = wrote
+			}
 			if tty {
 				glyph, on := "✓", rf.merged[rf.wt.Branch]
 				if !on && pushedCache.get(rf.wt.Path, window(gitScanWindow), func() bool {
@@ -793,10 +807,10 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 		}
 	}
 
-	// Stable: worktrees sharing a commit timestamp keep `git worktree list`
-	// order rather than shuffling between runs. Newest-first, which is the
-	// order you were working in — across all the projects at once outside -g's
-	// sections, and within each section under them.
+	// Stable: worktrees sharing a timestamp keep `git worktree list` order
+	// rather than shuffling between runs. Newest-first, which is the order you
+	// were working in — across all the projects at once outside -g's sections,
+	// and within each section under them.
 	slices.SortStableFunc(rows, func(a, b row) int {
 		return b.sortTime.Compare(a.sortTime)
 	})
@@ -1230,18 +1244,24 @@ func activeIn(worktreePath string, cwds map[string]bool) bool {
 }
 
 // newestTranscript is the most recent Claude Code session run in worktreePath —
-// the file it was recorded in, and a stamp that changes whenever that file does
-// — or ("", "") when that worktree has never had one. Claude Code keeps its
-// session transcripts as JSONL files under ~/.claude/projects/<cwd with every
-// non-alphanumeric character replaced by "-">/, one per session, so "most
-// recent" is simply the newest file there.
+// the file it was recorded in, a stamp that changes whenever that file does, and
+// when it last changed — or the zero values when that worktree has never had
+// one. Claude Code keeps its session transcripts as JSONL files under
+// ~/.claude/projects/<cwd with every non-alphanumeric character replaced by
+// "-">/, one per session, so "most recent" is simply the newest file there.
 //
 // Keyed by the path and kept under the home directory, which is why a removed
 // worktree still has one to show: the transcript outlives the tree it was about.
-func newestTranscript(worktreePath string) (path, stamp string) {
+//
+// ponytail: the mtime stands in for "when the agent last said something" — a
+// transcript is appended to as the session runs, so the file moves whenever
+// anything does. Parse the last entry's timestamp out of it if the distinction
+// between the agent writing and the user typing ever matters; for freshness it
+// doesn't, both mean work is happening here.
+func newestTranscript(worktreePath string) (path, stamp string, mod time.Time) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", ""
+		return "", "", time.Time{}
 	}
 	slug := strings.Map(func(r rune) rune {
 		switch {
@@ -1255,7 +1275,7 @@ func newestTranscript(worktreePath string) (path, stamp string) {
 	dir := filepath.Join(home, ".claude", "projects", slug)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return "", ""
+		return "", "", time.Time{}
 	}
 	var newest string
 	var newestMod time.Time
@@ -1273,23 +1293,30 @@ func newestTranscript(worktreePath string) (path, stamp string) {
 		}
 	}
 	if newest == "" {
-		return "", ""
+		return "", "", time.Time{}
 	}
-	return filepath.Join(dir, newest), fmt.Sprintf("%s %d %d", newest, newestMod.UnixNano(), newestSize)
+	return filepath.Join(dir, newest), fmt.Sprintf("%s %d %d", newest, newestMod.UnixNano(), newestSize), newestMod
 }
 
 // sessionSummary describes in one line what the most recent Claude Code
 // session in worktreePath was about, or "" when that worktree has never had
 // one.
 func sessionSummary(worktreePath string) string {
-	path, stamp := newestTranscript(worktreePath)
+	path, stamp, _ := newestTranscript(worktreePath)
+	return transcriptSummary(worktreePath, path, stamp)
+}
+
+// transcriptSummary is sessionSummary for a caller that has already asked
+// newestTranscript — the list, which wants the mtime as well and shouldn't scan
+// the directory twice to get both.
+func transcriptSummary(worktreePath, path, stamp string) string {
 	if path == "" {
 		return ""
 	}
 	// A transcript runs to megabytes and the tui asks every row for one every
 	// couple of seconds; reading and scanning files that haven't moved is the
-	// bulk of what the tui process itself burns. The directory listing above
-	// already knows whether one moved, so keep the last answer until it does.
+	// bulk of what the tui process itself burns. The directory listing already
+	// knows whether one moved, so keep the last answer until it does.
 	return topicCache.get(worktreePath, stamp, func() string { return summarizeTranscript(path) })
 }
 

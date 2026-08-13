@@ -31,6 +31,7 @@ type TuiCmd struct {
 	Interval time.Duration `default:"2s" help:"How often to re-read the worktree list."`
 	Fetch    time.Duration `default:"1m" help:"How often to fetch origin/main in the background (0 to never)."`
 	Global   bool          `short:"g" help:"Show the worktrees of every project listed in $XDG_CONFIG_HOME/ccwt/config.toml, not just this repo's."`
+	Sort     string        `help:"Order the worktrees by \"freshness\" — the last commit or the last thing written to the newest Claude Code session there, whichever is younger — or by \"commit\" alone. Overrides sort in the config file (freshness when neither says)."`
 }
 
 func (c *TuiCmd) Run() error {
@@ -96,7 +97,7 @@ func (c *TuiCmd) Run() error {
 	tick := time.NewTicker(c.Interval)
 	defer tick.Stop()
 
-	u := ui{projects: projects, stamp: selfStamp()}
+	u := ui{projects: projects, sort: c.Sort, stamp: selfStamp()}
 	var last string
 	redraw := func() error {
 		lines, err := u.frame()
@@ -376,6 +377,7 @@ type ui struct {
 	height    int // how many rows the frame has room for
 	projects  []string
 	collapsed map[string]bool // project root -> section folded shut
+	sort      string          // --sort, or "" for the config's order
 	msg       string
 
 	search        // the pattern in force, which n and N walk and the frame picks out
@@ -906,7 +908,7 @@ func (u *ui) frame() ([]string, error) {
 	// narrower, since the table is laid out to the width.
 	if u.body == nil || cols != u.cols {
 		var buf bytes.Buffer
-		listRows, cells, err := renderList(&buf, true, cols, u.projects, u.collapsed, true)
+		listRows, cells, err := renderList(&buf, true, cols, u.projects, u.collapsed, true, u.sort)
 		if err != nil {
 			return nil, err
 		}
@@ -1207,7 +1209,7 @@ func pagePane(p *page, cols, rows int) []string {
 // Read the whole directory if that stops being true.
 func removalPage(r Removal) *page {
 	path := filepath.Join(r.Project, ".claude", "worktrees", r.Name)
-	transcript, _ := newestTranscript(path)
+	transcript, _, _ := newestTranscript(path)
 	text := []string{
 		"NAME     " + r.Name,
 		"PROJECT  " + r.Project,
@@ -1848,7 +1850,7 @@ func (u *ui) startPending() string {
 // COMMAND words with spaces and types the line at the pane's shell prompt.
 // Unquoted, a multi-word prompt arrives at `claude` as several argv entries and
 // only the first of them is taken as the prompt. ponytail: single quotes and
-// the '\'' trick, the one escape that needs no table of shell metacharacters.
+// the '\” trick, the one escape that needs no table of shell metacharacters.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
