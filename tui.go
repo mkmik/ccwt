@@ -186,9 +186,10 @@ func (c *TuiCmd) Run() error {
 			return nil
 		case <-tick.C:
 			u.msg = ""
-			u.stale() // the tick is what re-reads the list
+			u.refresh() // the tick is what re-reads the list
 			u.checkUpgrade()
 		case k := <-keys:
+			u.nav = time.Now() // hold the list still while it's being walked
 			switch {
 			// While either prompt is up every keystroke is text, so these come
 			// first: `q` there is a letter, not the quit key.
@@ -400,6 +401,7 @@ type ui struct {
 	restart string
 
 	clicked time.Time // when the last click landed on sel — see click
+	nav     time.Time // when the last key was pressed — see refresh
 
 	// The selected worktree's cells in full, snapshotted when the details pane
 	// was opened over the list; nil when it isn't open. A snapshot rather than a
@@ -448,6 +450,21 @@ type ui struct {
 func (u *ui) stale() {
 	if u.detail == nil && !u.entry.open && !u.logOpen {
 		u.body = nil
+	}
+}
+
+// navQuiet is how long a keystroke keeps the interval tick off the list. The
+// selection is held by identity, so a re-sort never lands you on a different
+// worktree — but the row still slides somewhere else on screen mid-walk, and
+// aiming the arrows at a list that moves is the thing that makes it hard.
+const navQuiet = 2 * time.Second
+
+// refresh is what the tick does: re-read the list, unless a key was pressed
+// within navQuiet. Only the tick is held off; anything that changed the list
+// itself (a removal, a new worktree) calls stale() directly and shows at once.
+func (u *ui) refresh() {
+	if time.Since(u.nav) >= navQuiet {
+		u.stale()
 	}
 }
 
