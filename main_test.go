@@ -1701,6 +1701,14 @@ func TestQueuedPromptsHangOffTheirWorktree(t *testing.T) {
 	if !strings.Contains(lines[1], "then update the docs") || !strings.Contains(lines[2], "and then cut a release") {
 		t.Errorf("the prompts aren't on their rows:\n%s", body)
 	}
+	// Neither has a worktree of its own, and the NAME column says so rather than
+	// standing empty. The worktree they hang off keeps its own name.
+	if !strings.Contains(lines[1], queuedName) || !strings.Contains(lines[2], queuedName) {
+		t.Errorf("a queued prompt doesn't say %s in NAME:\n%s", queuedName, body)
+	}
+	if strings.Contains(lines[0], queuedName) {
+		t.Errorf("the worktree row says %s:\n%s", queuedName, body)
+	}
 	// The second waits on the first, so it's drawn a level further in.
 	if in, deeper := strings.Index(lines[1], taskGlyph), strings.Index(lines[2], taskGlyph); deeper <= in {
 		t.Errorf("the chained prompt is indented %d, want more than the %d of the one it waits on:\n%s", deeper, in, body)

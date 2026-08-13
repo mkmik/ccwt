@@ -169,10 +169,13 @@ Once recorded it's a row of the list:
 ```
     NAME                    BRANCH                    AGE  CLAUDE  TOPIC
 * * dreamy-foraging-hickey  worktree-dreamy-…-hickey  2h   yes     ✳ Goal was a widget on…
-    ↳                                                 4m           rebase onto main and open the PR
-      ↳                                               3m           then port the widget to the mobile layout
+    ↳ <queued>                                        4m           rebase onto main and open the PR
+      ↳ <queued>                                      3m           then port the widget to the mobile layout
   ✓ calm-baking-otter       worktree-calm-bak…-otter  1d   no      ⎇ Fix the flux capacitor
 ```
+
+It has no worktree of its own yet, and `<queued>` in NAME says that's why the column is
+otherwise empty, the way `<new>` does below for a prompt whose turn has come.
 
 `n` on a queued prompt queues another one behind *that* one instead, so a chain of "and
 then" is a tree hanging off the worktree it starts from. `d` shows a long prompt in full in
@@ -197,7 +200,7 @@ it:
     NAME                    BRANCH                    AGE  CLAUDE  TOPIC
   ✓ calm-baking-otter       worktree-calm-bak…-otter  1d   no      ⎇ Fix the flux capacitor
     <new>                                             2h           rebase onto main and open the PR
-    ↳                                                 2h           then port the widget to the mobile layout
+    ↳ <queued>                                        2h           then port the widget to the mobile layout
 ```
 
 `space` (or a double-click) on a `<new>` row is where the worktree finally gets made: a
