@@ -168,6 +168,14 @@ func (c *TuiCmd) Run() error {
 				u.queue(k)
 			case u.typing:
 				u.edit(k)
+			// The worklog pane is modal the same way, and closes the same way.
+			case u.logOpen:
+				switch k {
+				case "\x1b", "l":
+					u.logOpen, u.log = false, nil
+				case "\x03":
+					return nil
+				}
 			// The details pane is modal, so it comes next: while it's up, esc
 			// closes it and nothing else reaches the list underneath.
 			case u.detail != nil:
@@ -227,6 +235,15 @@ func (c *TuiCmd) Run() error {
 			case k == "d":
 				// Nothing selected, or a section header: no cells, no pane.
 				u.detail = u.cells[u.sel]
+			// `l` is what was here before: the worktrees already removed, which
+			// is the only place left that says what they were about.
+			case k == "l":
+				log, err := u.worklog()
+				if err != nil {
+					u.msg = "worklog: " + err.Error()
+					break
+				}
+				u.log, u.logOpen = log, true
 			// `r` removes whatever the row stands for: the worktree, or — on a
 			// queued prompt, "<new>" ones included — the prompt and the chain
 			// waiting under it.
@@ -300,6 +317,12 @@ type ui struct {
 	// so a worktree that goes away underneath doesn't blank the pane.
 	detail []string
 
+	// The removals the worklog pane is showing, read when it was opened, and
+	// whether it's open — which is its own flag rather than a non-nil log,
+	// because an empty log is the ordinary state of a fresh install.
+	log     []Removal
+	logOpen bool
+
 	// The last list read, kept so that moving the selection — which changes
 	// nothing but which row is reverse-videoed — doesn't re-run the git and
 	// lsof scan behind it (half a second on a big repo, once per keypress).
@@ -319,7 +342,7 @@ type ui struct {
 // long enough for several ticks, and rows sliding about behind the box you're
 // typing into is nothing but distraction.
 func (u *ui) stale() {
-	if u.detail == nil && !u.entry.open {
+	if u.detail == nil && !u.entry.open && !u.logOpen {
 		u.body = nil
 	}
 }
@@ -635,6 +658,17 @@ func (u *ui) root() (string, error) {
 	return gitutil.RepoRoot("", true)
 }
 
+// worklog is the removals of the projects in view, newest first: the repo the
+// tui is running in, or all the configured ones under -g — the same span the
+// list itself covers, since the pane is a look back at that list.
+func (u *ui) worklog() ([]Removal, error) {
+	projects, err := worklogProjects(u.projects)
+	if err != nil {
+		return nil, err
+	}
+	return loadWorklog(projects, worklogLimit)
+}
+
 // gitDir is the repo the whole-repo actions work on — the pull key, and the
 // branch the status bar reports the drift of. "." outside -g: the directory
 // ccwt was started in. Under -g the selected row's project instead, and ""
@@ -741,6 +775,17 @@ func (u *ui) frame() ([]string, error) {
 		return append(lines[:body], highlight(keys, cols)), nil
 	}
 
+	// The worklog is a modal of the same kind, over the same standing list: what
+	// was removed, under what is still there.
+	if u.logOpen {
+		for i, l := range logPane(u.log, cols, body) {
+			if l != "" && i < body {
+				lines[i] = l
+			}
+		}
+		return append(lines[:body], highlight(" esc:close ", cols)), nil
+	}
+
 	// The queue prompt is a modal of the same kind, and for the same reason: the
 	// row the prompt will hang off is one of the ones still showing around it.
 	// A search goes in the bar because it acts on the list as you type it; this
@@ -836,6 +881,32 @@ func detailPane(cells []string, cols, rows int) []string {
 
 	lines := paneBox(pad, inner, cells[0], body)
 	// Vertical margin only out of what's left over — the values come first.
+	return append(make([]string, min(2, max(rows-len(lines), 0)/2)), lines...)
+}
+
+// logPane is the worklog modal: the removals as the table worklogTable makes
+// of them, in a window over the list, fitted to the pane rather than to the
+// terminal. Same border and margin as the details pane, since it is the same
+// kind of look aside from the list.
+//
+// ponytail: no scrolling and no window — the query is capped at worklogLimit
+// and the newest are the ones being asked about, so what doesn't fit is cut off
+// the bottom, oldest first. Give it the list's window if the log grows.
+func logPane(log []Removal, cols, rows int) []string {
+	mx := min(4, max(cols-64, 0)/2) // the details pane's margin, to the pixel
+	inner := max(cols-2*mx-2, 1)
+	pad := strings.Repeat(" ", mx)
+	row := paneRow(pad, inner)
+
+	var body []string
+	for _, l := range worklogTable(log, max(inner-2, 1)) {
+		body = append(body, row(" "+l))
+	}
+	if fits := max(rows-2, 1); len(body) > fits { // the two rules take a line each
+		body = body[:fits]
+	}
+
+	lines := paneBox(pad, inner, "worklog", body)
 	return append(make([]string, min(2, max(rows-len(lines), 0)/2)), lines...)
 }
 
@@ -1209,7 +1280,7 @@ func splitKeys(s string) []string {
 // that's visible, so it says which.
 func statusBar(cols int, msg string, sel listRow, div string, searching bool) string {
 	herdr := underHerdr()
-	keys := " ccwt  q:quit  p:pull  /:search"
+	keys := " ccwt  q:quit  p:pull  /:search  l:log"
 	queue := "  n:queue"
 	if searching {
 		keys += "  n:next  N:prev"
