@@ -1954,6 +1954,37 @@ func TestLineEditor(t *testing.T) {
 	}
 }
 
+// Ctrl-G finishes the prompt in $EDITOR: the editor is handed the text as it
+// stands, and what it saves is what the box comes back with — as one line,
+// since that's what the box, the table and the pane can each draw. A refusing
+// editor leaves the prompt exactly as it was, which is the whole point of it
+// coming back rather than being replaced.
+func TestExternalEditor(t *testing.T) {
+	// A stand-in editor: it appends to the file it's given, so what comes back
+	// says both that the prompt went in and that the edit came out.
+	ed := filepath.Join(t.TempDir(), "ed")
+	script := "#!/bin/sh\nprintf ' to the\\nmobile layout\\n' >> \"$1\"\n"
+	if err := os.WriteFile(ed, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", ed)
+
+	const prompt = "port the widget"
+	got, err := externalEdit(prompt)
+	if err != nil {
+		t.Fatalf("externalEdit: %v", err)
+	}
+	if want := "port the widget to the mobile layout"; got != want {
+		t.Errorf("externalEdit = %q, want %q", got, want)
+	}
+
+	t.Setenv("EDITOR", "false") // an editor that exits without saving anything
+	if got, err := externalEdit(prompt); err == nil || got != prompt {
+		t.Errorf("a failed editor gave %q, %v; want the prompt back and an error", got, err)
+	}
+}
+
 // The box scrolls to wherever the caret is rather than to the end of the text:
 // on a prompt taller than the box, rewriting the first sentence is exactly what
 // the editing keys are for.

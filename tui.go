@@ -75,9 +75,12 @@ func (c *TuiCmd) Run() error {
 	// stdin — otherwise the terminal would write click reports into a stdin
 	// nobody drains.
 	var keys <-chan string
+	var next chan<- struct{}
+	var raw *term.State // the terminal as it was, to give back while $EDITOR has it
 	if state, err := term.MakeRaw(int(os.Stdin.Fd())); err == nil {
+		raw = state
 		defer term.Restore(int(os.Stdin.Fd()), state)
-		keys = readKeys()
+		keys, next = readKeys()
 		// 1000: report button presses. 1006: report them in SGR form, which
 		// unlike the original encoding keeps working past column 223.
 		fmt.Print("\x1b[?1000h\x1b[?1006h")
@@ -147,6 +150,29 @@ func (c *TuiCmd) Run() error {
 		u.toggle()
 		return nil
 	}
+	// external is Ctrl-G: hand the prompt being typed to $EDITOR and take back
+	// what comes out of it. Claude Code's own prompt box binds that key to the
+	// same thing, and a box you type a prompt into is a box you reach for the
+	// same reflex in.
+	//
+	// The tui gives the terminal back for as long as the editor has it — cooked
+	// mode, the shell's screen, no mouse reporting — and takes all three again
+	// after. Nothing of ours is reading stdin meanwhile: the key that got us here
+	// hasn't been acknowledged yet, so readKeys is parked. Only a key can get
+	// here, and there are no keys without a terminal, so raw is set.
+	external := func() {
+		fmt.Print("\x1b[?1006l\x1b[?1000l\x1b[?7h\x1b[?25h\x1b[?1049l")
+		term.Restore(int(os.Stdin.Fd()), raw)
+		text, err := externalEdit(u.entry.text)
+		term.MakeRaw(int(os.Stdin.Fd()))
+		fmt.Print("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1006h")
+
+		last = "" // the editor drew over the frame, so redraw all of it
+		u.entry.text, u.entry.cur = text, len(text)
+		if err != nil {
+			u.msg = "editor failed: " + err.Error()
+		}
+	}
 
 	for {
 		if err := redraw(); err != nil {
@@ -164,6 +190,8 @@ func (c *TuiCmd) Run() error {
 			switch {
 			// While either prompt is up every keystroke is text, so these come
 			// first: `q` there is a letter, not the quit key.
+			case u.entry.open && k == "\x07": // Ctrl-G: finish the prompt in $EDITOR
+				external()
 			case u.entry.open:
 				u.queue(k)
 			case u.typing:
@@ -275,6 +303,8 @@ func (c *TuiCmd) Run() error {
 					}
 				}
 			}
+			// Only now does the next keystroke get read — see readKeys.
+			next <- struct{}{}
 		}
 	}
 }
@@ -481,6 +511,52 @@ func (u *ui) queue(k string) {
 	default:
 		u.entry.text, u.entry.cur = lineEdit(u.entry.text, u.entry.cur, k)
 	}
+}
+
+// externalEdit round-trips text through $EDITOR: a temporary file with the
+// prompt in it, the editor on that file, and back whatever was saved. Anything
+// that goes wrong hands back the text it was given — the prompt on screen is
+// the one thing here that can't be fetched again.
+//
+// $VISUAL, then $EDITOR, then vi: the order every unix program that hands you a
+// file to fill in has used since crontab(1). Through sh because the variable
+// holds a command line rather than a path ("code -w", "emacsclient -nw"), and
+// the file as an argument to it rather than pasted into it, so that a temporary
+// directory with a space in its name is still one filename.
+//
+// ponytail: newlines are folded to spaces on the way back, because a prompt is
+// one line everywhere the tui draws it — the box, the TOPIC column, the details
+// pane — and a bare newline in a frame line would scroll the screen out from
+// under the cursor arithmetic every later frame relies on. Teach wrapEdit and
+// the table about them if a prompt ever wants paragraphs.
+func externalEdit(text string) (string, error) {
+	f, err := os.CreateTemp("", "ccwt-*.md") // .md: a prompt is prose
+	if err != nil {
+		return text, err
+	}
+	defer os.Remove(f.Name())
+	_, err = f.WriteString(text)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return text, err
+	}
+
+	editor := cmp.Or(os.Getenv("VISUAL"), os.Getenv("EDITOR"), "vi")
+	cmd := exec.Command("sh", "-c", editor+` "$1"`, "sh", f.Name())
+	// The tui points the real stderr at /dev/null while it owns the screen, so
+	// the editor's complaints go where its screen goes: the terminal on stdout.
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stdout
+	if err := cmd.Run(); err != nil {
+		return text, err
+	}
+
+	edited, err := os.ReadFile(f.Name())
+	if err != nil {
+		return text, err
+	}
+	return strings.Join(strings.Fields(string(edited)), " "), nil
 }
 
 // lineEdit applies one keystroke to a line being typed and says where the caret
@@ -797,11 +873,12 @@ func (u *ui) frame() ([]string, error) {
 				lines[i] = l
 			}
 		}
-		keys := " ↵:queue  esc:cancel "
+		keys := " ↵:queue  ctrl-g:$EDITOR  esc:cancel "
 		if u.entry.id != 0 {
-			keys = " ↵:save  esc:cancel "
+			keys = " ↵:save  ctrl-g:$EDITOR  esc:cancel "
 		}
-		return append(lines[:body], highlight(keys, cols)), nil
+		// The bar is the only line left to say why the editor didn't open.
+		return append(lines[:body], highlight(keys+u.msg, cols)), nil
 	}
 
 	// While the search prompt is up it takes the whole bar, as it does in vim:
@@ -1219,12 +1296,21 @@ func mouseRow(k string) int {
 	return row
 }
 
-// readKeys pumps stdin into a channel, one keystroke per message.
+// readKeys pumps stdin into a channel, one keystroke per message, and waits to
+// be asked for the next one: the caller sends on the second channel once it has
+// finished with the one it took.
 //
-// ponytail: the goroutine is left blocked on Read at exit — it dies with the
-// process, and this is the whole program, not a library.
-func readKeys() <-chan string {
-	keys := make(chan string, 64)
+// The acknowledgement is what makes Ctrl-G possible. A tty wakes whichever
+// reader is blocked on it, so a Read of ours left pending while $EDITOR has the
+// terminal would eat the keystrokes meant for the editor. Lockstep means that
+// while a key is being handled there is no Read of ours to eat them, and the
+// keys typed meanwhile wait in the tty's own buffer instead of this channel's.
+//
+// ponytail: the goroutine is left blocked at exit — on the Read, or on an
+// acknowledgement that never comes — and dies with the process, which is the
+// whole program, not a library.
+func readKeys() (<-chan string, chan<- struct{}) {
+	keys, next := make(chan string), make(chan struct{})
 	go func() {
 		buf := make([]byte, 256)
 		for {
@@ -1234,10 +1320,11 @@ func readKeys() <-chan string {
 			}
 			for _, k := range splitKeys(string(buf[:n])) {
 				keys <- k
+				<-next
 			}
 		}
 	}()
-	return keys
+	return keys, next
 }
 
 // splitKeys cuts one read into the keystrokes it holds: a CSI sequence
