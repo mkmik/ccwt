@@ -39,19 +39,25 @@ type Task struct {
 // One connection per process and no coordination beyond these pragmas: WAL so a
 // tui re-reading the list doesn't block the one being typed into, busy_timeout
 // so a writer that finds the database locked waits for it rather than failing,
-// and foreign_keys so that deleting a prompt takes everything queued behind it.
+// and foreign_keys so a prompt can't end up waiting on one that isn't there.
 // ponytail: this is the whole of the locking story, which is what a single user
 // with a few tabs open needs; nothing here would survive being a multi-writer
 // service.
 const taskDSN = "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
 
+// deleted is when the prompt was dropped, 0 while it is still queued. Dropping
+// is a mark rather than a removal: `r` is one keystroke and the prompt it takes
+// away can be a paragraph, so the row stays in the table to be recovered with
+// an UPDATE. ponytail: nothing ever prunes them — a text row per dropped prompt
+// is not a size problem; add a sweep if a database this small ever becomes one.
 const taskSchema = `CREATE TABLE IF NOT EXISTS task (
 	id       INTEGER PRIMARY KEY,
 	project  TEXT    NOT NULL,
 	worktree TEXT    NOT NULL,
 	parent   INTEGER REFERENCES task(id) ON DELETE CASCADE,
 	prompt   TEXT    NOT NULL,
-	created  INTEGER NOT NULL
+	created  INTEGER NOT NULL,
+	deleted  INTEGER NOT NULL DEFAULT 0
 ) STRICT`
 
 // tasksPath is $XDG_STATE_HOME/ccwt/tasks.db, falling back to the ~/.local/state
@@ -96,6 +102,10 @@ func openTasks() (*sql.DB, error) {
 	}
 	for wait := time.Millisecond; ; wait *= 4 {
 		if _, err = db.Exec(taskSchema); err == nil {
+			// ponytail: the whole migration story — a database from before the
+			// column gets it here, one made by the schema above rejects the
+			// statement as a duplicate column, and either way we're done.
+			_, _ = db.Exec(`ALTER TABLE task ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0`)
 			return db, nil
 		}
 		if wait > 64*time.Millisecond {
@@ -122,7 +132,7 @@ func loadTasks() ([]Task, error) {
 		return nil, err
 	}
 	defer db.Close()
-	rows, err := db.Query(`SELECT id, project, worktree, COALESCE(parent, 0), prompt, created FROM task ORDER BY id`)
+	rows, err := db.Query(`SELECT id, project, worktree, COALESCE(parent, 0), prompt, created FROM task WHERE deleted = 0 ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -229,16 +239,24 @@ func updateTask(id int64, prompt string) error {
 	return err
 }
 
-// dropTask deletes a queued prompt and — through the schema's cascade —
-// everything queued behind it: a chain waits on the prompt above it, so nothing
-// under a deleted one can still happen.
+// dropTask marks a queued prompt as deleted, and everything queued behind it: a
+// chain waits on the prompt above it, so nothing under a dropped one can still
+// happen.
+//
+// Walking the chain by hand is what ON DELETE CASCADE used to do for free — a
+// mark isn't a delete, so nothing follows it on its own. Parents are always
+// older than their children, so the walk can't loop.
 func dropTask(id int64) (string, bool) {
 	db, err := openTasks()
 	if err != nil {
 		return "delete failed: " + err.Error(), false
 	}
 	defer db.Close()
-	if _, err := db.Exec(`DELETE FROM task WHERE id = ?`, id); err != nil {
+	if _, err := db.Exec(`WITH RECURSIVE doomed(id) AS (
+		SELECT ?
+		UNION ALL SELECT task.id FROM task JOIN doomed ON task.parent = doomed.id
+	) UPDATE task SET deleted = ? WHERE id IN (SELECT id FROM doomed)`,
+		id, time.Now().Unix()); err != nil {
 		return "delete failed: " + err.Error(), false
 	}
 	return "deleted", true
@@ -246,7 +264,9 @@ func dropTask(id int64) (string, bool) {
 
 // promoteTask turns a queued prompt into the worktree it is about to run in:
 // what was queued behind it now waits on that worktree instead, and the prompt
-// itself is gone — it isn't waiting any more.
+// itself is gone — it isn't waiting any more. A real delete, unlike dropTask's
+// mark: this prompt hasn't been thrown away, it has become the worktree, and
+// there is nothing here to recover.
 //
 // One transaction, because the two halves are only safe together: a delete that
 // lands without the re-parent takes the rest of the chain with it through the
