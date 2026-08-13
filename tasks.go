@@ -155,6 +155,11 @@ func loadTasks() ([]Task, error) {
 // this is next — and opening the row is what makes it.
 const newName = "<new>"
 
+// queuedName is what a prompt still waiting on something calls itself in the
+// same column: it has no worktree yet either, but unlike a "<new>" one it isn't
+// next — the row it hangs under has to finish first.
+const queuedName = "<queued>"
+
 // taskTree is the queued prompts indexed by what each of them is waiting on,
 // which is what it takes to walk a chain down from its worktree without
 // rescanning the list at every level.
@@ -193,12 +198,14 @@ func (tt taskTree) pending(project string, live map[string]bool) []Task {
 	return ts
 }
 
-// taskCells is a queued prompt as a row of the table: the tree connector in
-// NAME, the only column with room for structure, and the prompt itself in TOPIC
+// taskCells is a queued prompt as a row of the table: the tree connector and
+// "<queued>" in NAME, the only column with room for structure, so a row with no
+// worktree of its own says why rather than leaving the column blank — and the
+// prompt itself in TOPIC
 // — where a worktree shows what its session or its last commit was about, which
 // is the same question. AGE says how long it has been waiting.
 func taskCells(t Task, gutter string, depth int) []string {
-	name := gutter + gutter + strings.Repeat("  ", depth) + taskGlyph
+	name := gutter + gutter + strings.Repeat("  ", depth) + taskGlyph + " " + queuedName
 	return []string{name, "", humanAge(time.Since(t.Created)), "", t.Prompt}
 }
 
