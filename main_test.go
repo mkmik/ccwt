@@ -2247,3 +2247,160 @@ func TestRemoveLogsWhatTheWorktreeWasAbout(t *testing.T) {
 		t.Errorf("a table of two projects doesn't say which is which:\n%s", table)
 	}
 }
+
+// writeTranscript files lines as a Claude Code session run in the worktree at
+// path: under $HOME/.claude/projects, in a directory named for that path with
+// every non-alphanumeric character replaced by "-", which is Claude Code's own
+// convention and the only way back to a removed worktree's transcript.
+func writeTranscript(t *testing.T, home, path string, lines ...string) {
+	t.Helper()
+	slug := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return r
+		default:
+			return '-'
+		}
+	}, path)
+	dir := filepath.Join(home, ".claude", "projects", slug)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "session.jsonl"), []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The worklog's rows select and open like the list's, and what they open is the
+// only account of the work left anywhere: what the log recorded, and the
+// session that produced it — which survives the removal because Claude Code
+// keeps transcripts under the home directory, keyed by a path that by then no
+// longer exists.
+func TestWorklogPageShowsTheRemovedWorktreesSession(t *testing.T) {
+	initRepo(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	alpha := capture(t, &NewWorktreeBranchCmd{Name: "alpha", Path: true})
+	// A session long enough to need scrolling, so that the page is a window onto
+	// it rather than the whole of it.
+	session := []string{
+		`{"type":"user","isMeta":true,"message":{"role":"user","content":"Caveat: the messages below…"}}`,
+		`{"type":"user","message":{"role":"user","content":"port the widget to the new API"}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"Reading the current one first."},` +
+			`{"type":"tool_use","name":"Read","input":{"file_path":"src/widget.go"}}]}}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"the output of a tool"}]}}`,
+	}
+	for i := range 40 {
+		session = append(session, fmt.Sprintf(`{"type":"assistant","message":{"content":[{"type":"text","text":"step %d"}]}}`, i))
+	}
+	session = append(session, `{"type":"assistant","message":{"content":[{"type":"text","text":"the last thing said"}]}}`)
+	writeTranscript(t, home, alpha, session...)
+
+	capture(t, &NewWorktreeBranchCmd{Name: "bravo", Path: true})
+	if err := (&RemoveCmd{Name: "bravo", Force: true}).Run(); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&RemoveCmd{Name: "alpha", Force: true}).Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	defer func(old func() (int, int)) { termSize = old }(termSize)
+	termSize = func() (int, int) { return 120, 40 }
+
+	var u ui
+	log, err := u.worklog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(log) != 2 || log[0].Name != "alpha" {
+		t.Fatalf("worklog = %v, want the newest removal (alpha) first", log)
+	}
+	u.log, u.logOpen = log, true // what `l` does
+
+	// The band starts on the newest removal and walks with the arrows, stopping
+	// at the ends rather than wrapping.
+	barred := func(t *testing.T) string {
+		t.Helper()
+		lines, err := u.frame()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, l := range lines {
+			if strings.Contains(l, rowBar) {
+				return l
+			}
+		}
+		return ""
+	}
+	if got := barred(t); !strings.Contains(got, "alpha") {
+		t.Errorf("the worklog opens with the band on %q, want the newest removal alpha", got)
+	}
+	u.logMove(1)
+	if got := barred(t); !strings.Contains(got, "bravo") {
+		t.Errorf("after ↓ the band is on %q, want bravo", got)
+	}
+	u.logMove(1)
+	u.logMove(-1)
+	u.logMove(-1)
+	if got := barred(t); !strings.Contains(got, "alpha") {
+		t.Errorf("the band walked off the ends: %q, want alpha", got)
+	}
+
+	// A click lands on the row it hit: the frame has just said where the rows
+	// are, and the header above them is not one of them.
+	if got := u.logAt(u.logFirst); got != 0 {
+		t.Errorf("logAt(first row) = %d, want the first removal", got)
+	}
+	if got := u.logAt(u.logFirst - 1); got != -1 {
+		t.Errorf("logAt(the table header) = %d, want no removal", got)
+	}
+
+	page := func(t *testing.T) string {
+		t.Helper()
+		lines, err := u.frame()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(lines, "\n")
+	}
+	u.openPage() // what ↵ does
+	top := page(t)
+	for _, want := range []string{"alpha", "TOPIC", "SESSION", "› port the widget to the new API", "⚒ Read: src/widget.go", "step 0"} {
+		if !strings.Contains(top, want) {
+			t.Errorf("the page doesn't show %q:\n%s", want, top)
+		}
+	}
+	for _, dont := range []string{"the output of a tool", "Caveat: the messages below", "the last thing said"} {
+		if strings.Contains(top, dont) {
+			t.Errorf("the page shows %q, which it has no business showing:\n%s", dont, top)
+		}
+	}
+
+	// G is the end of the session, which is what a page of a finished piece of
+	// work is usually opened for; g comes back.
+	u.page.top = len(u.page.lines) // what G does: past the end, for the frame to pull back
+	end := page(t)
+	if !strings.Contains(end, "the last thing said") || strings.Contains(end, "port the widget") {
+		t.Errorf("G didn't land on the end of the session:\n%s", end)
+	}
+	u.page.top = 0
+	if got := page(t); got != top {
+		t.Errorf("g didn't come back to the top of the page:\n%s", got)
+	}
+
+	// A log with nothing in it is the ordinary state of a fresh install: the
+	// pane says so, and the keys that would open a row have nothing to open.
+	empty := ui{logOpen: true}
+	lines, err := empty.frame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty.openPage()
+	if empty.page != nil {
+		t.Error("↵ on an empty worklog opened a page")
+	}
+	if !strings.Contains(strings.Join(lines, "\n"), "no worktrees removed yet") {
+		t.Errorf("an empty worklog pane doesn't say so:\n%s", strings.Join(lines, "\n"))
+	}
+}

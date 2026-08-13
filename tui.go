@@ -196,13 +196,52 @@ func (c *TuiCmd) Run() error {
 				u.queue(k)
 			case u.typing:
 				u.edit(k)
-			// The worklog pane is modal the same way, and closes the same way.
+			// A removal's page sits on top of the worklog pane that opened it, so
+			// it takes the keys first: esc goes back to the log, and the rest of
+			// them are a pager's — a session is far longer than a screen.
+			case u.page != nil:
+				_, rows := termSize()
+				switch k {
+				case "\x1b":
+					u.page = nil
+				case "\x03":
+					return nil
+				case "\x1b[A", "k":
+					u.page.top--
+				case "\x1b[B", "j":
+					u.page.top++
+				case "\x1b[5~", "b":
+					u.page.top -= max(rows-3, 1)
+				case "\x1b[6~", " ":
+					u.page.top += max(rows-3, 1)
+				case "g":
+					u.page.top = 0
+				case "G":
+					// Past the end, which the frame pulls back to the last screenful
+					// — the only place that knows how tall the pane came out.
+					u.page.top = len(u.page.lines)
+				}
+			// The worklog pane is modal the same way, and closes the same way. Its
+			// rows walk and open like the list's underneath it.
 			case u.logOpen:
 				switch k {
 				case "\x1b", "l":
 					u.logOpen, u.log = false, nil
+					u.logSel, u.logTop = 0, 0
 				case "\x03":
 					return nil
+				case "\x1b[A", "k":
+					u.logMove(-1)
+				case "\x1b[B", "j":
+					u.logMove(1)
+				case "\r", "\n", " ", "d":
+					u.openPage()
+				default:
+					// A click selects the removal it landed on, and it takes a
+					// second one to open it — as on the list underneath.
+					if i := u.logAt(mouseRow(k)); i >= 0 && u.logClick(i) {
+						u.openPage()
+					}
 				}
 			// The details pane is modal, so it comes next: while it's up, esc
 			// closes it and nothing else reaches the list underneath.
@@ -362,8 +401,22 @@ type ui struct {
 	// The removals the worklog pane is showing, read when it was opened, and
 	// whether it's open — which is its own flag rather than a non-nil log,
 	// because an empty log is the ordinary state of a fresh install.
-	log     []Removal
-	logOpen bool
+	//
+	// Its rows select like the list's, since each has a page behind it. By index
+	// rather than by identity, unlike the list's selection, because the log is a
+	// snapshot taken when the pane opened and nothing re-reads it underneath.
+	// first and shown are where the last frame put the pane's rows — the first
+	// one's screen line and how many it drew — which is what turns a click into
+	// the removal it landed on.
+	log            []Removal
+	logOpen        bool
+	logSel, logTop int
+	logFirst       int
+	logShown       int
+
+	// The page open over the worklog: one removal in full, the session that was
+	// run in it included. nil when there is none.
+	page *page
 
 	// The last list read, kept so that moving the selection — which changes
 	// nothing but which row is reverse-videoed — doesn't re-run the git and
@@ -776,6 +829,43 @@ func (u *ui) worklog() ([]Removal, error) {
 	return loadWorklog(projects, worklogLimit)
 }
 
+// logMove walks the worklog pane's selection by d rows, stopping at either end
+// rather than wrapping — the same walk as the list's, minus the identity, since
+// the log doesn't move under the selection.
+func (u *ui) logMove(d int) {
+	u.logSel = min(max(u.logSel+d, 0), max(len(u.log)-1, 0))
+}
+
+// logAt is the removal on screen line n, counting the way a mouse report does,
+// and -1 for a line that isn't one of the pane's rows — its border, its header,
+// or the list still showing around it.
+func (u *ui) logAt(n int) int {
+	if n < u.logFirst || n >= u.logFirst+u.logShown {
+		return -1
+	}
+	return u.logTop + n - u.logFirst
+}
+
+// logClick selects removal i and reports whether it was the second click on it
+// in quick succession — the one that opens its page. The list's clock, since
+// only one of the two lists is ever taking clicks.
+func (u *ui) logClick(i int) bool {
+	double := i == u.logSel && time.Since(u.clicked) < doubleClick
+	u.logSel, u.clicked = i, time.Now()
+	if double {
+		u.clicked = time.Time{} // a third click starts a fresh pair
+	}
+	return double
+}
+
+// openPage opens the selected removal's page over the worklog. An empty log has
+// nothing to open, which is the ordinary state of a fresh install.
+func (u *ui) openPage() {
+	if u.logSel >= 0 && u.logSel < len(u.log) {
+		u.page = removalPage(u.log[u.logSel])
+	}
+}
+
 // gitDir is the repo the whole-repo actions work on — the pull key, and the
 // branch the status bar reports the drift of. "." outside -g: the directory
 // ccwt was started in. Under -g the selected row's project instead, and ""
@@ -882,15 +972,40 @@ func (u *ui) frame() ([]string, error) {
 		return append(lines[:body], highlight(keys, cols)), nil
 	}
 
-	// The worklog is a modal of the same kind, over the same standing list: what
-	// was removed, under what is still there.
-	if u.logOpen {
-		for i, l := range logPane(u.log, cols, body) {
+	// A removal's page is over the worklog pane that opened it, so it goes on
+	// first. It fills the frame rather than sitting in it: what's in it is a
+	// whole session, and a window the size of the details pane would be a
+	// keyhole to read one through.
+	if u.page != nil {
+		for i, l := range pagePane(u.page, cols, body) {
 			if l != "" && i < body {
 				lines[i] = l
 			}
 		}
-		return append(lines[:body], highlight(" esc:close ", cols)), nil
+		return append(lines[:body], highlight(" ↑↓:scroll  space/b:page  g/G:ends  esc:back ", cols)), nil
+	}
+
+	// The worklog is a modal of the same kind, over the same standing list: what
+	// was removed, under what is still there. Its rows carry a selection like the
+	// list's, each having a page of its own behind it, so the window follows that
+	// selection the same way the list's does.
+	if u.logOpen {
+		fits := logFits(body)
+		u.logSel = min(max(u.logSel, 0), max(len(u.log)-1, 0))
+		u.logTop = min(max(u.logTop, 0), max(len(u.log)-fits, 0))
+		u.logTop = min(max(u.logTop, u.logSel-fits+1), u.logSel)
+		pane, first := logPane(u.log, u.logSel, u.logTop, cols, body)
+		u.logFirst, u.logShown = first+1, min(fits, len(u.log)) // +1: a mouse counts from 1
+		for i, l := range pane {
+			if l != "" && i < body {
+				lines[i] = l
+			}
+		}
+		keys := " esc:close "
+		if len(u.log) > 0 {
+			keys = " ↑↓:select  ↵:details  esc:close "
+		}
+		return append(lines[:body], highlight(keys, cols)), nil
 	}
 
 	// The queue prompt is a modal of the same kind, and for the same reason: the
@@ -975,9 +1090,7 @@ func detailPane(cells []string, cols, rows int) []string {
 	for _, c := range all {
 		label = max(label, len(c.name))
 	}
-	mx := min(4, max(cols-64, 0)/2) // a few cells of margin, where there's room
-	inner := max(cols-2*mx-2, 1)    // the border takes a cell either side
-	pad := strings.Repeat(" ", mx)
+	pad, inner := paneWidth(cols)
 	row := paneRow(pad, inner)
 
 	var body []string
@@ -999,25 +1112,137 @@ func detailPane(cells []string, cols, rows int) []string {
 // terminal. Same border and margin as the details pane, since it is the same
 // kind of look aside from the list.
 //
-// ponytail: no scrolling and no window — the query is capped at worklogLimit
-// and the newest are the ones being asked about, so what doesn't fit is cut off
-// the bottom, oldest first. Give it the list's window if the log grows.
-func logPane(log []Removal, cols, rows int) []string {
-	mx := min(4, max(cols-64, 0)/2) // the details pane's margin, to the pixel
-	inner := max(cols-2*mx-2, 1)
-	pad := strings.Repeat(" ", mx)
+// The rows select like the list's — the band on sel, the window starting at top
+// — because each of them has a page behind it. first is the line the topmost
+// row came out on, which is what turns a click on the pane back into the
+// removal it hit; the caller keeps top inside the log, this only slices.
+func logPane(log []Removal, sel, top, cols, rows int) (lines []string, first int) {
+	pad, inner := paneWidth(cols)
+	row := paneRow(pad, inner)
+
+	// Line 0 of the table is its header, which stays put while the rest scrolls
+	// — and is the whole of it when the log is empty, where it is the line that
+	// says so.
+	table := worklogTable(log, max(inner-2, 1))
+	head, rest := table[0], table[1:]
+	fits := logFits(rows)
+	top = min(max(top, 0), max(len(rest)-fits, 0))
+	body := []string{row(" " + head)}
+	for i, l := range rest[top:min(top+fits, len(rest))] {
+		if l = row(" " + l); top+i == sel {
+			l = band(l)
+		}
+		body = append(body, l)
+	}
+
+	lines = paneBox(pad, inner, "worklog", body)
+	margin := min(2, max(rows-len(lines), 0)/2)
+	// The rows start after the margin, the top rule and the header.
+	return append(make([]string, margin), lines...), margin + 2
+}
+
+// logFits is how many removals a worklog pane rows lines tall has room for: its
+// two rules and the table's header take a line each. The frame needs the same
+// number to keep the selection inside the window, so there is one of it.
+func logFits(rows int) int { return max(rows-3, 1) }
+
+// page is a read of something far longer than a pane: a title, the text as it
+// was built, and a window onto it. The worklog's is the one there is — what was
+// recorded about a removed worktree, and then the whole Claude Code session
+// that was run in it.
+//
+// The text is kept as it was built and wrapped again whenever the terminal
+// changes width, so that top counts lines of the screen rather than lines of
+// the source: paging by a screenful, and stopping at the end, are otherwise
+// arithmetic nobody can do.
+type page struct {
+	title string
+	text  []string // as built, before it was fitted to any width
+	lines []string // text wrapped to width, which is what the window slices
+	width int      // what lines was wrapped to
+	top   int      // lines[top] is the first line showing
+}
+
+// window is the slice of the page showing in a pane width columns wide and rows
+// tall, re-wrapping first if the width has changed since the last frame. It
+// pulls top back to the last screenful, which is what stops the end of a
+// session scrolling off the bottom — and is why the keys can scroll by any
+// amount and leave the clamping here.
+func (p *page) window(width, rows int) []string {
+	if p.lines == nil || width != p.width {
+		p.lines, p.width = nil, width
+		for _, l := range p.text {
+			p.lines = append(p.lines, wrapIndent(l, width)...)
+		}
+	}
+	p.top = min(max(p.top, 0), max(len(p.lines)-rows, 0))
+	return p.lines[p.top:min(p.top+rows, len(p.lines))]
+}
+
+// pagePane draws the page in the same border and margin as the other panes — it
+// is the same kind of look aside from the list — but as tall as the frame, a
+// session being no more readable through a keyhole than a book is.
+func pagePane(p *page, cols, rows int) []string {
+	pad, inner := paneWidth(cols)
 	row := paneRow(pad, inner)
 
 	var body []string
-	for _, l := range worklogTable(log, max(inner-2, 1)) {
+	for _, l := range p.window(max(inner-2, 1), max(rows-2, 1)) { // the two rules
 		body = append(body, row(" "+l))
 	}
-	if fits := max(rows-2, 1); len(body) > fits { // the two rules take a line each
-		body = body[:fits]
-	}
+	return paneBox(pad, inner, p.title, body)
+}
 
-	lines := paneBox(pad, inner, "worklog", body)
-	return append(make([]string, min(2, max(rows-len(lines), 0)/2)), lines...)
+// removalPage is everything left to know about a removed worktree: the line the
+// worklog kept — when it went, what it was called, what it was about — and then
+// the last Claude Code session that ran in it, which survives the removal
+// because Claude Code files transcripts under the home directory rather than in
+// the tree they were about.
+//
+// The path is rebuilt rather than recorded: it is where `new` puts a worktree,
+// where `remove` took this one from, and what the transcript is keyed by.
+//
+// ponytail: the newest session, not every session the worktree ever had — one
+// worktree is one piece of work, and the run that finished it is the last one.
+// Read the whole directory if that stops being true.
+func removalPage(r Removal) *page {
+	path := filepath.Join(r.Project, ".claude", "worktrees", r.Name)
+	transcript, _ := newestTranscript(path)
+	text := []string{
+		"NAME     " + r.Name,
+		"PROJECT  " + r.Project,
+		"REMOVED  " + humanAge(time.Since(r.At)) + " ago, " + r.At.Format("2006-01-02 15:04"),
+		"PATH     " + path,
+		"TOPIC    " + r.Topic,
+		"SESSION  " + cmp.Or(shortenHome(transcript), "none"),
+	}
+	if lines := transcriptLines(transcript); len(lines) > 0 {
+		text = append(text, lines...)
+	} else {
+		text = append(text, "", "  (no Claude Code session was recorded in this worktree)")
+	}
+	return &page{title: r.Name, text: text}
+}
+
+// paneWidth is where a pane's edges fall on a terminal cols wide: a few cells
+// of margin, where there is room for them, and the interior left between the
+// borders. Shared, so that the panes line up with one another — they are the
+// same window onto different things.
+func paneWidth(cols int) (pad string, inner int) {
+	mx := min(4, max(cols-64, 0)/2)
+	return strings.Repeat(" ", mx), max(cols-2*mx-2, 1)
+}
+
+// band lays the selection colour across the interior of a pane line — between
+// the borders, which paneRow has already padded the text out to, so that the
+// row lights up without the box around it moving.
+func band(line string) string {
+	i, j := strings.Index(line, "│"), strings.LastIndex(line, "│")
+	if i < 0 || i == j {
+		return line
+	}
+	i += len("│")
+	return line[:i] + rowBar + line[i:j] + "\x1b[0m" + line[j:]
 }
 
 // paneRow draws one line of a pane's interior: s inside the border, cut or
@@ -1179,6 +1404,24 @@ func wrap(s string, width int) []string {
 	}
 	if len(line) > 0 || len(lines) == 0 {
 		flush()
+	}
+	return lines
+}
+
+// wrapIndent lays a line of a page out at width columns, putting its leading
+// spaces back on every line the wrap makes of it. The indent is who is talking
+// — a prompt flush left, Claude's answer set in under it — and a wrap that lost
+// it would leave a page of text with nothing to say which was which.
+//
+// Through wrapEdit rather than wrap because a transcript is not all prose: the
+// spacing inside a line is the shape of the code or the diff sitting in it, and
+// collapsing runs of spaces would flatten every one of them.
+func wrapIndent(s string, width int) []string {
+	body := strings.TrimLeft(s, " ")
+	indent := s[:len(s)-len(body)]
+	lines, _, _ := wrapEdit(body, max(width-len(indent), 1), 0)
+	for i, l := range lines {
+		lines[i] = indent + l
 	}
 	return lines
 }
