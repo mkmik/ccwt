@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -263,6 +264,12 @@ func (c *TuiCmd) Run() error {
 				return nil
 			case k == "p":
 				if err := act("pulling…", func() string { return gitPull(u.gitDir()) }); err != nil {
+					return err
+				}
+			// `g` is the worktree's review, in the browser — the branch is here,
+			// the review is over there.
+			case k == "g" && u.sel.worktree():
+				if err := act("looking for the review…", func() string { return openMR(u.sel.path) }); err != nil {
 					return err
 				}
 			case k == "x" && underHerdr():
@@ -1664,7 +1671,7 @@ func statusBar(cols int, msg string, sel listRow, div string, searching, global 
 		if herdr {
 			keys += "  space:open"
 		}
-		keys += queue + "  d:details  r:remove"
+		keys += queue + "  g:vcs  d:details  r:remove"
 	case sel.pending(): // a queued prompt whose worktree space would make
 		if herdr {
 			keys += "  space:start"
@@ -1775,6 +1782,103 @@ func gitPull(dir string) string {
 		return "pull failed: " + strings.TrimSpace(lines[len(lines)-1])
 	}
 	return "pull: " + strings.TrimSpace(lines[0])
+}
+
+// forges is how `g` asks a review host about the branch in front of it: the
+// arguments that make its cli print the url of that branch's review and
+// nothing else, and the host's own word for one, since the bar says it back.
+//
+// The cli does the finding in both cases — each already knows which host the
+// remote is, and which token to ask it with, neither of which is worth
+// reimplementing twice.
+var forges = map[string]struct {
+	noun string
+	argv []string
+}{
+	"gh":   {"pull request", []string{"pr", "view", "--json", "url", "--jq", ".url"}},
+	"glab": {"merge request", []string{"mr", "view", "-F", "json", "--jq", ".web_url"}},
+}
+
+// openMR is what `g` does: find the review of the branch checked out in dir —
+// a pull request or a merge request, depending on where the remote is — and
+// hand its url to the desktop's browser.
+//
+// Every way the lookup can fail (no cli installed, no review on this branch,
+// one that was never pushed) is the same nothing-to-open from here, so they
+// all read as the one line in the bar.
+//
+// ponytail: no --web, which would let either cli open the browser itself,
+// because then a worktree with no review gets the cli's multi-line refusal
+// printed over the frame instead of a line in the bar.
+func openMR(dir string) string {
+	if dir == "" {
+		return "no worktree selected"
+	}
+	cfg, _ := loadConfig() // a config we can't read is one that names no hosts
+	cli := forgeCLI(remoteHost(dir), cfg.Forges)
+	f, known := forges[cli]
+	switch {
+	case cli == "":
+		return "no github or gitlab remote here"
+	case !known:
+		return "no such forge cli: " + cli // the config named it, so say which
+	}
+	cmd := exec.Command(cli, f.argv...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	url := strings.TrimSpace(string(out))
+	if err != nil || !strings.HasPrefix(url, "http") {
+		return "no open " + f.noun + " for this worktree"
+	}
+	opener := "xdg-open"
+	if runtime.GOOS == "darwin" {
+		opener = "open"
+	}
+	if err := exec.Command(opener, url).Run(); err != nil {
+		return opener + " failed: " + err.Error()
+	}
+	return url
+}
+
+// forgeCLI is the cli that knows about host's reviews: what the config says
+// for it, and otherwise what its name gives away — which covers github.com and
+// gitlab.com, and the self-hosted instances that keep the word in their name.
+// One that doesn't keep it needs the config line: there is nothing else in a
+// hostname to go on, and guessing wrong means shelling out to the wrong cli.
+func forgeCLI(host string, configured map[string]string) string {
+	switch {
+	case host == "":
+		return ""
+	case configured[host] != "":
+		return configured[host]
+	case strings.Contains(host, "gitlab"):
+		return "glab"
+	case strings.Contains(host, "github"):
+		return "gh"
+	}
+	return ""
+}
+
+// remoteHost is the host of dir's origin, or "" when there isn't one — as a
+// worktree of a repo with no remote at all hasn't.
+func remoteHost(dir string) string {
+	return urlHost(gitLine(dir, "remote", "get-url", "origin"))
+}
+
+// urlHost is the host out of a git remote, in any of the shapes one comes in:
+// ssh://git@host:2222/group/repo, git@host:group/repo, https://host/group/repo.
+// The path goes first so that the userinfo split can't get at an @ inside it,
+// and what's left of a local path ("/srv/git/repo") is the "" it should be.
+func urlHost(url string) string {
+	if _, rest, ok := strings.Cut(url, "://"); ok {
+		url = rest
+	}
+	host, _, _ := strings.Cut(url, "/")
+	if _, rest, ok := strings.Cut(host, "@"); ok {
+		host = rest
+	}
+	host, _, _ = strings.Cut(host, ":") // a port, or the scp form's path
+	return host
 }
 
 // underHerdr reports whether the tui is running inside a herdr pane — herdr

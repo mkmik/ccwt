@@ -116,7 +116,7 @@ status bar along the bottom:
 * * dreamy-foraging-hickey  worktree-dreamy-…-hickey  2h   yes     ✳ Goal was a widget on the dashboard; it's built and…
   ✓ calm-baking-otter       worktree-calm-bak…-otter  1d   no      ⎇ Fix the flux capacitor
 
- ccwt  q:quit  p:pull  /:search  l:log  x:new  space:open  n:queue  d:details  r:remove │ main ↑1
+ ccwt  q:quit  p:pull  /:search  l:log  x:new  space:open  n:queue  g:vcs  d:details  r:remove │ main ↑1
 ```
 
 `q` (or Ctrl-C) quits, `p` runs `git pull` and reports the result in the bar. The rest of
@@ -129,6 +129,23 @@ The arrow keys (or `j`/`k`) select a worktree, and the bar grows the actions tha
 it: `r` removes it, refusing an unmerged branch, uncommitted changes or a working agent,
 exactly like `ccwt remove`. Clicking a row selects it. Two more keys — `x` and `space` —
 appear only under [Herdr](#herdr-integration-optional).
+
+`g` opens the worktree's review in your browser — the branch is here, the review is over
+there. Which one that is depends on where `origin` points: a GitHub remote is a pull request
+and [`gh`](https://cli.github.com) finds it, a GitLab one is a merge request and
+[`glab`](https://gitlab.com/gitlab-org/cli) does. Either cli already knows which host the
+remote is and which token to ask it with; ccwt only decides which of the two to run, and
+hands the url it prints to `open` (macOS) or `xdg-open`. Without the cli installed, or on a
+branch with no review yet, the bar just says there's none to open.
+
+`github.com`, `gitlab.com`, and any host with `gitlab` in its name are recognised as they
+are. A self-hosted instance that doesn't keep the word — `code.example.com` — needs a line
+in `~/.config/ccwt/config.toml`, since there's nothing in the hostname to go on:
+
+```toml
+[forges]
+"code.example.com" = "glab"
+```
 
 `d` opens the selected worktree's details as a window over the list: every column's value in
 full, one per line and wrapped to the width, instead of the row the table had to cut down to
@@ -408,6 +425,15 @@ made — `claude` when unset, split on spaces so flags get through:
 task_command = "claude --permission-mode plan"
 ```
 
+`forges` says which cli knows about a host's reviews, for the tui's [`g`](#the-tui) key.
+Only a host whose name doesn't give it away needs a line — a self-hosted GitLab most of
+all, since `github.com`, `gitlab.com` and anything with `gitlab` in the name are guessed:
+
+```toml
+[forges]
+"code.example.com" = "glab"
+```
+
 `ccwt config view` prints that file and `ccwt config edit` opens it in `$EDITOR`, either one
 creating an empty file first when you don't have one yet.
 
@@ -531,7 +557,7 @@ swallow stderr, or you'll lose the cwd report.
 | `ccwt repo-root` | Print the root of the current git repository. Add `--root-worktree` to print the *enclosing* repo root when you're inside a `.claude/worktrees/<name>` worktree. |
 | `ccwt ..` | Shorthand for `repo-root --root-worktree`: print (and, with shell integration, `cd` to) the enclosing repository root. |
 | `ccwt init <shell>` | Emit the shell-integration snippet to source from your rc file. For `zsh` the snippet carries completion too: commands, and worktree names for `cd`, `remove` and `lock`. |
-| `ccwt config view` / `ccwt config edit` | Print the config file, or open it in `$EDITOR` (`vi` if unset). Both create an empty one if there isn't any. The file holds the `[[projects]]` `-g` spans, `branch_prefix` — what `ccwt new` puts in front of a worktree's name to make its branch (`worktree-` when unset) — `columns`, which columns the table draws, `sort`, the order the worktrees come in (`freshness` when unset), and `task_command`, what a queued prompt is run with (`claude` when unset). |
+| `ccwt config view` / `ccwt config edit` | Print the config file, or open it in `$EDITOR` (`vi` if unset). Both create an empty one if there isn't any. The file holds the `[[projects]]` `-g` spans, `branch_prefix` — what `ccwt new` puts in front of a worktree's name to make its branch (`worktree-` when unset) — `columns`, which columns the table draws, `sort`, the order the worktrees come in (`freshness` when unset), `task_command`, what a queued prompt is run with (`claude` when unset), and `forges`, which cli finds a host's reviews for the tui's `g`. |
 | `ccwt --version` | Print version information. |
 
 ### Layout

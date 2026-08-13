@@ -31,6 +31,13 @@ type Config struct {
 	TaskCommand string `toml:"task_command"`
 	// Sort is the order `list` and `tui` put the worktrees in; see sortOrders.
 	Sort string `toml:"sort"`
+	// Forges maps the host of a remote to the cli that knows about its reviews
+	// — "gh" or "glab" — for the tui's `g` key. Only a host whose name doesn't
+	// say which it is needs a line here, a self-hosted GitLab most of all:
+	//
+	//	[forges]
+	//	"code.example.com" = "glab"
+	Forges map[string]string `toml:"forges"`
 }
 
 // sortOrders are the orders the worktree list can be in, the first being the

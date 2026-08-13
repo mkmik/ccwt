@@ -664,6 +664,56 @@ func TestGitDivergence(t *testing.T) {
 	}
 }
 
+// A remote is written three different ways, and which cli `g` reaches for
+// hangs on getting the host out of all of them.
+func TestURLHost(t *testing.T) {
+	for _, tc := range []struct{ url, want string }{
+		{"https://github.com/mkmik/ccwt.git", "github.com"},
+		{"git@github.com:mkmik/ccwt.git", "github.com"},
+		{"ssh://git@code.example.com:2222/group/sub/repo", "code.example.com"},
+		{"https://user:token@code.example.com/group/repo.git", "code.example.com"},
+		{"/srv/git/repo.git", ""}, // a local remote is nobody's review host
+		{"", ""},                  // no remote at all
+	} {
+		if got := urlHost(tc.url); got != tc.want {
+			t.Errorf("urlHost(%q) = %q, want %q", tc.url, got, tc.want)
+		}
+	}
+}
+
+// The name gives away the well-known hosts and the self-hosted ones that kept
+// the word; the config is what the rest are named in, and it wins outright so
+// that a host the guess would get wrong can be corrected.
+func TestForgeCLI(t *testing.T) {
+	cfg := map[string]string{"code.example.com": "glab", "gitlab.legacy.example": "gh"}
+	for _, tc := range []struct{ host, want string }{
+		{"github.com", "gh"},
+		{"gitlab.com", "glab"},
+		{"gitlab.example.com", "glab"},
+		{"code.example.com", "glab"},    // named in the config
+		{"gitlab.legacy.example", "gh"}, // the config overrides the guess
+		{"git.example.com", ""},         // unknown, and nothing to guess from
+		{"", ""},                        // no remote
+	} {
+		if got := forgeCLI(tc.host, cfg); got != tc.want {
+			t.Errorf("forgeCLI(%q) = %q, want %q", tc.host, got, tc.want)
+		}
+	}
+}
+
+// `g` opens the branch's review when there is one, and otherwise says so in the
+// bar — no cli to run, and no browser launched. A bare directory has no remote,
+// which is as far as it gets.
+func TestOpenMRSaysSoWhenThereIsNone(t *testing.T) {
+	if got, want := openMR(t.TempDir()), "no github or gitlab remote here"; got != want {
+		t.Errorf("openMR(tempdir) = %q, want %q", got, want)
+	}
+	// No row selected — what -g hands the whole-repo keys until one is.
+	if got, want := openMR(""), "no worktree selected"; got != want {
+		t.Errorf("openMR(\"\") = %q, want %q", got, want)
+	}
+}
+
 // Under -g the current directory is not one of the repos in view, so the keys
 // and the status bar have to reach the selected row's project instead — and
 // nothing at all while there's no selection.
