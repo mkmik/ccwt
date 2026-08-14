@@ -599,12 +599,16 @@ func newEntry(parent listRow, text string, id int64) entry {
 // leaves the prompt up with the text still in it — retyping a paragraph
 // because the database was busy is not a reasonable thing to ask.
 //
+// Only enter and escape, since those two are the ones that lose what you have
+// typed: every other key is the line editor's, including the ones it has never
+// heard of. Shift-↵ is a line break there, not an enter.
+//
 // Emptying an existing prompt and pressing enter is not a delete: `r` on the
 // row is, and it says so. Here it's the same as escape.
 func (u *ui) queue(k string) {
 	switch k {
-	case "\r", "\n":
-		if u.entry.text == "" { // nothing typed: same as abandoning it
+	case "\r":
+		if strings.TrimSpace(u.entry.text) == "" { // nothing typed: same as abandoning it
 			u.entry = entry{}
 			return
 		}
@@ -638,11 +642,10 @@ func (u *ui) queue(k string) {
 // the file as an argument to it rather than pasted into it, so that a temporary
 // directory with a space in its name is still one filename.
 //
-// ponytail: newlines are folded to spaces on the way back, because a prompt is
-// one line everywhere the tui draws it — the box, the TOPIC column, the details
-// pane — and a bare newline in a frame line would scroll the screen out from
-// under the cursor arithmetic every later frame relies on. Teach wrapEdit and
-// the table about them if a prompt ever wants paragraphs.
+// What comes back keeps its line breaks, as the box itself now does: only the
+// whitespace around the whole thing goes, since an editor leaves a trailing
+// newline behind whether or not you meant one. The table folds the breaks back
+// to spaces for the one row it has to draw the prompt on.
 func externalEdit(text string) (string, error) {
 	f, err := os.CreateTemp("", "ccwt-*.md") // .md: a prompt is prose
 	if err != nil {
@@ -670,7 +673,7 @@ func externalEdit(text string) (string, error) {
 	if err != nil {
 		return text, err
 	}
-	return strings.Join(strings.Fields(string(edited)), " "), nil
+	return strings.TrimSpace(strings.ReplaceAll(string(edited), "\r\n", "\n")), nil
 }
 
 // lineEdit applies one keystroke to a line being typed and says where the caret
@@ -683,31 +686,43 @@ func externalEdit(text string) (string, error) {
 // rune. The caret walks whole runes even so, so backspace can't leave half of
 // one behind.
 //
-// Escape sequences this doesn't name (mouse reports, the function keys) are
-// ignored rather than typed: they're several bytes but only the first is under
-// 0x20, so they'd otherwise land in the text as garbage.
+// Keystrokes this doesn't name (mouse reports, the function keys, whatever a
+// terminal sends for Cmd-←) are ignored rather than typed or acted on: keyLen
+// hands them over whole, so an unknown one does nothing at all — the box a
+// paragraph is being typed into is no place for a key to mean "throw it away".
 //
 // ponytail: ours rather than bubbles/textarea, which would mean a bubbletea
 // rewrite of the frame painter, the mouse handling and the list — a new event
 // loop for the box in the middle of it. Worth reaching for if this box ever
-// wants ↑/↓ across the wrap, a selection, or undo; not for a caret.
+// wants a selection or undo; not for a caret.
 func lineEdit(s string, cur int, k string) (string, int) {
 	cur = min(max(cur, 0), len(s))
 	back := func() int { _, n := utf8.DecodeLastRuneInString(s[:cur]); return cur - n }
 	fwd := func() int { _, n := utf8.DecodeRuneInString(s[cur:]); return cur + n }
+	bol, eol := lineStart(s, cur), lineEnd(s, cur)
 	switch k {
 	case "\x1b[D", "\x02": // ←, Ctrl-B
 		return s, back()
 	case "\x1b[C", "\x06": // →, Ctrl-F
 		return s, fwd()
-	case "\x1b[1;5D", "\x1b[1;3D": // Ctrl-← and Alt-←, as terminals report them
-		return s, wordLeft(s[:cur])
-	case "\x1b[1;5C", "\x1b[1;3C":
+	case "\x1b[1;5D", "\x1b[1;3D", "\x1bb": // Ctrl-←, Alt-← and Alt-B, as
+		return s, wordLeft(s[:cur]) // terminals report them
+	case "\x1b[1;5C", "\x1b[1;3C", "\x1bf":
 		return s, wordRight(s, cur)
+	case "\x1b[A", "\x10": // ↑, Ctrl-P
+		return s, upLine(s, cur)
+	case "\x1b[B", "\x0e": // ↓, Ctrl-N
+		return s, downLine(s, cur)
 	case "\x1b[H", "\x1b[1~", "\x01": // home, Ctrl-A
-		return s, 0
+		return s, bol
 	case "\x1b[F", "\x1b[4~", "\x05": // end, Ctrl-E
-		return s, len(s)
+		return s, eol
+	// Shift-↵ — and Alt-↵, and Ctrl-J — is a line break rather than the end of
+	// the prompt, the way it is in Claude Code's own box. Terminals disagree on
+	// what to send for it: ESC CR is what Claude Code's terminal setup binds it
+	// to, the two CSIs are what one reporting modifiers sends unasked.
+	case "\n", "\x1b\r", "\x1b\n", "\x1b[13;2u", "\x1b[27;2;13~":
+		return s[:cur] + "\n" + s[cur:], cur + 1
 	case "\x7f", "\b": // backspace: the rune before the caret
 		at := back()
 		return s[:at] + s[cur:], at
@@ -716,15 +731,75 @@ func lineEdit(s string, cur int, k string) (string, int) {
 	case "\x17": // Ctrl-W: the word before it
 		at := wordLeft(s[:cur])
 		return s[:at] + s[cur:], at
-	case "\x15": // Ctrl-U: all of it before
-		return s[cur:], 0
-	case "\x0b": // Ctrl-K: all of it after
-		return s[:cur], cur
+	case "\x1bd": // Alt-D: the word after it
+		return s[:cur] + s[wordRight(s, cur):], cur
+	case "\x15": // Ctrl-U: the rest of the line before it
+		return s[:bol] + s[cur:], bol
+	case "\x0b": // Ctrl-K: the rest of the line after it, or the break itself
+		if cur == eol { // when there is no rest — which joins the next line on
+			eol = min(eol+1, len(s))
+		}
+		return s[:cur] + s[eol:], cur
 	}
 	if len(k) == 1 && k[0] >= ' ' {
 		return s[:cur] + k + s[cur:], cur + 1
 	}
 	return s, cur
+}
+
+// lineStart and lineEnd are the ends of the line the caret is on: what Ctrl-A,
+// Ctrl-E and Ctrl-K work to now that a prompt can hold more than one line. In a
+// prompt with no breaks in it they are the ends of the text, which is what they
+// have always been.
+func lineStart(s string, cur int) int { return strings.LastIndexByte(s[:cur], '\n') + 1 }
+
+func lineEnd(s string, cur int) int {
+	if i := strings.IndexByte(s[cur:], '\n'); i >= 0 {
+		return cur + i
+	}
+	return len(s)
+}
+
+// upLine and downLine are ↑ and ↓ in the box: the same column of the line above
+// or below, or the end of that line when it is shorter, and where they already
+// are when there is no such line.
+//
+// ponytail: by line break rather than by where the box happens to wrap, so they
+// need no width — a paragraph is what you typed, not what the box did with it.
+// Teach them the wrap if walking a long line by eye starts to feel wrong.
+//
+// ponytail: and no goal column, so walking up through a short line and on comes
+// out at the short line's end rather than back where it started — this takes a
+// caret and a string, and remembering would mean the box remembering for it.
+func upLine(s string, cur int) int {
+	start := lineStart(s, cur)
+	if start == 0 {
+		return cur
+	}
+	above := lineStart(s, start-1)
+	return above + runeAt(s[above:start-1], utf8.RuneCountInString(s[start:cur]))
+}
+
+func downLine(s string, cur int) int {
+	end := lineEnd(s, cur)
+	if end == len(s) {
+		return cur
+	}
+	below := end + 1
+	col := utf8.RuneCountInString(s[lineStart(s, cur):cur])
+	return below + runeAt(s[below:lineEnd(s, below)], col)
+}
+
+// runeAt is the byte offset of the nth rune of s, or the end of s when it holds
+// fewer than that: the caret lands between characters rather than inside one.
+func runeAt(s string, n int) int {
+	for i := range s {
+		if n == 0 {
+			return i
+		}
+		n--
+	}
+	return len(s)
 }
 
 // wordLeft is where the word at the end of s starts, over any spaces first —
@@ -1168,7 +1243,7 @@ func (u *ui) entryTitle() string {
 	case len(cells) == 0:
 		return ""
 	case u.entry.parent.task > 0:
-		return cells[4] // TOPIC: the prompt this one waits on
+		return oneLine(cells[4]) // TOPIC: the prompt this one waits on
 	}
 	return cells[0] // NAME: the worktree
 }
@@ -1499,12 +1574,21 @@ func wrapEdit(s string, width, cur int) (lines []string, row, col int) {
 		if i == cur {
 			row, col = len(lines), len(line)
 		}
+		// A break of the typist's own ends the line wherever it has got to, and
+		// what follows starts a word the way the start of the text does.
+		if r == '\n' {
+			flush()
+			space = true
+			continue
+		}
 		line, space = append(line, r), r == ' '
 	}
 	if cur >= len(s) { // the end of the text, which the loop never reaches
 		row, col = len(lines), len(line)
 	}
-	if len(line) > 0 || len(lines) == 0 {
+	// The last line — and the empty one a text ending in a break leaves the
+	// caret on, which has to exist for the box to have somewhere to draw it.
+	if len(line) > 0 || len(lines) == 0 || row == len(lines) {
 		flush()
 	}
 	return lines, row, col
@@ -1512,7 +1596,7 @@ func wrapEdit(s string, width, cur int) (lines []string, row, col int) {
 
 // wordWidth is how many runes the word at the start of s takes.
 func wordWidth(s string) int {
-	if i := strings.IndexByte(s, ' '); i >= 0 {
+	if i := strings.IndexAny(s, " \n"); i >= 0 {
 		s = s[:i]
 	}
 	return utf8.RuneCountInString(s)
@@ -1752,8 +1836,7 @@ func readKeys() (<-chan string, chan<- struct{}) {
 	return keys, next
 }
 
-// splitKeys cuts one read into the keystrokes it holds: a CSI sequence
-// (ESC [ … final byte) is one keystroke, any other byte is one.
+// splitKeys cuts one read into the keystrokes it holds.
 //
 // A read is not a keystroke. Hold an arrow key down and it repeats faster than
 // a frame takes to draw, so the tty hands over several sequences at once — and
@@ -1764,18 +1847,37 @@ func readKeys() (<-chan string, chan<- struct{}) {
 func splitKeys(s string) []string {
 	var keys []string
 	for len(s) > 0 {
-		n := 1
-		if strings.HasPrefix(s, "\x1b[") {
-			// Parameter bytes run until the final byte, 0x40–0x7e: "\x1b[B" for
-			// an arrow, "\x1b[<0;12;5M" for a mouse report.
-			for n = 2; n < len(s) && (s[n] < 0x40 || s[n] > 0x7e); n++ {
-			}
-			n = min(n+1, len(s))
-		}
+		n := keyLen(s)
 		keys = append(keys, s[:n])
 		s = s[n:]
 	}
 	return keys
+}
+
+// keyLen is how many bytes of s the keystroke at the front of it takes.
+//
+// Everything an escape introduces goes with it, whether or not this knows what
+// it means, because the alternative is worse than not knowing: a lone ESC is
+// the escape key, and the escape key closes the box a prompt is being typed
+// into. Cmd-← on a terminal that sends something unheard-of used to throw the
+// paragraph away rather than do nothing.
+func keyLen(s string) int {
+	if !strings.HasPrefix(s, "\x1b") || len(s) == 1 {
+		return 1 // an ordinary byte, or an escape that really is on its own
+	}
+	switch s[1] {
+	case '[': // CSI: parameter bytes until the final byte, 0x40–0x7e — "\x1b[B"
+		n := 2 // for an arrow, "\x1b[<0;12;5M" for a mouse report.
+		for ; n < len(s) && (s[n] < 0x40 || s[n] > 0x7e); n++ {
+		}
+		return min(n+1, len(s))
+	case 'O': // SS3: one byte after it — F1–F4, the arrows in application mode
+		return min(3, len(s))
+	}
+	// Anything else: a key pressed with alt, or one a terminal has been taught
+	// to send as ESC and something (Claude Code's own shift-↵ is ESC CR). Both
+	// bytes are the one keystroke, so an unbound one is ignored whole.
+	return 1 + keyLen(s[1:])
 }
 
 // statusBar is one reverse-video line: the hamburger, what the keys do, then
@@ -2135,8 +2237,14 @@ func (u *ui) startPending() string {
 // Unquoted, a multi-word prompt arrives at `claude` as several argv entries and
 // only the first of them is taken as the prompt. ponytail: single quotes and
 // the '\” trick, the one escape that needs no table of shell metacharacters.
+//
+// A line break goes as $'\n' rather than as itself: typed at a prompt it would
+// leave the shell waiting on a continuation line mid-command, and nobody is
+// watching that pane — the whole point of a queued prompt is that it starts
+// without you. ponytail: bash, zsh and ksh all read $'…', which is every shell
+// a Claude Code pane is opened in; a prompt run under dash would want a heredoc.
 func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+	return "'" + strings.NewReplacer("'", `'\''`, "\n", `'$'\n''`).Replace(s) + "'"
 }
 
 // herdrPane is the pane sitting in the worktree at path, which after a
