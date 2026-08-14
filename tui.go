@@ -2406,6 +2406,28 @@ var herdrCloseWS = func(id string) error {
 	return nil
 }
 
+// herdrFocused reports whether the workspace with this id is the one herdr has
+// focused — the one on screen. A herdr that can't say is no, which leaves the
+// focus alone: the only caller moves it, and moving it on a guess is what there
+// is to avoid.
+func herdrFocused(id string) bool {
+	out, err := exec.Command(herdrBin(), "workspace", "get", id).Output()
+	if err != nil {
+		return false
+	}
+	var resp struct {
+		Result struct {
+			Workspace struct {
+				Focused bool `json:"focused"`
+			} `json:"workspace"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return false
+	}
+	return resp.Result.Workspace.Focused
+}
+
 // herdrFocusWS focuses one workspace, which is how the removal of the workspace
 // we're standing in says where to land afterwards.
 func herdrFocusWS(id string) error {
