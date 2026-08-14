@@ -489,6 +489,45 @@ func TestDone(t *testing.T) {
 	}
 }
 
+// TestRemoveDotClosesOwnWorkspace: `remove .` closes the workspace we're
+// standing in too, and closes it last — closing it kills this process, so it
+// has to outlive the removal. The fake herdr checks the worktree is already
+// gone by the time it's asked. Stderr here is no terminal, so nothing is asked.
+func TestRemoveDotClosesOwnWorkspace(t *testing.T) {
+	initRepo(t)
+	path := capture(t, &NewWorktreeBranchCmd{Name: "mine", Path: true})
+	t.Chdir(path)
+
+	dir := t.TempDir()
+	log := filepath.Join(dir, "calls")
+	herdr := filepath.Join(dir, "herdr")
+	script := fmt.Sprintf("#!/bin/sh\necho \"$@\" >> %[1]q\n"+
+		"[ \"$1 $2\" = \"worktree list\" ] && printf '{\"result\":{\"worktrees\":"+
+		"[{\"path\":\"%[2]s\",\"open_workspace_id\":\"w1\"}]}}'\n"+
+		"[ \"$1 $2\" = \"workspace close\" ] && [ -d %[2]q ] && echo too-early >> %[1]q\n"+
+		"exit 0\n", log, path)
+	if err := os.WriteFile(herdr, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_BIN_PATH", herdr)
+	t.Setenv("HERDR_WORKSPACE_ID", "w1")
+
+	if err := (&RemoveCmd{Name: "."}).Run(); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(log)
+	if !strings.Contains(string(got), "workspace close w1") {
+		t.Errorf("herdr calls = %q, want our own workspace closed", got)
+	}
+	if strings.Contains(string(got), "too-early") {
+		t.Errorf("herdr calls = %q, want the workspace closed after the removal", got)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("worktree %s still exists (%v)", path, err)
+	}
+}
+
 // TestGc: only worktrees that are both merged and idle are collected — an
 // unmerged one and one with a session running in it stay put — and what `gc`
 // removes, it removes the way `remove` does, branch and all.

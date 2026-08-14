@@ -247,6 +247,7 @@ type RemoveCmd struct {
 	Name       string `arg:"" help:"Worktree name to remove. Use \".\" for the worktree you're currently in."`
 	Force      bool   `short:"D" help:"Remove anyway: delete the branch even when it is not merged, and the worktree even when it has uncommitted changes."`
 	KeepBranch bool   `help:"Remove the worktree but keep its branch."`
+	Yes        bool   `short:"y" help:"Close the worktree's herdr workspace without asking for confirmation."`
 }
 
 func (c *RemoveCmd) Run() error {
@@ -302,10 +303,29 @@ func (c *RemoveCmd) remove(root string) error {
 	}
 
 	// Under herdr the worktree is usually an open workspace with an agent living
-	// in it; close it before the directory it sits in disappears.
+	// in it; close it before the directory it sits in disappears. Losing a
+	// workspace you can see is a bigger surprise than losing a directory, so a
+	// terminal gets asked first.
+	var self string
 	if underHerdr() {
-		if err := herdrClose(root, worktreePath); err != nil {
+		ws, err := herdrWorkspaces(root, worktreePath)
+		if err != nil {
 			return err
+		}
+		if len(ws) > 0 && !c.Yes && !confirmTTY(fmt.Sprintf("remove %s and close its herdr workspace?", name)) {
+			return nil
+		}
+		// Ours goes last of all: closing it kills this process, so it has to
+		// outlive the removal itself.
+		me := os.Getenv("HERDR_WORKSPACE_ID")
+		for _, id := range ws {
+			if id == me {
+				self = id
+				continue
+			}
+			if err := herdrCloseWS(id); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -352,9 +372,30 @@ func (c *RemoveCmd) remove(root string) error {
 	}
 
 	if inside {
-		return (&DotDotCmd{}).Run()
+		if err := (&DotDotCmd{}).Run(); err != nil {
+			return err
+		}
+	}
+	if self != "" {
+		return herdrCloseWS(self)
 	}
 	return nil
+}
+
+// confirmTTY asks question on stderr and reports whether the answer was yes.
+// Stderr not being a terminal — a script, a pipe, the tui — is nobody to ask,
+// and answers yes: the command was already given, the prompt only exists for
+// the surprise of a workspace closing under someone watching it.
+func confirmTTY(question string) bool {
+	if !term.IsTerminal(int(os.Stderr.Fd())) {
+		return true
+	}
+	fmt.Fprintf(os.Stderr, "%s [y/N] ", question)
+	var answer string
+	// A read that can't happen — EOF, no stdin — leaves answer empty, which is
+	// "no": with a terminal to ask, nothing closes unless someone said so.
+	fmt.Scanln(&answer)
+	return strings.EqualFold(answer, "y") || strings.EqualFold(answer, "yes")
 }
 
 type LockCmd struct {
@@ -385,21 +426,11 @@ type DoneCmd struct {
 	KeepBranch bool `help:"Remove the worktree but keep its branch."`
 }
 
-// Run is `remove .` and then, under herdr, closing the workspace we're standing
-// in — the one `remove` deliberately leaves alone, since closing it kills this
-// process. That's fine here because it is the last thing done.
+// Run is `remove .`, which closes the workspace we're standing in as its last
+// act. No confirmation: closing the workspace is what "done" asked for, and
+// asking again is asking the same question twice.
 func (c *DoneCmd) Run() error {
-	if err := (&RemoveCmd{Name: ".", Force: c.Force, KeepBranch: c.KeepBranch}).Run(); err != nil {
-		return err
-	}
-	ws := os.Getenv("HERDR_WORKSPACE_ID")
-	if !underHerdr() || ws == "" {
-		return nil
-	}
-	if out, err := exec.Command(herdrBin(), "workspace", "close", ws).CombinedOutput(); err != nil {
-		return fmt.Errorf("herdr workspace close %s: %s", ws, lastLine(out, err))
-	}
-	return nil
+	return (&RemoveCmd{Name: ".", Force: c.Force, KeepBranch: c.KeepBranch, Yes: true}).Run()
 }
 
 type GcCmd struct {
@@ -447,7 +478,8 @@ func (c *GcCmd) Run() error {
 		}
 	}
 	for _, name := range names {
-		if err := (&RemoveCmd{Name: name}).remove(root); err != nil {
+		// Yes: the prompt above already covered the whole batch.
+		if err := (&RemoveCmd{Name: name, Yes: true}).remove(root); err != nil {
 			return err
 		}
 	}
@@ -1660,7 +1692,7 @@ var cli struct {
 	Cd                CdCmd                `cmd:"" name:"cd" help:"cd into an existing worktree under .claude/worktrees/<name> (errors if it doesn't exist). Use \"..\" for the enclosing repo root, or \"-\" for the previous directory."`
 	List              ListCmd              `cmd:"" name:"list" aliases:"ls" help:"List Claude Code worktrees with branch, age, running-session, and what each one is about: the last Claude Code session there, or its last commit."`
 	Tui               TuiCmd               `cmd:"" name:"tui" default:"withargs" help:"Show the worktree list full-screen, refreshing as things change. q quits, p runs git pull, arrows select a worktree, r removes it. Under herdr, x creates a worktree and opens it, and space (or a click) opens the selected one."`
-	Remove            RemoveCmd            `cmd:"" name:"remove" help:"Delete a worktree under .claude/worktrees/<name> and its branch (merged, clean and no agent working in it; -D to remove anyway, --keep-branch to remove only the worktree). Under herdr its workspace is closed first. Use \".\" for the current worktree; removing it cds to the repo root."`
+	Remove            RemoveCmd            `cmd:"" name:"remove" help:"Delete a worktree under .claude/worktrees/<name> and its branch (merged, clean and no agent working in it; -D to remove anyway, --keep-branch to remove only the worktree). Under herdr its workspace is closed too, after asking on a terminal (-y skips the question). Use \".\" for the current worktree; removing it cds to the repo root."`
 	Done              DoneCmd              `cmd:"" name:"done" help:"Finish with the worktree you're in: remove it and its branch (same checks and flags as \"remove .\"), then under herdr close the workspace you're sitting in."`
 	Lock              LockCmd              `cmd:"" name:"lock" help:"Lock a worktree the way \"ccwt new\" does, so \"git worktree prune\" can't reclaim it while its directory is unavailable. Use \".\" for the worktree you're currently in."`
 	Worklog           WorklogCmd           `cmd:"" name:"worklog" help:"Show the worktrees that have been removed, newest first, with what each one was about — what you were working on lately, after the worktree itself is gone."`
