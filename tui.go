@@ -349,6 +349,12 @@ func (c *TuiCmd) Run() error {
 				}
 				u.msg = msg
 				u.stale()
+			// `G` is `ccwt gc`: everything merged, clean and idle, in one go. It
+			// isn't on the bar — the hamburger is the only place it's listed.
+			case k == "G":
+				if err := act("collecting…", u.gc); err != nil {
+					return err
+				}
 			case k == "r":
 				if path := u.sel.path; path != "" {
 					if err := act("removing "+filepath.Base(path)+"…", func() string {
@@ -369,7 +375,7 @@ func (c *TuiCmd) Run() error {
 				// The hamburger, in the bar's own corner: the keys the bar
 				// lists, as something to click through instead.
 				case row == rows && col <= hamburgerCols:
-					u.menu, u.menuSel = actions(u.sel, u.query != "", u.projects != nil), 0
+					u.menu, u.menuSel = menuActions(u.sel, u.query != "", u.projects != nil), 0
 				// A click selects the row it landed on; it takes a second one to
 				// act on it, as it does in any other list.
 				case hit != (listRow{}) && u.click(hit):
@@ -1821,6 +1827,14 @@ func (a action) name() string {
 	return a.key
 }
 
+// menuActions is what the hamburger lists: the bar's keys, plus the ones that
+// belong in a menu and nowhere else. `G` collects every worktree that's done
+// with at once — rare, and too much of a mouthful for a bar that has to say
+// what every other key does — so it's listed where there's room for it.
+func menuActions(sel listRow, searching, global bool) []action {
+	return append(actions(sel, searching, global), action{"G", "gc"})
+}
+
 // actions is what the keys do right now. The per-worktree ones only appear once
 // there's a worktree to apply them to, and the herdr ones only when there's a
 // herdr to open a workspace in. A section header has nothing to open and nothing
@@ -2344,6 +2358,32 @@ func removeWorktree(path string) (string, bool) {
 		return "remove failed: " + err.Error(), false
 	}
 	return "removed " + name, true
+}
+
+// gc is `ccwt gc` from the menu: remove every worktree of the repo in view whose
+// branch is merged, with nothing uncommitted and nobody working in it. Picking
+// it is the confirmation, as `r` is for a single worktree — the tui owns the
+// terminal a prompt would have to read from — and what it can collect is by
+// definition work that's already landed.
+func (u *ui) gc() string {
+	root, err := u.root()
+	if err != nil {
+		return "gc: " + err.Error()
+	}
+	names, _, err := gcNames(root)
+	if err != nil {
+		return "gc: " + err.Error()
+	}
+	if len(names) == 0 {
+		return "nothing to collect"
+	}
+	for i, name := range names {
+		if err := (&RemoveCmd{Name: name, Yes: true}).remove(root); err != nil {
+			// Say what did go, so the message isn't only about the one that didn't.
+			return fmt.Sprintf("gc: %v (collected %d of %d)", err, i, len(names))
+		}
+	}
+	return "collected " + strings.Join(names, ", ")
 }
 
 // lastLine picks the line of a failed command's output most likely to say why,

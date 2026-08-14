@@ -2560,6 +2560,38 @@ func TestHamburgerMenuPicksTheSameKeysTheBarLists(t *testing.T) {
 	}
 }
 
+// `gc` is listed in the hamburger and nowhere else — the bar has no room for a
+// key that rare — and picking it collects what `ccwt gc` would: merged, clean
+// and idle, the unmerged one left where it is.
+func TestMenuOnlyGc(t *testing.T) {
+	initRepo(t)
+	merged := capture(t, &NewWorktreeBranchCmd{Name: "merged", Path: true})
+	ahead := capture(t, &NewWorktreeBranchCmd{Name: "ahead", Path: true})
+	git(t, "-C", ahead, "commit", "--allow-empty", "-m", "ahead")
+
+	if bar := statusBar(200, "", listRow{}, "", false, false); strings.Contains(bar, "G:gc") {
+		t.Errorf("the bar lists gc: %q", bar)
+	}
+	menu := menuActions(listRow{}, false, false)
+	if !slices.Contains(menu, action{"G", "gc"}) {
+		t.Errorf("the menu doesn't offer gc: %v", menu)
+	}
+
+	u := ui{}
+	if msg := u.gc(); !strings.Contains(msg, "merged") {
+		t.Errorf("gc said %q, want the collected worktree named", msg)
+	}
+	if _, err := os.Stat(merged); !os.IsNotExist(err) {
+		t.Errorf("gc left the merged worktree behind (%v)", err)
+	}
+	if _, err := os.Stat(ahead); err != nil {
+		t.Errorf("gc collected the unmerged worktree: %v", err)
+	}
+	if msg := u.gc(); msg != "nothing to collect" {
+		t.Errorf("a second gc said %q, want \"nothing to collect\"", msg)
+	}
+}
+
 // The worklog's rows select and open like the list's, and what they open is the
 // only account of the work left anywhere: what the log recorded, and the
 // session that produced it — which survives the removal because Claude Code

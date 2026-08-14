@@ -133,7 +133,10 @@ appear only under [Herdr](#herdr-integration-optional).
 The `☰` in the corner is that same list of actions as a menu: click it and they drop out of
 the bar, one per line, to be clicked instead of typed (the arrows and `↵` work too, `esc`
 closes it, and clicking the `☰` again shuts it). A menu entry is the key it names — picking
-one does exactly what typing it does — so the menu and the bar can't drift apart.
+one does exactly what typing it does — so the menu and the bar can't drift apart. One entry
+is only there: `G` runs [`ccwt gc`](#command-reference) on the repo in view,
+collecting every worktree that's merged, clean and idle in one go — rare enough that the bar
+has no room for it, and picking it is the confirmation.
 
 `g` opens the worktree's review in your browser — the branch is here, the review is over
 there. Which one that is depends on where `origin` points: a GitHub remote is a pull request
