@@ -462,20 +462,12 @@ func (c *GcCmd) Run() error {
 	if err != nil {
 		return err
 	}
-	active := claudeCwds()
-	maps.Copy(active, herdrBusy())
-	names, err := gcCandidates(root, active)
+	names, kept, err := gcNames(root)
 	if err != nil {
 		return err
 	}
-	// Collecting the worktree we're standing in would pull the ground out from
-	// under the shell, so say it's collectable and leave it: `ccwt remove .`
-	// from somewhere else is the way to actually get rid of it.
-	if _, cur, err := gitutil.CurrentClaudeWorktree(); err == nil && cur != "" {
-		if i := slices.Index(names, cur); i >= 0 {
-			fmt.Fprintf(os.Stderr, "%s: collectable, but it is the worktree you are in — keeping it\n", cur)
-			names = slices.Delete(names, i, i+1)
-		}
+	if kept != "" {
+		fmt.Fprintf(os.Stderr, "%s: collectable, but it is the worktree you are in — keeping it\n", kept)
 	}
 	if len(names) == 0 {
 		fmt.Println("nothing to collect")
@@ -501,6 +493,26 @@ func (c *GcCmd) Run() error {
 		}
 	}
 	return nil
+}
+
+// gcNames is what `gc` would collect in the repo at root, and — as kept — the
+// worktree it left behind because it is the one we're standing in: collecting
+// that would pull the ground out from under the shell, and `ccwt remove .` from
+// somewhere else is the way to actually get rid of it. The tui's gc runs on
+// this too, so both agree on what "done with" means.
+func gcNames(root string) (names []string, kept string, err error) {
+	active := claudeCwds()
+	maps.Copy(active, herdrBusy())
+	names, err = gcCandidates(root, active)
+	if err != nil {
+		return nil, "", err
+	}
+	if _, cur, err := gitutil.CurrentClaudeWorktree(); err == nil && cur != "" {
+		if i := slices.Index(names, cur); i >= 0 {
+			return slices.Delete(names, i, i+1), cur, nil
+		}
+	}
+	return names, "", nil
 }
 
 // gcCandidates names the Claude Code worktrees of the repo at root that are
