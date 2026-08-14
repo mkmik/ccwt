@@ -506,16 +506,7 @@ func TestRemoveDotClosesOwnWorkspace(t *testing.T) {
 
 	dir := t.TempDir()
 	log := filepath.Join(dir, "calls")
-	herdr := filepath.Join(dir, "herdr")
-	script := fmt.Sprintf("#!/bin/sh\necho \"$@\" >> %[1]q\n"+
-		"[ \"$1 $2\" = \"worktree list\" ] && printf '{\"result\":{\"worktrees\":"+
-		"[{\"path\":\"%[2]s\",\"open_workspace_id\":\"w1\"},"+
-		"{\"path\":\"%[3]s\",\"open_workspace_id\":\"w0\"}]}}'\n"+
-		"[ \"$1 $2\" = \"workspace close\" ] && [ -d %[2]q ] && echo too-early >> %[1]q\n"+
-		"exit 0\n", log, path, root)
-	if err := os.WriteFile(herdr, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	herdr := fakeHerdr(t, dir, log, path, root, true)
 	t.Setenv("HERDR_ENV", "1")
 	t.Setenv("HERDR_BIN_PATH", herdr)
 	t.Setenv("HERDR_WORKSPACE_ID", "w1")
@@ -537,6 +528,57 @@ func TestRemoveDotClosesOwnWorkspace(t *testing.T) {
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("worktree %s still exists (%v)", path, err)
 	}
+}
+
+// TestRemoveDotKeepsFocusElsewhere: the focus handed to the repo's workspace is
+// for the workspace on screen. Switch to another one before `remove .` finishes
+// and closing ours moves no focus, so ours moves none either.
+func TestRemoveDotKeepsFocusElsewhere(t *testing.T) {
+	initRepo(t)
+	path := capture(t, &NewWorktreeBranchCmd{Name: "mine", Path: true})
+	root, err := gitutil.RepoRoot("", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(path)
+
+	dir := t.TempDir()
+	log := filepath.Join(dir, "calls")
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_BIN_PATH", fakeHerdr(t, dir, log, path, root, false))
+	t.Setenv("HERDR_WORKSPACE_ID", "w1")
+
+	if err := (&RemoveCmd{Name: "."}).Run(); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(log)
+	if !strings.Contains(string(got), "workspace close w1") {
+		t.Errorf("herdr calls = %q, want our own workspace closed", got)
+	}
+	if strings.Contains(string(got), "workspace focus") {
+		t.Errorf("herdr calls = %q, want no focus moved while we're not the focused workspace", got)
+	}
+}
+
+// fakeHerdr writes a herdr that logs its arguments to log, lists a workspace on
+// each of the worktree at path ("w1") and the repo root ("w0"), reports w1 as
+// focused or not, and flags a `workspace close` that arrives while the worktree
+// is still on disk.
+func fakeHerdr(t *testing.T, dir, log, path, root string, focused bool) string {
+	t.Helper()
+	herdr := filepath.Join(dir, "herdr")
+	script := fmt.Sprintf("#!/bin/sh\necho \"$@\" >> %[1]q\n"+
+		"[ \"$1 $2\" = \"worktree list\" ] && printf '{\"result\":{\"worktrees\":"+
+		"[{\"path\":\"%[2]s\",\"open_workspace_id\":\"w1\"},"+
+		"{\"path\":\"%[3]s\",\"open_workspace_id\":\"w0\"}]}}'\n"+
+		"[ \"$1 $2\" = \"workspace get\" ] && printf '{\"result\":{\"workspace\":"+
+		"{\"workspace_id\":\"w1\",\"focused\":%[4]t}}}'\n"+
+		"[ \"$1 $2\" = \"workspace close\" ] && [ -d %[2]q ] && echo too-early >> %[1]q\n"+
+		"exit 0\n", log, path, root, focused)
+	if err := os.WriteFile(herdr, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return herdr
 }
 
 // TestGc: only worktrees that are both merged and idle are collected — an

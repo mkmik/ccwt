@@ -382,10 +382,17 @@ func (c *RemoveCmd) remove(root string) error {
 		// is where the work continues. Focus it first, so the close finds our
 		// workspace already unfocused and has no focus to move.
 		//
+		// Only when ours is the workspace being looked at, though: closing one
+		// nobody has focused moves no focus at all, and someone who has switched
+		// away is somewhere they chose to be — pulling them into the repo root is
+		// the removal reaching further than it was asked to.
+		//
 		// ponytail: a focus that fails is cosmetic, and not worth abandoning the
 		// close that `remove` was actually asked for.
-		if ws, err := herdrWorkspaces(root, root); err == nil && len(ws) > 0 {
-			_ = herdrFocusWS(ws[0])
+		if herdrFocused(self) {
+			if ws, err := herdrWorkspaces(root, root); err == nil && len(ws) > 0 {
+				_ = herdrFocusWS(ws[0])
+			}
 		}
 		return herdrCloseWS(self)
 	}
