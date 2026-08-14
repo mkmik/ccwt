@@ -2256,18 +2256,16 @@ var herdrBusy = func() map[string]bool {
 	return busy
 }
 
-// herdrClose closes the workspace herdr has open on the worktree at path —
-// which is what ends the agent running in it — so that removing the directory
-// doesn't leave a workspace sitting in a hole. A worktree nobody has open is a
-// no-op.
+// herdrWorkspaces are the ids of the workspaces herdr has open on the worktree
+// at path — usually one, none for a worktree nobody is sitting in. Closing one
+// is what ends the agent living in it, which is what has to happen before the
+// directory it sits in disappears.
 //
-// Our own workspace is left alone: closing it would kill this process before it
-// got as far as removing the worktree. `remove .` from inside its own workspace
-// keeps doing what it did before — cd the shell out to the repo root.
-func herdrClose(root, path string) error {
+// ponytail: package var so tests can fake the herdr answer.
+var herdrWorkspaces = func(root, path string) ([]string, error) {
 	out, err := exec.Command(herdrBin(), "worktree", "list", "--cwd", root).Output()
 	if err != nil {
-		return fmt.Errorf("herdr worktree list: %w", err)
+		return nil, fmt.Errorf("herdr worktree list: %w", err)
 	}
 	var resp struct {
 		Result struct {
@@ -2278,15 +2276,24 @@ func herdrClose(root, path string) error {
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(out, &resp); err != nil {
-		return fmt.Errorf("herdr worktree list: %w", err)
+		return nil, fmt.Errorf("herdr worktree list: %w", err)
 	}
+	var ids []string
 	for _, wt := range resp.Result.Worktrees {
-		if wt.Path != path || wt.Workspace == "" || wt.Workspace == os.Getenv("HERDR_WORKSPACE_ID") {
-			continue
+		if wt.Path == path && wt.Workspace != "" {
+			ids = append(ids, wt.Workspace)
 		}
-		if out, err := exec.Command(herdrBin(), "workspace", "close", wt.Workspace).CombinedOutput(); err != nil {
-			return fmt.Errorf("herdr workspace close %s: %s", wt.Workspace, lastLine(out, err))
-		}
+	}
+	return ids, nil
+}
+
+// herdrCloseWS closes one workspace. Closing our own kills this process, so
+// callers leave that one for last.
+//
+// ponytail: package var so tests can fake the herdr answer.
+var herdrCloseWS = func(id string) error {
+	if out, err := exec.Command(herdrBin(), "workspace", "close", id).CombinedOutput(); err != nil {
+		return fmt.Errorf("herdr workspace close %s: %s", id, lastLine(out, err))
 	}
 	return nil
 }
@@ -2300,7 +2307,9 @@ func removeWorktree(path string) (string, bool) {
 		return "remove failed: " + path + " is not a Claude Code worktree", false
 	}
 	name := filepath.Base(path)
-	if err := (&RemoveCmd{Name: name}).remove(root); err != nil {
+	// Yes: `r` is the confirmation, and the tui owns the terminal a prompt
+	// would have to read from.
+	if err := (&RemoveCmd{Name: name, Yes: true}).remove(root); err != nil {
 		return "remove failed: " + err.Error(), false
 	}
 	return "removed " + name, true
