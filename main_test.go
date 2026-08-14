@@ -493,9 +493,15 @@ func TestDone(t *testing.T) {
 // standing in too, and closes it last — closing it kills this process, so it
 // has to outlive the removal. The fake herdr checks the worktree is already
 // gone by the time it's asked. Stderr here is no terminal, so nothing is asked.
+// The repo root's workspace is focused before that close, so focus lands there
+// rather than on whatever herdr had open last.
 func TestRemoveDotClosesOwnWorkspace(t *testing.T) {
 	initRepo(t)
 	path := capture(t, &NewWorktreeBranchCmd{Name: "mine", Path: true})
+	root, err := gitutil.RepoRoot("", true)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Chdir(path)
 
 	dir := t.TempDir()
@@ -503,9 +509,10 @@ func TestRemoveDotClosesOwnWorkspace(t *testing.T) {
 	herdr := filepath.Join(dir, "herdr")
 	script := fmt.Sprintf("#!/bin/sh\necho \"$@\" >> %[1]q\n"+
 		"[ \"$1 $2\" = \"worktree list\" ] && printf '{\"result\":{\"worktrees\":"+
-		"[{\"path\":\"%[2]s\",\"open_workspace_id\":\"w1\"}]}}'\n"+
+		"[{\"path\":\"%[2]s\",\"open_workspace_id\":\"w1\"},"+
+		"{\"path\":\"%[3]s\",\"open_workspace_id\":\"w0\"}]}}'\n"+
 		"[ \"$1 $2\" = \"workspace close\" ] && [ -d %[2]q ] && echo too-early >> %[1]q\n"+
-		"exit 0\n", log, path)
+		"exit 0\n", log, path, root)
 	if err := os.WriteFile(herdr, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -522,6 +529,10 @@ func TestRemoveDotClosesOwnWorkspace(t *testing.T) {
 	}
 	if strings.Contains(string(got), "too-early") {
 		t.Errorf("herdr calls = %q, want the workspace closed after the removal", got)
+	}
+	if focus, closed := strings.Index(string(got), "workspace focus w0"),
+		strings.Index(string(got), "workspace close w1"); focus < 0 || focus > closed {
+		t.Errorf("herdr calls = %q, want the root workspace focused before ours closes", got)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("worktree %s still exists (%v)", path, err)
