@@ -1132,6 +1132,14 @@ func TestSplitKeys(t *testing.T) {
 		"\x1b":                       {"\x1b"},  // a bare escape
 		"\x1b[":                      {"\x1b["}, // a sequence cut in half by the read
 		"":                           nil,
+		// Everything an escape introduces goes with it, known or not: a lone
+		// escape is the key that closes the box a prompt is being typed into, so
+		// one that is really the head of a sequence has to not look like it.
+		"\x1bOD":     {"\x1bOD"},     // SS3, the arrows in application mode
+		"\x1b\x1b[D": {"\x1b\x1b[D"}, // alt-← on the terminals that send it so
+		"\x1b\r":     {"\x1b\r"},     // shift-↵, as Claude Code binds it
+		"\x1bbj":     {"\x1bb", "j"}, // alt-B, and the key after it
+		"\x1b\x1b":   {"\x1b\x1b"},
 	} {
 		if got := splitKeys(in); !slices.Equal(got, want) {
 			t.Errorf("splitKeys(%q) = %q, want %q", in, got, want)
@@ -2097,6 +2105,53 @@ esac
 	}
 }
 
+// Shift-↵ puts a line break in the prompt and enter still records it, breaks
+// and all. A prompt is a paragraph often enough — the box keeps it as one and
+// draws it as one, the table folds it back to the single line a row can hold,
+// and the shell it is eventually typed at is handed it as $'\n' rather than as
+// a newline it would read as a half-finished command.
+func TestAPromptCanHoldLineBreaks(t *testing.T) {
+	initRepo(t)
+	capture(t, &NewWorktreeBranchCmd{Name: "alpha", Path: true})
+
+	var u ui
+	rows, _ := renderRows(t)
+	u.entry = newEntry(rows[0], "", 0)
+	for _, k := range splitKeys("port the widget\x1b\rthen write the docs") {
+		u.queue(k)
+	}
+	const want = "port the widget\nthen write the docs"
+	if u.entry.text != want {
+		t.Fatalf("typed %q, want %q", u.entry.text, want)
+	}
+
+	// The box draws it as the two lines it is, wide enough that neither of them
+	// is one the wrap would have made.
+	box := strings.Join(entryPane(u.entry.text, u.entry.cur, "alpha", 60, 12), "\n")
+	if !strings.Contains(box, "port the widget ") || !strings.Contains(caretOff.Replace(box), "then write the docs ") {
+		t.Errorf("the box didn't draw the break as one:\n%s", box)
+	}
+
+	// A break at the end leaves the caret on a line of its own, which the box has
+	// to have somewhere to draw — a box too short for any lines included.
+	entryPane(u.entry.text+"\n", len(u.entry.text)+1, "alpha", 40, 1)
+
+	u.queue("\r")
+	if u.msg != "queued" {
+		t.Fatalf("queueing: %s", u.msg)
+	}
+	rows, body := renderRows(t)
+	if len(rows) != 2 {
+		t.Fatalf("rows = %v, want the worktree and the prompt under it", rows)
+	}
+	if !strings.Contains(body, "port the widget then write the docs") {
+		t.Errorf("the table should fold the break to a space:\n%s", body)
+	}
+	if got, want := shellQuote(want), `'port the widget'$'\n''then write the docs'`; got != want {
+		t.Errorf("shellQuote = %s, want %s", got, want)
+	}
+}
+
 // `e` in the details pane rewrites a queued prompt where it stands: the text
 // changes and nothing else does — what was waiting on it is still waiting on
 // it, and it hasn't become a new prompt at the end of the chain.
@@ -2172,9 +2227,35 @@ func TestLineEditor(t *testing.T) {
 		{start: "port the widget", keys: "\x1b[1;5D\x0b", want: "port the ", cur: 9},
 		// A multi-byte rune is two keystrokes, and both of its bytes are text.
 		{start: "caf", keys: "é", want: "café", cur: 5},
+		// Alt-B/F/D, the readline spellings of the same three word keys.
+		{start: "port the widget", keys: "\x1bb\x1bbx", want: "port xthe widget", cur: 6},
+		{start: "port the widget", keys: "\x01\x1bf\x1bd", want: "port widget", cur: 4},
+		// Shift-↵ (and alt-↵, and Ctrl-J) is a line break rather than the end of
+		// the prompt, which is what enter is — the box records that one.
+		{start: "port the widget", keys: "\x1b\rthen the docs", want: "port the widget\nthen the docs", cur: 29},
+		{start: "a", keys: "\nb\x1b[13;2uc\x1b[27;2;13~d", want: "a\nb\nc\nd", cur: 7},
+		// The line keys work to the ends of the line the caret is on, not of the
+		// whole prompt: Ctrl-A/E, and Ctrl-U/K on what is either side of it.
+		{start: "one\ntwo", keys: "\x01x", want: "one\nxtwo", cur: 5},
+		{start: "one\ntwo", keys: "\x1b[A\x05x", want: "onex\ntwo", cur: 4},
+		{start: "one\ntwo", keys: "\x15", want: "one\n", cur: 4},
+		{start: "one\ntwo", keys: "\x1b[A\x1b[D\x0b", want: "on\ntwo", cur: 2},
+		// Ctrl-K with nothing left of the line takes the break itself, which is
+		// how a line put in by mistake is taken back out.
+		{start: "one\ntwo", keys: "\x1b[A\x0b", want: "onetwo", cur: 3},
+		// ↑ and ↓ keep the column, and stop at the ends of the text rather than
+		// wrapping round or falling off it.
+		{start: "one\ntwo", keys: "\x1b[Ax", want: "onex\ntwo", cur: 4},
+		{start: "abc\nde", keys: "\x1b[A\x1b[Bx", want: "abc\ndex", cur: 7},
+		{start: "one\ntwo", keys: "\x1b[B\x1b[Bx", want: "one\ntwox", cur: 8},
+		// Crossing a short line takes the column down with it, rather than the
+		// column the walk started from — no goal column, as upLine says.
+		{start: "abc\nde\nfgh", keys: "\x1b[A\x1b[A\x1b[Ax", want: "abxc\nde\nfgh", cur: 3},
 		// Sequences it doesn't know are ignored rather than typed — a mouse
-		// report is one — and the ends of the line are the ends of it.
+		// report is one, and so is whatever a terminal sends for Cmd-← — and the
+		// ends of the line are the ends of it.
 		{start: "abc", keys: "\x1b[<0;12;5M", want: "abc", cur: 3},
+		{start: "abc", keys: "\x1b\x1b[D\x1bOD\x1b[1;9D", want: "abc", cur: 3},
 		{start: "abc", keys: "\x1b[C\x1b[3~", want: "abc", cur: 3},
 		{start: "abc", keys: "\x1b[H\x1b[D\x7f", want: "abc", cur: 0},
 	} {
@@ -2189,10 +2270,11 @@ func TestLineEditor(t *testing.T) {
 }
 
 // Ctrl-G finishes the prompt in $EDITOR: the editor is handed the text as it
-// stands, and what it saves is what the box comes back with — as one line,
-// since that's what the box, the table and the pane can each draw. A refusing
-// editor leaves the prompt exactly as it was, which is the whole point of it
-// coming back rather than being replaced.
+// stands, and what it saves is what the box comes back with, line breaks and
+// all — the box takes them from shift-↵ too, and only the table has to fold
+// them. What doesn't come back is the trailing newline every editor leaves. A
+// refusing editor leaves the prompt exactly as it was, which is the whole point
+// of it coming back rather than being replaced.
 func TestExternalEditor(t *testing.T) {
 	// A stand-in editor: it appends to the file it's given, so what comes back
 	// says both that the prompt went in and that the edit came out.
@@ -2209,7 +2291,7 @@ func TestExternalEditor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("externalEdit: %v", err)
 	}
-	if want := "port the widget to the mobile layout"; got != want {
+	if want := "port the widget to the\nmobile layout"; got != want {
 		t.Errorf("externalEdit = %q, want %q", got, want)
 	}
 

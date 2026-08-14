@@ -1136,6 +1136,13 @@ func listColumns() ([]column, error) {
 	return cols, nil
 }
 
+// oneLine is a value as a row of the table can hold it. A queued prompt is
+// typed with whatever line breaks its author wanted, and the table is the one
+// place they can't survive: a cell with a break in it wraps the row, which
+// wrecks the alignment and the tui's cursor arithmetic alike. Each becomes the
+// space it stands in for; the prompt itself keeps them.
+func oneLine(s string) string { return strings.ReplaceAll(s, "\n", " ") }
+
 // minCol is as narrow as a column ever gets: three characters and an ellipsis,
 // under the two-space gutter. Past that a column says nothing at all, so a
 // terminal too narrow to give every column that much (~43 columns) spills
@@ -1157,7 +1164,8 @@ func fitTable(table [][]string, width int, columns []column) {
 	widths := make([]int, len(columns))
 	for _, row := range table {
 		for i, cell := range row {
-			widths[i] = max(widths[i], utf8.RuneCountInString(cell))
+			row[i] = oneLine(cell)
+			widths[i] = max(widths[i], utf8.RuneCountInString(row[i]))
 		}
 	}
 	for i, c := range columns {
