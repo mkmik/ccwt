@@ -2298,6 +2298,15 @@ var herdrCloseWS = func(id string) error {
 	return nil
 }
 
+// herdrFocusWS focuses one workspace, which is how the removal of the workspace
+// we're standing in says where to land afterwards.
+func herdrFocusWS(id string) error {
+	if out, err := exec.Command(herdrBin(), "workspace", "focus", id).CombinedOutput(); err != nil {
+		return fmt.Errorf("herdr workspace focus %s: %s", id, lastLine(out, err))
+	}
+	return nil
+}
+
 // removeWorktree is `ccwt remove <name>` against the worktree's own project,
 // refusal and all: an unmerged branch comes back as the same error it prints on
 // the command line, so the tui never deletes something the cli wouldn't.
