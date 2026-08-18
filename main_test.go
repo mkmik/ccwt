@@ -2807,3 +2807,69 @@ func TestWorklogPageShowsTheRemovedWorktreesSession(t *testing.T) {
 		t.Errorf("an empty worklog pane doesn't say so:\n%s", strings.Join(lines, "\n"))
 	}
 }
+
+// TestNavFuzzy covers the ranking `ccwt nav` navigates by: the pattern matches
+// as a subsequence, case ignored, and of everything it matches the tightest
+// run wins, the earlier one breaking a tie. Spelled out in one piece it must
+// beat the same characters scattered through a command line — "claude" typed
+// at a process list means the agent, not the wrapper that merely has a c, an
+// l and an a lying about in that order.
+func TestNavFuzzy(t *testing.T) {
+	whole, ok := fuzzyScore("/Users/me/.local/bin/claude --allow-everything", "claude")
+	if !ok {
+		t.Fatal("claude doesn't match a claude command line at all")
+	}
+	scattered, ok := fuzzyScore("clack --bin /Users/me/agent-updater --debug", "claude")
+	if !ok {
+		t.Fatal("this one is a subsequence match and should have been found")
+	}
+	if whole <= scattered {
+		t.Errorf("scattered characters (%d) rank over the word itself (%d)", scattered, whole)
+	}
+	if early, late := mustScore(t, "claude foo", "claude"), mustScore(t, "foo claude", "claude"); early <= late {
+		t.Errorf("the later match (%d) ranks over the earlier one (%d)", late, early)
+	}
+	if _, ok := fuzzyScore("mTLS subresource", "mtls"); !ok {
+		t.Error("a fuzzy match is case-sensitive")
+	}
+	if _, ok := fuzzyScore("frolicking-tumbling-duckling", "fld"); !ok {
+		t.Error("scattered characters don't match, so this isn't a fuzzy match at all")
+	}
+	if _, ok := fuzzyScore("frolicking-tumbling-duckling", "dlf"); ok {
+		t.Error("characters out of order match, so this isn't a subsequence match")
+	}
+	// A long command line has nearly any pattern strewn through it somewhere,
+	// and a typo that navigates you into an unrelated pane is worse than one
+	// that finds nothing.
+	apiserver := "/Users/me/Library/Application Support/io.kubebuilder.envtest/k8s/1.33.0-darwin-arm64/kube-apiserver " +
+		"--advertise-address=127.0.0.1 --authorization-mode=RBAC --cert-dir=/var/folders/zp/T/k8s_test_framework"
+	if _, ok := fuzzyScore(apiserver, "zzznotathing"); ok {
+		t.Error("a nonsense pattern matches a long command line, which is somewhere it would navigate to")
+	}
+}
+
+func mustScore(t *testing.T, s, pattern string) int {
+	t.Helper()
+	score, ok := fuzzyScore(s, pattern)
+	if !ok {
+		t.Fatalf("%q doesn't match %q", pattern, s)
+	}
+	return score
+}
+
+// TestNavPaneOf covers where the pane comes from: the process's own
+// environment, which is why a multiplexer ccwt has no other dealings with
+// (tmux) answers just as herdr does, and an environment outside every one of
+// them has no pane rather than a blank one.
+func TestNavPaneOf(t *testing.T) {
+	mux, pane := paneOf([]string{"HOME=/Users/me", "TMUX_PANE=%7"})
+	if mux == nil || pane != "%7" {
+		t.Errorf("paneOf a tmux environment = %q, want %%7", pane)
+	}
+	if _, pane := paneOf([]string{"TMUX_PANE=%7", "HERDR_PANE_ID=w1:p2"}); pane != "w1:p2" {
+		t.Errorf("paneOf a herdr pane inside tmux = %q, want the herdr one", pane)
+	}
+	if mux, _ := paneOf([]string{"HOME=/Users/me", "TMUX_PANE="}); mux != nil {
+		t.Error("an environment with no multiplexer in it still named one")
+	}
+}
