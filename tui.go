@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -83,10 +84,12 @@ func (c *TuiCmd) Run() error {
 		raw = state
 		defer term.Restore(int(os.Stdin.Fd()), state)
 		keys, next = readKeys()
-		// 1000: report button presses. 1006: report them in SGR form, which
-		// unlike the original encoding keeps working past column 223.
-		fmt.Print("\x1b[?1000h\x1b[?1006h")
-		defer fmt.Print("\x1b[?1006l\x1b[?1000l")
+		// 1002: report button presses, releases, and motion while a button is
+		// held — the last of which is the drag a text selection is made with.
+		// 1006: report them in SGR form, which unlike the original encoding
+		// keeps working past column 223.
+		fmt.Print("\x1b[?1002h\x1b[?1006h")
+		defer fmt.Print("\x1b[?1006l\x1b[?1002l")
 	}
 
 	// Alternate screen, hidden cursor, no auto-wrap (a wrapped long line would
@@ -105,6 +108,10 @@ func (c *TuiCmd) Run() error {
 		if err != nil {
 			return err
 		}
+		// The frame as drawn is what a selection is cut out of, so keep it
+		// before the highlight goes on top of it.
+		u.screen = lines
+		_, lines = u.selection(lines)
 		if joined := strings.Join(lines, "\n"); joined != last {
 			last = joined
 			paint(out, lines)
@@ -163,11 +170,11 @@ func (c *TuiCmd) Run() error {
 	// hasn't been acknowledged yet, so readKeys is parked. Only a key can get
 	// here, and there are no keys without a terminal, so raw is set.
 	external := func() {
-		fmt.Print("\x1b[?1006l\x1b[?1000l\x1b[?7h\x1b[?25h\x1b[?1049l")
+		fmt.Print("\x1b[?1006l\x1b[?1002l\x1b[?7h\x1b[?25h\x1b[?1049l")
 		term.Restore(int(os.Stdin.Fd()), raw)
 		text, err := externalEdit(u.entry.text)
 		term.MakeRaw(int(os.Stdin.Fd()))
-		fmt.Print("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1006h")
+		fmt.Print("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1002h\x1b[?1006h")
 
 		last = "" // the editor drew over the frame, so redraw all of it
 		u.entry.text, u.entry.cur = text, len(text)
@@ -190,6 +197,14 @@ func (c *TuiCmd) Run() error {
 			u.checkUpgrade()
 		case k := <-keys:
 			u.nav = time.Now() // hold the list still while it's being walked
+			// The mouse goes through the drag first: a press that then moves is
+			// a text selection rather than a click, and what comes back is the
+			// keystroke the rest of the loop should act on.
+			k, copied := u.drag(k)
+			if copied != "" {
+				copyClip(copied)
+				u.msg = fmt.Sprintf("copied %d characters", utf8.RuneCountInString(copied))
+			}
 			// The menu gets first refusal, and what it hands back is a key like
 			// any other — the one it was picked for — which the switch below
 			// then runs. "" is a keystroke it dealt with itself.
@@ -423,6 +438,16 @@ type ui struct {
 
 	clicked time.Time // when the last click landed on sel — see click
 	nav     time.Time // when the last key was pressed — see refresh
+
+	// The text selection the mouse is making, or has made: the press report
+	// held back until the button comes up (a drag mustn't also act on the row
+	// it started from), and the two ends of what it covers. from is the zero
+	// point when there's no selection on screen. screen is the frame as it was
+	// last drawn, which is what the selection is cut out of — the ui knows what
+	// it put on the screen, so it can say what a drag across it picked up.
+	held     string
+	from, to point
+	screen   []string
 
 	// The selected worktree's cells in full, snapshotted when the details pane
 	// was opened over the list; nil when it isn't open. A snapshot rather than a
@@ -1792,23 +1817,158 @@ func mouseRow(k string) int {
 }
 
 // mouseAt is the 1-based column and row of a left-button press in the SGR mouse
-// report k (ESC [ < button ; col ; row M), or 0, 0 when k is anything else — a
-// release (which ends in "m"), a wheel tick, or an ordinary keystroke.
+// report k, or 0, 0 when k is anything else — a release, a drag, a wheel tick,
+// or an ordinary keystroke.
 func mouseAt(k string) (col, row int) {
-	rest, ok := strings.CutPrefix(k, "\x1b[<")
-	if !ok || !strings.HasSuffix(rest, "M") {
-		return 0, 0
-	}
-	f := strings.Split(strings.TrimSuffix(rest, "M"), ";")
-	if len(f) != 3 || f[0] != "0" {
-		return 0, 0
-	}
-	col, cerr := strconv.Atoi(f[1])
-	row, rerr := strconv.Atoi(f[2])
-	if cerr != nil || rerr != nil {
+	col, row, btn, press, ok := mouseEvent(k)
+	if !ok || !press || btn != 0 {
 		return 0, 0
 	}
 	return col, row
+}
+
+// mouseEvent takes an SGR mouse report apart: ESC [ < button ; col ; row and
+// then M for a press or a drag, m for a release. The button comes back as the
+// bits the terminal sent — 0 is the left one, bit 5 (32) says the pointer moved
+// with it held, bit 6 (64) marks a wheel tick, and the three between are the
+// modifier keys — since which of them matter is the caller's business.
+func mouseEvent(k string) (col, row, btn int, press, ok bool) {
+	rest, cut := strings.CutPrefix(k, "\x1b[<")
+	if !cut || rest == "" {
+		return 0, 0, 0, false, false
+	}
+	final := rest[len(rest)-1]
+	if final != 'M' && final != 'm' {
+		return 0, 0, 0, false, false
+	}
+	f := strings.Split(rest[:len(rest)-1], ";")
+	if len(f) != 3 {
+		return 0, 0, 0, false, false
+	}
+	btn, berr := strconv.Atoi(f[0])
+	col, cerr := strconv.Atoi(f[1])
+	row, rerr := strconv.Atoi(f[2])
+	if berr != nil || cerr != nil || rerr != nil {
+		return 0, 0, 0, false, false
+	}
+	return col, row, btn, final == 'M', true
+}
+
+// point is a cell on the screen, in the 1-based coordinates a mouse report
+// counts in: row 1 is the top line, column 1 the left edge.
+type point struct{ col, row int }
+
+// drag is the mouse's half of the event loop, and what gives the tui a text
+// selection of its own: reporting clicks to the application is what takes the
+// terminal's own selection away, so the frame the tui drew is the only thing
+// left that knows what the text under a drag says.
+//
+// A press is held back until the button comes up, because a press that then
+// moves is a drag rather than a click and mustn't also act on the row it
+// started from. What comes back is the keystroke the rest of the loop should
+// see — "" for a report this used up, the held-back press for a click that
+// never moved — and the text a finished drag covered, for the caller to put on
+// the clipboard.
+func (u *ui) drag(k string) (string, string) {
+	col, row, btn, press, ok := mouseEvent(k)
+	switch {
+	case !ok: // a keystroke, which drops the highlight as it does in a terminal
+		u.from, u.to = point{}, point{}
+		return k, ""
+	case btn&3 != 0 || btn&64 != 0: // a wheel tick, or a button that isn't the left one
+		return k, ""
+	case press && btn&32 == 0: // down: a click, or the start of a drag
+		u.held, u.from, u.to = k, point{col, row}, point{col, row}
+		return "", ""
+	case press: // held and moving: the selection reaches to here
+		if u.held != "" { // a drag that began off-screen isn't ours to extend
+			u.to = point{col, row}
+		}
+		return "", ""
+	case u.from == u.to: // up, having never moved: the click, now that we know
+		click := u.held
+		u.held, u.from, u.to = "", point{}, point{}
+		return click, ""
+	default: // up after a drag: what it covered goes to the clipboard, and stays
+		u.held = "" // on screen highlighted, so it's plain what was taken
+		text, _ := u.selection(u.screen)
+		if strings.TrimSpace(text) == "" {
+			return "", ""
+		}
+		return "", text
+	}
+}
+
+// selection is the drag as it stands: the text it covers, and lines with that
+// text inverted. It runs the way text reads — from where the button went down
+// to where the pointer is now, whole lines in between — rather than as a
+// rectangle, since reading is what a terminal's own selection does and so what
+// the hand on the mouse is expecting.
+//
+// The lines it touches are redrawn from their plain text, so a row loses its
+// colours for as long as it's selected. ponytail: splicing an inversion into a
+// line that already carries escapes means tracking what those escapes left
+// switched on, which is a lot of code to preserve a background the selection is
+// covering over anyway.
+func (u *ui) selection(lines []string) (string, []string) {
+	a, b := u.from, u.to
+	if a == (point{}) {
+		return "", lines
+	}
+	if b.row < a.row || (b.row == a.row && b.col < a.col) {
+		a, b = b, a
+	}
+	out := slices.Clone(lines)
+	var text []string
+	for row := a.row; row <= b.row; row++ {
+		i := row - 1
+		if i < 0 || i >= len(out) {
+			continue
+		}
+		// A column is a rune, as it is everywhere else the frame counts them.
+		r := []rune(plain(out[i]))
+		lo, hi := 1, len(r)
+		if row == a.row {
+			lo = max(a.col, 1)
+		}
+		if row == b.row {
+			hi = min(b.col, len(r))
+		}
+		if lo > hi { // the line stops before the selection starts: a blank line of it
+			text = append(text, "")
+			continue
+		}
+		text = append(text, strings.TrimRight(string(r[lo-1:hi]), " "))
+		out[i] = string(r[:lo-1]) + "\x1b[7m" + string(r[lo-1:hi]) + "\x1b[0m" + string(r[hi:])
+	}
+	return strings.Join(text, "\n"), out
+}
+
+// escapes is what a frame line carries besides its text: the colours draw() put
+// on it, and whatever a session's own output brought along with it.
+var escapes = regexp.MustCompile("\x1b\\[[0-9;?]*[ -/]*[@-~]")
+
+// plain is line with those taken out — what a selection copies, and what its
+// columns are counted along.
+func plain(line string) string { return escapes.ReplaceAllString(line, "") }
+
+// copyClip puts s on the system clipboard: the platform's own tool where there
+// is one, and OSC 52 — which the terminal itself honours, over ssh included —
+// where there isn't. A copy that fails does so quietly: the bar has already
+// said the drag was taken, and there's nothing to be done about a missing
+// wl-copy in the middle of one.
+func copyClip(s string) {
+	for _, c := range [][]string{{"pbcopy"}, {"wl-copy"}, {"xclip", "-selection", "clipboard"}} {
+		if _, err := exec.LookPath(c[0]); err != nil {
+			continue
+		}
+		cmd := exec.Command(c[0], c[1:]...)
+		cmd.Stdin = strings.NewReader(s)
+		if cmd.Run() == nil {
+			return
+		}
+	}
+	fmt.Print("\x1b]52;c;" + base64.StdEncoding.EncodeToString([]byte(s)) + "\a")
 }
 
 // readKeys pumps stdin into a channel, one keystroke per message, and waits to

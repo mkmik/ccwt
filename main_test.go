@@ -1126,6 +1126,64 @@ func TestMouseRow(t *testing.T) {
 	}
 }
 
+// Reporting clicks to us is what takes the terminal's own selection away, so
+// the tui makes one: a press that moves is a drag, what it covers goes on the
+// clipboard, and a press that doesn't move is still the click it always was.
+func TestDragSelects(t *testing.T) {
+	u := ui{screen: []string{"one two three", rowBar + "four five six" + "\x1b[0m", "seven"}}
+	press := func(col, row int) string { return fmt.Sprintf("\x1b[<0;%d;%dM", col, row) }
+	move := func(col, row int) string { return fmt.Sprintf("\x1b[<32;%d;%dM", col, row) }
+	up := func(col, row int) string { return fmt.Sprintf("\x1b[<0;%d;%dm", col, row) }
+
+	// A press is held back: acting on it before the button comes up is what
+	// would open a worktree the drag only started from.
+	if k, text := u.drag(press(5, 1)); k != "" || text != "" {
+		t.Errorf("the press went straight through as %q/%q, want it held back", k, text)
+	}
+	if k, text := u.drag(up(5, 1)); k != press(5, 1) || text != "" {
+		t.Errorf("a click that never moved = %q/%q, want the press back", k, text)
+	}
+
+	// Dragged instead: the columns it covers, whole lines in between, and no
+	// click at the end of it.
+	u.drag(press(5, 1))
+	u.drag(move(9, 2))
+	k, text := u.drag(up(9, 2))
+	if k != "" {
+		t.Errorf("a drag ended as the keystroke %q, want it used up", k)
+	}
+	if want := "two three\nfour five"; text != want {
+		t.Errorf("the drag copied %q, want %q", text, want)
+	}
+
+	// Backwards is the same selection, and the frame comes back with it
+	// inverted — the escapes the row had are gone with the redraw.
+	u.drag(press(9, 2))
+	u.drag(move(5, 1))
+	text, lines := u.selection(u.screen)
+	if want := "two three\nfour five"; text != want {
+		t.Errorf("dragging up the screen copied %q, want %q", text, want)
+	}
+	if want := "one \x1b[7mtwo three\x1b[0m"; lines[0] != want {
+		t.Errorf("the first selected line drew as %q, want %q", lines[0], want)
+	}
+	if strings.Contains(lines[1], rowBar) {
+		t.Errorf("the selected row kept its colours: %q", lines[1])
+	}
+
+	// A keystroke drops the highlight, as it does in any terminal, and goes
+	// through untouched. So does a wheel tick.
+	if k, _ := u.drag("j"); k != "j" {
+		t.Errorf("a keystroke came back as %q, want it untouched", k)
+	}
+	if _, lines := u.selection(u.screen); lines[0] != u.screen[0] {
+		t.Error("the highlight outlived the keystroke that should have dropped it")
+	}
+	if k, _ := u.drag("\x1b[<64;1;1M"); k != "\x1b[<64;1;1M" {
+		t.Errorf("a wheel tick came back as %q, want it untouched", k)
+	}
+}
+
 // One click selects, two open: a click on the way past a row shouldn't spawn a
 // workspace, and the terminal won't tell us which is which, so the timing is
 // ours to get right.
