@@ -1723,6 +1723,393 @@ func elide(s string, limit int) string {
 	return truncate(s, limit)
 }
 
+// NavCmd is navigation: find the thing you have in mind and put the cursor in
+// it. What you have in mind is either something running ("the agent I set on
+// the parser") or somewhere you work ("the mTLS one"), so those are the two
+// ways to search and there is no third. Both take a fuzzy pattern.
+type NavCmd struct {
+	Ps NavPsCmd `cmd:"" name:"ps" help:"Go to the pane a process is running in: the best fuzzy match on the command lines of your running processes."`
+	Ws NavWsCmd `cmd:"" name:"ws" help:"Go to a workspace: the best fuzzy match on its title, or on the name of the worktree it has open."`
+}
+
+type NavPsCmd struct {
+	Pattern string `arg:"" help:"Fuzzy pattern, matched against the full command line of each of your processes."`
+	DryRun  bool   `help:"Don't go anywhere: print where it would have gone — the workspace's name, the tab's name and the tab's address, a line each."`
+}
+
+// Run goes to the pane of the best-matching process that is in one. Every
+// candidate is tried, best first, rather than only the winner: the tightest
+// match on the machine may well be a daemon nobody is sitting in front of, and
+// a pattern typed at a navigation command means "the one I can go to".
+func (c *NavPsCmd) Run() error {
+	// Our own processes with their full command lines — the pattern is typed
+	// against what `ps` shows, and another user's pane isn't ours to go to.
+	out, err := exec.Command("ps", "-xww", "-o", "pid=,ppid=,command=").Output()
+	if err != nil {
+		return fmt.Errorf("ps: %w", err)
+	}
+	type process struct {
+		pid, parent int
+		cmdline     string
+	}
+	var procs []process
+	parents := map[int]int{}
+	for line := range strings.SplitSeq(string(out), "\n") {
+		pidField, rest, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok {
+			continue
+		}
+		ppidField, cmdline, ok := strings.Cut(strings.TrimLeft(rest, " "), " ")
+		if !ok {
+			continue
+		}
+		pid, err := strconv.Atoi(pidField)
+		parent, perr := strconv.Atoi(ppidField)
+		if err != nil || perr != nil {
+			continue
+		}
+		procs = append(procs, process{pid, parent, cmdline})
+		parents[pid] = parent
+	}
+	// Ourselves and everything that spawned us: `ccwt nav ps claude` carries
+	// the pattern on its own command line, and so does the shell that ran it,
+	// and the agent above that is the pane you are already sitting in. pgrep
+	// leaves its own ancestors out of a match for the same reason.
+	ours := map[int]bool{}
+	for pid := os.Getpid(); pid > 1 && !ours[pid]; pid = parents[pid] {
+		ours[pid] = true
+	}
+	type match struct {
+		pid     int
+		score   int
+		cmdline string
+	}
+	var matches []match
+	for _, p := range procs {
+		if ours[p.pid] {
+			continue
+		}
+		if score, ok := fuzzyScore(p.cmdline, c.Pattern); ok {
+			matches = append(matches, match{p.pid, score, p.cmdline})
+		}
+	}
+	slices.SortFunc(matches, func(a, b match) int { return b.score - a.score })
+	for _, m := range matches {
+		mux, pane := paneOf(processEnv(m.pid))
+		if mux == nil {
+			continue
+		}
+		if c.DryRun {
+			where, err := mux.where(pane)
+			if err != nil {
+				return err
+			}
+			where.print()
+			return nil
+		}
+		if err := mux.focus(pane); err != nil {
+			return err
+		}
+		fmt.Println(pane, truncate(m.cmdline, 100))
+		return nil
+	}
+	if len(matches) == 0 {
+		return fmt.Errorf("%s: no process matches", c.Pattern)
+	}
+	return fmt.Errorf("%s: nothing that matches is in a pane (or its environment is unreadable)", c.Pattern)
+}
+
+type NavWsCmd struct {
+	Query  string `arg:"" help:"Fuzzy pattern, matched against each workspace's title and against the name of the worktree it has open."`
+	DryRun bool   `help:"Don't go anywhere: print where it would have gone — the workspace's name, the tab's name and the tab's address, a line each."`
+}
+
+// Run goes to the workspace whose title — or whose worktree's name — matches
+// best. Both, because a workspace ccwt opens starts out named after its
+// worktree ("frolicking-tumbling-duckling") and is usually renamed to what the
+// work is ("mTLS subresource"), and either is a thing you'd type.
+//
+// ponytail: herdr only, a workspace being a herdr thing. `nav ps` is the half
+// that spans multiplexers.
+func (c *NavWsCmd) Run() error {
+	out, err := exec.Command(herdrBin(), "workspace", "list").Output()
+	if err != nil {
+		return fmt.Errorf("herdr workspace list: %w", err)
+	}
+	var resp struct {
+		Result struct {
+			Workspaces []struct {
+				ID       string `json:"workspace_id"`
+				Label    string `json:"label"`
+				Tab      string `json:"active_tab_id"`
+				Worktree struct {
+					Path string `json:"checkout_path"`
+				} `json:"worktree"`
+			} `json:"workspaces"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return fmt.Errorf("herdr workspace list: %w", err)
+	}
+	var best, bestLabel, bestTab string
+	bestScore := 0
+	for _, w := range resp.Result.Workspaces {
+		for _, name := range []string{w.Label, filepath.Base(w.Worktree.Path)} {
+			if name == "" || name == "." { // a workspace holding no worktree
+				continue
+			}
+			if score, ok := fuzzyScore(name, c.Query); ok && (best == "" || score > bestScore) {
+				best, bestLabel, bestTab, bestScore = w.ID, w.Label, w.Tab, score
+			}
+		}
+	}
+	if best == "" {
+		return fmt.Errorf("%s: no workspace matches", c.Query)
+	}
+	if c.DryRun {
+		// The tab the workspace is on: focusing a workspace lands you in it,
+		// so it is what the pane half of nav would have printed too.
+		where, err := herdrPlace(bestTab)
+		if err != nil {
+			return err
+		}
+		where.print()
+		return nil
+	}
+	if err := herdrFocusWS(best); err != nil {
+		return err
+	}
+	fmt.Println(best, bestLabel)
+	return nil
+}
+
+// fuzzyScore matches pattern against s the way a fuzzy finder does: every
+// character of the pattern present in order, not necessarily adjacent, case
+// ignored. The score ranks matches against each other and means nothing on its
+// own — higher is better, tight matches beating spread-out ones and early ones
+// beating late. ok is false when the pattern isn't in s at all.
+//
+// ponytail: two passes, as fzf's simple matcher does — the whole pattern
+// spelled out somewhere later on can still lose to a scattered run that starts
+// earlier ("claude" against "c…l…a…u…d…e claude"), which a full dynamic
+// program wouldn't. Bytes rather than runes, both sides lowercased: the same
+// answer as runes for ascii, and a harmless one for the rest.
+func fuzzyScore(s, pattern string) (int, bool) {
+	hay, needle := strings.ToLower(s), strings.ToLower(pattern)
+	if needle == "" {
+		return 0, true
+	}
+	// Typed in one piece, which is how most patterns are typed: the tightest
+	// run there can be, so no pass over the rest can beat it.
+	if i := strings.Index(hay, needle); i >= 0 {
+		return -8*(len(needle)-1) - i, true
+	}
+	// Forwards for where the pattern first finishes, then backwards from there
+	// for the latest start that still fits it all in — the forward pass takes
+	// the first character it sees and would otherwise call a run loose that
+	// isn't.
+	end, n := -1, 0
+	for i := range len(hay) {
+		if hay[i] == needle[n] {
+			if n++; n == len(needle) {
+				end = i
+				break
+			}
+		}
+	}
+	if end < 0 {
+		return 0, false
+	}
+	start, n := end, len(needle)-1
+	for i := end; i >= 0; i-- {
+		if hay[i] == needle[n] {
+			if n == 0 {
+				start = i
+				break
+			}
+			n--
+		}
+	}
+	// Characters strewn over a whole command line are a coincidence, not a
+	// match: a long enough line has almost any pattern in it somewhere, and
+	// navigation that jumps to a coincidence on a typo is worse than
+	// navigation that says it found nothing. Eight times the pattern still
+	// leaves room for the initials of a name ("fld" for
+	// frolicking-tumbling-duckling).
+	if end-start > 8*len(needle) {
+		return 0, false
+	}
+	return -8*(end-start) - start, true
+}
+
+// multiplexer is a terminal multiplexer ccwt can navigate: the variable it
+// exports into every pane it spawns, how it is told to go to one, and how it
+// says where one is. Panes are found through that variable rather than by
+// asking the multiplexer, because everything running in a pane inherits it —
+// which pane a process sits in is written on the process itself.
+type multiplexer struct {
+	env   string
+	focus func(pane string) error
+	where func(pane string) (place, error)
+}
+
+// place is where a pane is, in the three lines --dry-run prints: the workspace
+// holding it, the tab holding it, and the address that gets you there — which
+// is the tab's, since a tab is what both halves of nav land you on.
+type place struct{ workspace, tab, address string }
+
+func (p place) print() {
+	fmt.Println(p.workspace)
+	fmt.Println(p.tab)
+	fmt.Println(p.address)
+}
+
+// ponytail: the first variable present wins. One multiplexer nested in another
+// (herdr in tmux) leaves both set and the environment can't say which is the
+// inner one; ask the multiplexers themselves if that ever matters.
+var multiplexers = []multiplexer{
+	{"HERDR_PANE_ID", herdrFocusPane, herdrWherePane},
+	{"TMUX_PANE", func(pane string) error {
+		// The window as well as the pane: a pane in another window is reached
+		// only by selecting both. Then the client, which is the part that
+		// can't be done from outside tmux — no client to switch, no failure.
+		for _, args := range [][]string{{"select-window", "-t", pane}, {"select-pane", "-t", pane}} {
+			if out, err := exec.Command("tmux", args...).CombinedOutput(); err != nil {
+				return fmt.Errorf("tmux %s: %s", strings.Join(args, " "), lastLine(out, err))
+			}
+		}
+		_ = exec.Command("tmux", "switch-client", "-t", pane).Run()
+		return nil
+	}, func(pane string) (place, error) {
+		// tmux's own three: the session is the workspace, the window is the
+		// tab, and the pane addresses itself.
+		out, err := exec.Command("tmux", "display-message", "-p", "-t", pane,
+			"#{session_name}\n#{window_name}").Output()
+		if err != nil {
+			return place{}, fmt.Errorf("tmux display-message -t %s: %w", pane, err)
+		}
+		session, window, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
+		return place{session, window, pane}, nil
+	}},
+}
+
+// paneOf is the multiplexer pane an environment belongs to, and which
+// multiplexer's pane it is. A nil multiplexer is an environment outside all of
+// them.
+func paneOf(env []string) (*multiplexer, string) {
+	for i := range multiplexers {
+		for _, kv := range env {
+			if pane, ok := strings.CutPrefix(kv, multiplexers[i].env+"="); ok && pane != "" {
+				return &multiplexers[i], pane
+			}
+		}
+	}
+	return nil, ""
+}
+
+// processEnv is another process's environment as KEY=VALUE strings, or nil
+// when it can't be read: a process of another user, or one whose binary macOS
+// protects — SIP hides the environment of everything under /bin and /usr/bin,
+// shells included, so what answers there is the agent rather than the shell it
+// was started from.
+//
+// ponytail: splitting the BSD ps output on spaces mangles values containing
+// one, which costs nothing here — no pane id has a space in it.
+func processEnv(pid int) []string {
+	if b, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", pid)); err == nil { // linux
+		return strings.Split(strings.TrimRight(string(b), "\x00"), "\x00")
+	}
+	out, err := exec.Command("ps", "-Eww", "-o", "command=", "-p", strconv.Itoa(pid)).Output() // bsd
+	if err != nil {
+		return nil
+	}
+	return strings.Fields(string(out))
+}
+
+// herdrFocusPane goes to one pane. `agent focus` is the only thing herdr
+// focuses a pane itself by, so a pane running no agent is reached through its
+// tab instead — which lands on the tab's own focused pane, close enough when
+// the tab is split and exact when it isn't.
+func herdrFocusPane(pane string) error {
+	if err := exec.Command(herdrBin(), "agent", "focus", pane).Run(); err == nil {
+		return nil
+	}
+	tab, err := herdrPaneTab(pane)
+	if err != nil {
+		return err
+	}
+	if out, err := exec.Command(herdrBin(), "tab", "focus", tab).CombinedOutput(); err != nil {
+		return fmt.Errorf("herdr tab focus %s: %s", tab, lastLine(out, err))
+	}
+	return nil
+}
+
+// herdrPaneTab is the tab a pane sits in, which is what herdr can be told to
+// go to.
+func herdrPaneTab(pane string) (string, error) {
+	out, err := exec.Command(herdrBin(), "pane", "get", pane).Output()
+	if err != nil {
+		return "", fmt.Errorf("herdr pane get %s: %w", pane, err)
+	}
+	var resp struct {
+		Result struct {
+			Pane struct {
+				Tab string `json:"tab_id"`
+			} `json:"pane"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil || resp.Result.Pane.Tab == "" {
+		return "", fmt.Errorf("herdr pane get %s: no tab in the answer", pane)
+	}
+	return resp.Result.Pane.Tab, nil
+}
+
+// herdrWherePane is a pane's place, for --dry-run: its tab's, the tab being
+// where going there lands you.
+func herdrWherePane(pane string) (place, error) {
+	tab, err := herdrPaneTab(pane)
+	if err != nil {
+		return place{}, err
+	}
+	return herdrPlace(tab)
+}
+
+// herdrPlace is a tab's place: the name of the workspace it is in, its own
+// name, and its id — the address `herdr tab focus` takes. Names, not ids, are
+// what a dry run is read for; the id is there to be pasted into herdr.
+func herdrPlace(tab string) (place, error) {
+	var tabResp struct {
+		Result struct {
+			Tab struct {
+				Label     string `json:"label"`
+				Workspace string `json:"workspace_id"`
+			} `json:"tab"`
+		} `json:"result"`
+	}
+	out, err := exec.Command(herdrBin(), "tab", "get", tab).Output()
+	if err != nil {
+		return place{}, fmt.Errorf("herdr tab get %s: %w", tab, err)
+	}
+	if err := json.Unmarshal(out, &tabResp); err != nil {
+		return place{}, fmt.Errorf("herdr tab get %s: %w", tab, err)
+	}
+	var wsResp struct {
+		Result struct {
+			Workspace struct {
+				Label string `json:"label"`
+			} `json:"workspace"`
+		} `json:"result"`
+	}
+	out, err = exec.Command(herdrBin(), "workspace", "get", tabResp.Result.Tab.Workspace).Output()
+	if err != nil {
+		return place{}, fmt.Errorf("herdr workspace get %s: %w", tabResp.Result.Tab.Workspace, err)
+	}
+	if err := json.Unmarshal(out, &wsResp); err != nil {
+		return place{}, fmt.Errorf("herdr workspace get %s: %w", tabResp.Result.Tab.Workspace, err)
+	}
+	return place{wsResp.Result.Workspace.Label, tabResp.Result.Tab.Label, tab}, nil
+}
+
 var cli struct {
 	NewWorktreeName   NewWorktreeNameCmd   `cmd:"" name:"new-worktree-name" help:"Generate a Claude Code-style worktree name (adjective-verb-noun)."`
 	NewWorktreeBranch NewWorktreeBranchCmd `cmd:"" name:"new" help:"Create a new worktree under .claude/worktrees/<name> on a new branch worktree-<name> (branch_prefix in the config file renames the \"worktree-\" part), and print <name>."`
@@ -1734,6 +2121,7 @@ var cli struct {
 	Lock              LockCmd              `cmd:"" name:"lock" help:"Lock a worktree the way \"ccwt new\" does, so \"git worktree prune\" can't reclaim it while its directory is unavailable. Use \".\" for the worktree you're currently in."`
 	Worklog           WorklogCmd           `cmd:"" name:"worklog" help:"Show the worktrees that have been removed, newest first, with what each one was about — what you were working on lately, after the worktree itself is gone."`
 	Gc                GcCmd                `cmd:"" name:"gc" help:"Remove every worktree whose branch is already merged, with nothing uncommitted, no agent working in it and no Claude Code session running in it, branches included — except the one you're in. Prints what it found and asks first, unless -y."`
+	Nav               NavCmd               `cmd:"" name:"nav" help:"Go to where something is: \"nav ps <pattern>\" to the pane a process is running in, \"nav ws <pattern>\" to a workspace, by its title or by the name of the worktree it has open. Both patterns are fuzzy."`
 	RepoRoot          RepoRootCmd          `cmd:"" name:"repo-root" help:"Print the root directory of the current git repository."`
 	DotDot            DotDotCmd            `cmd:"" name:".." help:"Print the enclosing repo root, stripping any .claude/worktrees/<name> suffix (shorthand for repo-root --root-worktree)."`
 	Init              InitCmd              `cmd:"" name:"init" help:"Emit a shell integration snippet to source from your rc file (e.g. source <(ccwt init zsh), or for fish: ccwt init fish | source)."`
