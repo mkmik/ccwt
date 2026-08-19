@@ -1300,12 +1300,8 @@ func isClaudeBinaryPath(path string) bool {
 // The cwds are whatever the caller counts as active: running Claude Code
 // processes (claudeCwds), agents herdr says are mid-task (herdrBusy), or both.
 func activeIn(worktreePath string, cwds map[string]bool) bool {
-	if cwds[worktreePath] {
-		return true
-	}
-	prefix := worktreePath + string(filepath.Separator)
 	for cwd := range cwds {
-		if strings.HasPrefix(cwd, prefix) {
+		if under(cwd, worktreePath) {
 			return true
 		}
 	}
@@ -1744,32 +1740,13 @@ type NavPsCmd struct {
 func (c *NavPsCmd) Run() error {
 	// Our own processes with their full command lines — the pattern is typed
 	// against what `ps` shows, and another user's pane isn't ours to go to.
-	out, err := exec.Command("ps", "-xww", "-o", "pid=,ppid=,command=").Output()
+	procs, err := listProcesses()
 	if err != nil {
-		return fmt.Errorf("ps: %w", err)
+		return err
 	}
-	type process struct {
-		pid, parent int
-		cmdline     string
-	}
-	var procs []process
 	parents := map[int]int{}
-	for line := range strings.SplitSeq(string(out), "\n") {
-		pidField, rest, ok := strings.Cut(strings.TrimSpace(line), " ")
-		if !ok {
-			continue
-		}
-		ppidField, cmdline, ok := strings.Cut(strings.TrimLeft(rest, " "), " ")
-		if !ok {
-			continue
-		}
-		pid, err := strconv.Atoi(pidField)
-		parent, perr := strconv.Atoi(ppidField)
-		if err != nil || perr != nil {
-			continue
-		}
-		procs = append(procs, process{pid, parent, cmdline})
-		parents[pid] = parent
+	for _, p := range procs {
+		parents[p.pid] = p.parent
 	}
 	// Ourselves and everything that spawned us: `ccwt nav ps claude` carries
 	// the pattern on its own command line, and so does the shell that ran it,
@@ -2119,6 +2096,7 @@ var cli struct {
 	Remove            RemoveCmd            `cmd:"" name:"remove" help:"Delete a worktree under .claude/worktrees/<name> and its branch (merged, clean and no agent working in it; -D to remove anyway, --keep-branch to remove only the worktree). Under herdr its workspace is closed too, after asking on a terminal (-y skips the question). Use \".\" for the current worktree; removing it cds to the repo root."`
 	Done              DoneCmd              `cmd:"" name:"done" help:"Finish with the worktree you're in: remove it and its branch (same checks and flags as \"remove .\"), then under herdr close the workspace you're sitting in."`
 	Lock              LockCmd              `cmd:"" name:"lock" help:"Lock a worktree the way \"ccwt new\" does, so \"git worktree prune\" can't reclaim it while its directory is unavailable. Use \".\" for the worktree you're currently in."`
+	Ps                PsCmd                `cmd:"" name:"ps" help:"Show what is running in each worktree, as a process tree per worktree: the shell you started there and, by default, what it is running right now. --depth goes further down, -g spans every configured project."`
 	Worklog           WorklogCmd           `cmd:"" name:"worklog" help:"Show the worktrees that have been removed, newest first, with what each one was about — what you were working on lately, after the worktree itself is gone."`
 	Gc                GcCmd                `cmd:"" name:"gc" help:"Remove every worktree whose branch is already merged, with nothing uncommitted, no agent working in it and no Claude Code session running in it, branches included — except the one you're in. Prints what it found and asks first, unless -y."`
 	Nav               NavCmd               `cmd:"" name:"nav" help:"Go to where something is: \"nav ps <pattern>\" to the pane a process is running in, \"nav ws <pattern>\" to a workspace, by its title or by the name of the worktree it has open. Both patterns are fuzzy."`
