@@ -2931,3 +2931,58 @@ func TestNavPaneOf(t *testing.T) {
 		t.Error("an environment with no multiplexer in it still named one")
 	}
 }
+
+// TestPsRows covers what `ccwt ps` draws under a worktree: the topmost process
+// running in it and, by depth, what that one started. The shell is the tree's
+// root because its parent — the terminal, or a multiplexer — is running
+// somewhere else; a build that cd'd itself into a temp directory is still part
+// of what the shell is doing, and the worktree next door keeps its own tree
+// even though its shell hangs off the same terminal.
+func TestPsRows(t *testing.T) {
+	const wt, other = "/repo/.claude/worktrees/one", "/repo/.claude/worktrees/two"
+	procs := []process{
+		{100, 1, "herdr"},
+		{200, 100, "-zsh"},   // the shell in the worktree
+		{300, 200, "claude"}, // what it's running
+		{400, 300, "go build ./..."},
+		{500, 100, "-zsh"}, // a shell in the worktree next door
+		{600, 1, "gopls"},  // orphaned, but still in the worktree
+	}
+	cwds := map[int]string{
+		100: "/repo",
+		200: wt,
+		300: wt + "/internal", // an agent that cd'd deeper is still in here
+		400: "/tmp/go-build",  // and what it started need not be in here at all
+		500: other,
+		600: wt,
+	}
+	pids := func(depth int) []int {
+		var got []int
+		for _, r := range psRows(procs, cwds, wt, depth) {
+			got = append(got, r.pid)
+		}
+		return got
+	}
+	if got, want := pids(0), []int{200, 600}; !slices.Equal(got, want) {
+		t.Errorf("depth 0 = %v, want the topmost processes in the worktree %v", got, want)
+	}
+	if got, want := pids(1), []int{200, 300, 600}; !slices.Equal(got, want) {
+		t.Errorf("depth 1 = %v, want the shell and its immediate children %v", got, want)
+	}
+	if got, want := pids(-1), []int{200, 300, 400, 600}; !slices.Equal(got, want) {
+		t.Errorf("depth -1 = %v, want the whole tree %v", got, want)
+	}
+	if rows := psRows(procs, cwds, wt, 1); rows[1].depth != 1 {
+		t.Errorf("claude is drawn at depth %d, want 1 — it hangs under the shell", rows[1].depth)
+	}
+	if rows := psRows(procs, cwds, other, -1); len(rows) != 1 || rows[0].pid != 500 {
+		t.Errorf("the worktree next door = %v, want its own shell alone", rows)
+	}
+	if rows := psRows(procs, cwds, "/repo/.claude/worktrees/gone", 1); len(rows) != 0 {
+		t.Errorf("a worktree nobody is in = %v, want nothing", rows)
+	}
+	// A prefix that isn't a path component: "…/one-more" is not inside "…/one".
+	if rows := psRows(procs, map[int]string{200: wt + "-more"}, wt, 1); len(rows) != 0 {
+		t.Errorf("a worktree whose name merely starts the same = %v, want nothing", rows)
+	}
+}
