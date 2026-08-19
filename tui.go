@@ -136,6 +136,12 @@ func (c *TuiCmd) Run() error {
 	// "<new>" row make the worktree that prompt has been waiting for first.
 	open := func() error {
 		path := u.sel.path
+		// A process is somewhere too, and where it is is a pane — which is a
+		// multiplexer's, not necessarily herdr's, so this comes before that
+		// question.
+		if u.sel.process() {
+			return act("going there…", func() string { return focusPid(u.sel.pid) })
+		}
 		if !underHerdr() {
 			return nil
 		}
@@ -153,7 +159,7 @@ func (c *TuiCmd) Run() error {
 	// misfire into opening a worktree; a click can't, since it names the row it
 	// means.
 	activate := func() error {
-		if u.sel.worktree() || u.sel.pending() {
+		if u.sel.worktree() || u.sel.pending() || u.sel.process() {
 			return open()
 		}
 		u.toggle()
@@ -330,10 +336,21 @@ func (c *TuiCmd) Run() error {
 				u.seek(u.dir)
 			case k == "N":
 				u.seek(-u.dir)
-			// esc backs out of what the list is holding onto: the pattern, and
-			// the selection with it — which is how the per-row keys, and the bar
-			// that lists them, go away again.
+			// `P` is `ccwt ps` in the list's own window: what is running in each
+			// worktree instead of the worktrees, the same keys walking and
+			// searching it. It toggles, and so does esc below.
+			case k == "P":
+				u.ps = !u.ps
+				u.psView()
+			// esc backs out of what the list is holding onto, outermost thing
+			// last: the pattern, and the selection with it — which is how the
+			// per-row keys, and the bar that lists them, go away again — and
+			// then, in the ps view, the view itself.
 			case k == "\x1b":
+				if u.ps && u.query == "" {
+					u.ps = false
+					u.psView()
+				}
 				u.search = search{} // :nohlsearch, near enough
 				u.sel = listRow{}
 			case k == " ": // opens a worktree, and does nothing on a section header
@@ -370,7 +387,10 @@ func (c *TuiCmd) Run() error {
 				if err := act("collecting…", u.gc); err != nil {
 					return err
 				}
-			case k == "r":
+			// Not in the ps view: every row there carries a worktree, the
+			// processes included, and what that list is for is going to what's
+			// running — not tearing down the tree it's running in.
+			case k == "r" && !u.ps:
 				if path := u.sel.path; path != "" {
 					if err := act("removing "+filepath.Base(path)+"…", func() string {
 						msg, ok := removeWorktree(path)
@@ -390,7 +410,7 @@ func (c *TuiCmd) Run() error {
 				// The hamburger, in the bar's own corner: the keys the bar
 				// lists, as something to click through instead.
 				case row == rows && col <= hamburgerCols:
-					u.menu, u.menuSel = menuActions(u.sel, u.query != "", u.projects != nil), 0
+					u.menu, u.menuSel = u.menuFor(), 0
 				// A click selects the row it landed on; it takes a second one to
 				// act on it, as it does in any other list.
 				case hit != (listRow{}) && u.click(hit):
@@ -428,6 +448,13 @@ type ui struct {
 	saved  search // what the open prompt replaced, put back if it's abandoned
 	anchor listRow
 	typing bool // the prompt is up and taking keystrokes
+
+	// `P`: the list shows what is running in each worktree instead of the
+	// worktrees themselves — `ccwt ps`, under -g when the tui is. A mode of the
+	// list rather than a pane over it, so that the window, the selection, the
+	// search and the mouse are the ones you already have; only what the rows
+	// are, and so what the keys do with one, changes.
+	ps bool
 
 	entry entry // the queue prompt, when it's up
 
@@ -505,6 +532,22 @@ func (u *ui) stale() {
 	if u.detail == nil && !u.entry.open && !u.logOpen && u.menu == nil {
 		u.body = nil
 	}
+}
+
+// psView is the switch between the two lists: what's in the window is a
+// different list entirely, so the cache goes, and the selection and the scroll
+// with it — a pid means nothing among worktrees, and the other way round.
+func (u *ui) psView() {
+	u.body, u.sel, u.top = nil, listRow{}, 0
+}
+
+// menuFor is what the hamburger lists: the keys of whichever list is up, so the
+// menu can't offer an action the mode has no use for.
+func (u *ui) menuFor() []action {
+	if u.ps {
+		return psActions(u.sel)
+	}
+	return menuActions(u.sel, u.query != "", u.projects != nil)
 }
 
 // navQuiet is how long a keystroke keeps the interval tick off the list. The
@@ -1108,13 +1151,27 @@ func (u *ui) frame() ([]string, error) {
 	// Re-read only when the cache was dropped or the terminal got wider or
 	// narrower, since the table is laid out to the width.
 	if u.body == nil || cols != u.cols {
-		var buf bytes.Buffer
-		listRows, cells, err := renderList(&buf, true, cols, u.projects, u.collapsed, true, u.sort)
-		if err != nil {
-			return nil, err
+		if u.ps {
+			// Whole lines: the frame cuts them to the width as it does the
+			// table's, and the cache is dropped on a resize either way.
+			lines, rows, err := psReport(u.projects, psDepth, 0)
+			if err != nil {
+				return nil, err
+			}
+			if len(lines) == 0 {
+				lines, rows = []string{"  nothing is running in any worktree"}, []listRow{{pid: -1}}
+			}
+			u.body = append([]string{psHeader}, lines...)
+			u.all, u.cols, u.div, u.cells = rows, cols, nil, nil
+		} else {
+			var buf bytes.Buffer
+			listRows, cells, err := renderList(&buf, true, cols, u.projects, u.collapsed, true, u.sort)
+			if err != nil {
+				return nil, err
+			}
+			u.body = strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+			u.all, u.cols, u.div, u.cells = listRows, cols, nil, cells
 		}
-		u.body = strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-		u.all, u.cols, u.div, u.cells = listRows, cols, nil, cells
 	}
 
 	body := max(rows-1, 1)
@@ -1249,6 +1306,11 @@ func (u *ui) frame() ([]string, error) {
 	// The restart notice outlasts the transient messages but yields to them
 	// while one is up: they're a second old, and it will still be true after.
 	bar := statusBar(cols, cmp.Or(u.msg, u.restart), u.sel, u.divergence(), u.query != "", u.projects != nil)
+	// The ps view has its own keys: the list's are about worktrees, and the
+	// only thing to do with a process is go to where it's running.
+	if u.ps {
+		bar = keyBar(cols, u.msg, "", psActions(u.sel))
+	}
 	if u.typing {
 		p := "/"
 		if u.dir < 0 {
@@ -2051,8 +2113,14 @@ func keyLen(s string) int {
 // has drifted from its upstream, cut or padded to exactly the terminal width.
 // Which keys apply is actions()' business.
 func statusBar(cols int, msg string, sel listRow, div string, searching, global bool) string {
+	return keyBar(cols, msg, div, actions(sel, searching, global))
+}
+
+// keyBar is the bar itself: the hamburger, the keys in force, and then what
+// there is to say — the message, or the branch's drift when there is none.
+func keyBar(cols int, msg, div string, as []action) string {
 	keys := hamburger
-	for _, a := range actions(sel, searching, global) {
+	for _, a := range as {
 		keys += "  " + a.name() + ":" + a.label
 	}
 	if msg == "" {
@@ -2078,23 +2146,50 @@ type action struct {
 	label string
 }
 
-// name is the key as it reads on screen, for the two that aren't their own name.
+// name is the key as it reads on screen, for the three that aren't their own
+// name.
 func (a action) name() string {
 	switch a.key {
 	case " ":
 		return "space"
 	case "\r":
 		return "↵"
+	case "\x1b":
+		return "esc"
 	}
 	return a.key
 }
 
-// menuActions is what the hamburger lists: the bar's keys, plus the ones that
+// menuActions is what the hamburger lists: the bar's keys, plus the two that
 // belong in a menu and nowhere else. `G` collects every worktree that's done
 // with at once — rare, and too much of a mouthful for a bar that has to say
-// what every other key does — so it's listed where there's room for it.
+// what every other key does — so it's listed where there's room for it, and `P`
+// (the ps view) is the way in for a hand that's on the mouse, the view's own bar
+// being the way back out.
 func menuActions(sel listRow, searching, global bool) []action {
-	return append(actions(sel, searching, global), action{"G", "gc"})
+	return append(actions(sel, searching, global), action{"G", "gc"}, action{"P", "ps"})
+}
+
+// psDepth is how far under each shell the ps view draws, `ccwt ps`'s own
+// default: the shell and what it's busy with. ponytail: a constant — bind a key
+// to it if the generation below ever turns out to be worth a look from in here.
+const psDepth = 1
+
+// psHeader is the view's first line, where the table's column names go: the ps
+// lines are a tree rather than a table, so what stands there is what they are.
+const psHeader = "RUNNING"
+
+// psActions is what the keys do in the ps view. The list's own are about
+// worktrees — pulling one, removing one, queueing behind one — and none of that
+// applies to a process; what a row of this list is for is going to it, which is
+// the same `space` that opens a worktree's workspace, landing in the pane the
+// process is running in instead.
+func psActions(sel listRow) []action {
+	as := []action{{"q", "quit"}, {"/", "search"}}
+	if sel.process() || sel.worktree() {
+		as = append(as, action{" ", "go"})
+	}
+	return append(as, action{"\x1b", "worktrees"})
 }
 
 // actions is what the keys do right now. The per-worktree ones only appear once

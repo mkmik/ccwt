@@ -27,7 +27,8 @@ type process struct {
 // terminal, which is most of what a multiplexer runs, and without `-a` it
 // stays our own: another user's processes are neither in our worktrees nor
 // ours to navigate to.
-func listProcesses() ([]process, error) {
+// ponytail: package vars so tests can stand a process table up without one.
+var listProcesses = func() ([]process, error) {
 	out, err := exec.Command("ps", "-xww", "-o", "pid=,ppid=,command=").Output()
 	if err != nil {
 		return nil, fmt.Errorf("ps: %w", err)
@@ -61,7 +62,7 @@ func listProcesses() ([]process, error) {
 // Whatever lsof managed to print is used even when it exits non-zero: a
 // process that went away mid-scan, or one it couldn't examine, is a normal
 // failure and no reason to lose the rest.
-func procCwds() map[int]string {
+var procCwds = func() map[int]string {
 	cwds := map[int]string{}
 	out, _ := exec.Command("lsof", "-a", "-d", "cwd", "-u", strconv.Itoa(os.Getuid()), "-Fpn").Output()
 	pid := 0
@@ -170,14 +171,40 @@ type PsCmd struct {
 	Depth  int  `short:"d" default:"1" help:"How many generations below each shell to show: 0 for the shells alone, --depth=-1 for everything they started."`
 }
 
-// Run prints what is running in each worktree. Worktrees with nothing in them
-// are left out, sections included: the question the command answers is what is
-// running where, and a screenful of empty headings doesn't help answer it.
+// Run prints what is running in each worktree.
 func (c *PsCmd) Run() error {
 	projects, err := projectRoots(c.Global)
 	if err != nil {
 		return err
 	}
+	// Fit the lines to the terminal only when there is one, as `list` does.
+	width := 0
+	if stdoutIsTTY() {
+		width, _, _ = term.GetSize(int(os.Stdout.Fd()))
+	}
+	lines, _, err := psReport(projects, c.Depth, width)
+	if err != nil {
+		return err
+	}
+	for _, l := range lines {
+		fmt.Println(l)
+	}
+	return nil
+}
+
+// psReport is what is running in each worktree, a line at a time: the projects
+// to cover (nil for the repo we're in, as projectRoots gives it), how many
+// generations below each shell to draw, and the width to cut the lines to — 0
+// leaves them whole, which is what the tui asks for, since it cuts its own.
+//
+// Worktrees with nothing in them are left out, sections included: the question
+// the report answers is what is running where, and a screenful of empty
+// headings doesn't help answer it.
+//
+// The rows alongside are what each line stands for, as renderList's are: a
+// process by its pid, a worktree by its path — the tui selects, searches and
+// acts on them, and the command line ignores them.
+func psReport(projects []string, depth, width int) ([]string, []listRow, error) {
 	global := projects != nil
 	if !global {
 		// "" is the current directory, which is how git reads "the repo we're in".
@@ -186,7 +213,7 @@ func (c *PsCmd) Run() error {
 
 	// ps and lsof know nothing about git and git knows nothing about them, so
 	// all three go out at once — the scan is the slow one (~200ms) and this is
-	// the whole of what the command waits for.
+	// the whole of what the report waits for.
 	var (
 		wg      sync.WaitGroup
 		procs   []process
@@ -203,21 +230,18 @@ func (c *PsCmd) Run() error {
 	}
 	wg.Wait()
 	if procErr != nil {
-		return procErr
+		return nil, nil, procErr
 	}
 	if err := errors.Join(errs...); err != nil {
-		return err
+		return nil, nil, err
 	}
 
-	// Fit the lines to the terminal only when there is one, as `list` does.
-	width := 0
-	if stdoutIsTTY() {
-		width, _, _ = term.GetSize(int(os.Stdout.Fd()))
-	}
 	type block struct {
-		name string
+		path string
 		rows []psRow
 	}
+	var out []string
+	var ids []listRow
 	seen := map[string]bool{} // two config entries can point into the same repo
 	for i, root := range roots {
 		if root == "" || seen[root] {
@@ -226,8 +250,8 @@ func (c *PsCmd) Run() error {
 		seen[root] = true
 		var blocks []block
 		for _, wt := range trees[i] {
-			if rows := psRows(procs, cwds, wt, c.Depth); len(rows) > 0 {
-				blocks = append(blocks, block{filepath.Base(wt), rows})
+			if rows := psRows(procs, cwds, wt, depth); len(rows) > 0 {
+				blocks = append(blocks, block{wt, rows})
 			}
 		}
 		if len(blocks) == 0 {
@@ -235,11 +259,16 @@ func (c *PsCmd) Run() error {
 		}
 		indent := ""
 		if global {
-			fmt.Println(section(root, len(blocks), false))
+			out = append(out, section(root, len(blocks), false))
+			// The project's line, as a row that is only a line: nothing folds
+			// in the report — it is what is running, and a project with nothing
+			// running in it isn't in it to be folded away.
+			ids = append(ids, listRow{project: root, pid: -1})
 			indent = "  "
 		}
 		for _, b := range blocks {
-			fmt.Println(indent + b.name)
+			out = append(out, indent+filepath.Base(b.path))
+			ids = append(ids, listRow{project: root, path: b.path})
 			pidw := 0
 			for _, r := range b.rows {
 				pidw = max(pidw, len(strconv.Itoa(r.pid)))
@@ -249,11 +278,45 @@ func (c *PsCmd) Run() error {
 				if width > 0 {
 					line = truncate(line, width)
 				}
-				fmt.Println(line)
+				out = append(out, line)
+				ids = append(ids, listRow{project: root, path: b.path, pid: r.pid})
 			}
 		}
 	}
-	return nil
+	return out, ids, nil
+}
+
+// focusPid goes to the pane a process is running in — what `space` does on a
+// process in the tui's ps view, as `nav ps` does once it has picked its match.
+// It reports what happened, for the status bar.
+//
+// The pane is an environment variable, and macOS hides the environment of
+// everything under /bin: a shell can't answer for itself. So its descendants
+// are asked in turn — they inherited the pane it was started in, and the agent
+// running under it is an ordinary binary whose environment reads back.
+func focusPid(pid int) string {
+	procs, err := listProcesses()
+	if err != nil {
+		return err.Error()
+	}
+	kids := map[int][]int{}
+	for _, p := range procs {
+		if p.parent != p.pid { // see psRows on the one cycle real ppids have
+			kids[p.parent] = append(kids[p.parent], p.pid)
+		}
+	}
+	for q := []int{pid}; len(q) > 0; q = q[1:] {
+		mux, pane := paneOf(processEnv(q[0]))
+		if mux == nil {
+			q = append(q, kids[q[0]]...)
+			continue
+		}
+		if err := mux.focus(pane); err != nil {
+			return err.Error()
+		}
+		return "went to " + pane
+	}
+	return fmt.Sprintf("%d: not in a pane (or its environment is unreadable)", pid)
 }
 
 // psIndent is what a row of depth d hangs off: nothing for the shell itself,
