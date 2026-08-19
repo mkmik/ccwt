@@ -128,6 +128,9 @@ goes further (`-d 0` for the shells alone, `--depth=-1` for everything). Worktre
 nothing running in them are left out, and `-g` spans every configured project, a section
 per project, as `ccwt list -g` does.
 
+The [tui](#what-is-running-in-there) shows the same thing on `P`, kept up to date, and there
+a process is somewhere you can go.
+
 ## The tui
 
 `ccwt tui` — or just `ccwt`, which is what a bare invocation runs — shows that same table
@@ -163,10 +166,11 @@ next keystroke, and a press that never moved is still an ordinary click.
 The `☰` in the corner is that same list of actions as a menu: click it and they drop out of
 the bar, one per line, to be clicked instead of typed (the arrows and `↵` work too, `esc`
 closes it, and clicking the `☰` again shuts it). A menu entry is the key it names — picking
-one does exactly what typing it does — so the menu and the bar can't drift apart. One entry
-is only there: `G` runs [`ccwt gc`](#command-reference) on the repo in view,
+one does exactly what typing it does — so the menu and the bar can't drift apart. Two entries
+are only there: `G` runs [`ccwt gc`](#command-reference) on the repo in view,
 collecting every worktree that's merged, clean and idle in one go — rare enough that the bar
-has no room for it, and picking it is the confirmation.
+has no room for it, and picking it is the confirmation — and `P` swaps the worktrees for
+[what is running in them](#what-is-running-in-there).
 
 `g` opens the worktree's review in your browser — the branch is here, the review is over
 there. Which one that is depends on where `origin` points: a GitHub remote is a pull request
@@ -203,6 +207,37 @@ knows about is in there, including any the config leaves out of the list.
     │         numbers on it are still the mocked ones                                │
     └────────────────────────────────────────────────────────────────────────────────┘
 ```
+
+### What is running in there
+
+`P` swaps the worktrees for what is running in them — [`ccwt ps`](#whats-running-in-them),
+in the tui's own window and refreshed on the same interval, `-g` included when the tui was
+started with it:
+
+```
+RUNNING
+calm-baking-otter
+  23136  -zsh
+  23730  ↳ go test ./...
+dreamy-foraging-hickey
+  49757  -zsh
+  79860  ↳ claude --resume
+
+ ☰  q:quit  /:search  space:go  esc:worktrees │
+```
+
+It's the same list, not a window over one: the arrows walk it, `/` and `n`/`N` search it,
+clicking selects, and the rows scroll the way the worktrees do. What changes is what a row
+is, and so what there is to do with one — `space` goes to where it is. On a process that
+means the pane it's running in, the same place [`ccwt nav ps`](#command-reference) would
+take you (herdr or tmux, whichever it's under); on the worktree line above it, the workspace,
+as `space` does on the list. `esc` brings the worktrees back — the first `esc` clears the
+search, if there is one — and so does another `P`.
+
+A process's pane is an environment variable it inherited, and macOS hides the environment of
+everything under `/bin`: a shell can't answer for itself, so its descendants are asked
+instead, which is why going to a bare `-zsh` still lands in the right place as long as
+something is running under it.
 
 ### The worklog
 

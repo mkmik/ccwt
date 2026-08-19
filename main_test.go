@@ -2986,3 +2986,62 @@ func TestPsRows(t *testing.T) {
 		t.Errorf("a worktree whose name merely starts the same = %v, want nothing", rows)
 	}
 }
+
+// `P` puts `ccwt ps` in the list's own window: what is running in each worktree
+// instead of the worktrees, walked and searched with the same keys — and a
+// process is a row like any other, so `/` finds one and the selection lands on
+// the process itself, which is what `space` then goes to the pane of. `esc`
+// puts the worktrees back.
+func TestPsViewIsTheListItself(t *testing.T) {
+	initRepo(t)
+	one := capture(t, &NewWorktreeBranchCmd{Name: "one", Path: true})
+	two := capture(t, &NewWorktreeBranchCmd{Name: "two", Path: true})
+
+	defer func(p func() ([]process, error), c func() map[int]string, s func() (int, int)) {
+		listProcesses, procCwds, termSize = p, c, s
+	}(listProcesses, procCwds, termSize)
+	listProcesses = func() ([]process, error) {
+		return []process{{100, 1, "-zsh"}, {200, 100, "claude --resume"}, {300, 1, "-zsh"}}, nil
+	}
+	procCwds = func() map[int]string { return map[int]string{100: one, 200: one, 300: two} }
+	termSize = func() (int, int) { return 100, 20 }
+
+	u := ui{ps: true} // what P does
+	screen := func(t *testing.T) string {
+		t.Helper()
+		lines, err := u.frame()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(lines, "\n")
+	}
+	if got := screen(t); !strings.Contains(got, "claude --resume") || !strings.Contains(got, "two") {
+		t.Errorf("the ps view shows:\n%s\nwant the worktrees and what is running in them", got)
+	}
+
+	// The search runs on the ps lines as it does on the table's, and what it
+	// selects is the process — which the bar then offers going to.
+	u.query, u.dir = "resume", 1
+	if !u.find(1) {
+		t.Fatalf("the pattern found nothing in:\n%s", strings.Join(u.body, "\n"))
+	}
+	if !u.sel.process() || u.sel.pid != 200 {
+		t.Errorf("the match selected %+v, want the claude process (pid 200)", u.sel)
+	}
+	if !slices.Contains(psActions(u.sel), action{" ", "go"}) {
+		t.Errorf("the bar on a process offers %v, want space:go", psActions(u.sel))
+	}
+	// The worktree the process is under is a worktree row still — space opens
+	// its workspace — and the pid is the whole of what tells the two apart.
+	if !(listRow{project: u.sel.project, path: u.sel.path}).worktree() || u.sel.worktree() {
+		t.Errorf("%+v: the process and its worktree don't tell apart", u.sel)
+	}
+
+	// esc, the second time: the worktrees are back, the ones with nothing
+	// running in them included.
+	u.ps = false
+	u.psView()
+	if got := screen(t); !strings.Contains(got, "BRANCH") || strings.Contains(got, "claude --resume") {
+		t.Errorf("after esc the list shows:\n%s\nwant the worktree table back", got)
+	}
+}
