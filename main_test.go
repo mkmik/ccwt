@@ -447,6 +447,42 @@ func TestHerdrOpenLabelsNewWorkspacesOnly(t *testing.T) {
 	}
 }
 
+// TestNewAgentRunsTheConfiguredCli: `c` is `x` plus the agent — a new worktree,
+// opened, with task_command's cli started in the pane that open just made.
+func TestNewAgentRunsTheConfiguredCli(t *testing.T) {
+	initRepo(t)
+	if err := os.MkdirAll(filepath.Dir(configPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath(), []byte("task_command = \"claude --resume\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	log := filepath.Join(dir, "calls")
+	herdr := filepath.Join(dir, "herdr")
+	// Logs its arguments, and answers `pane list` with a pane sitting in the
+	// worktree the open before it named with --path — which is the pane the
+	// agent is to be started in.
+	script := fmt.Sprintf("#!/bin/sh\necho \"$@\" >> %[1]q\n"+
+		"[ \"$1 $2\" = \"worktree open\" ] && echo \"$6\" > %[2]q\n"+
+		"[ \"$1 $2\" = \"pane list\" ] && printf '{\"result\":{\"panes\":"+
+		"[{\"pane_id\":\"p1\",\"cwd\":\"%%s\"}]}}' \"$(cat %[2]q)\"\n"+
+		"exit 0\n", log, filepath.Join(dir, "opened"))
+	if err := os.WriteFile(herdr, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_BIN_PATH", herdr)
+
+	if msg := (&ui{}).newAgent(); !strings.HasPrefix(msg, "opened ") {
+		t.Fatalf("newAgent: %s", msg)
+	}
+	if got, _ := os.ReadFile(log); !strings.Contains(string(got), "pane run p1 claude --resume") {
+		t.Errorf("herdr calls = %q, want the configured cli run in the new pane", got)
+	}
+}
+
 // TestDone: `done` is `remove .` plus closing our own workspace — the one
 // `remove` leaves alone — and only after the removal went through: a refusal
 // leaves both the worktree and the workspace where they were.
@@ -859,7 +895,7 @@ func TestStatusBarShowsHerdrActionsOnlyUnderHerdr(t *testing.T) {
 	}{{"", false}, {"1", true}} {
 		t.Setenv("HERDR_ENV", tc.env)
 		bar := statusBar(200, "", listRow{path: "some-worktree"}, "", false, false)
-		for _, key := range []string{"x:new", "space:open"} {
+		for _, key := range []string{"x:new", "c:new+agent", "space:open"} {
 			if strings.Contains(bar, key) != tc.want {
 				t.Errorf("HERDR_ENV=%q: %q in the bar = %v, want %v", tc.env, key, !tc.want, tc.want)
 			}
