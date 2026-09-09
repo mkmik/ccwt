@@ -305,6 +305,12 @@ func (c *TuiCmd) Run() error {
 				if err := act("creating…", u.newWorktree); err != nil {
 					return err
 				}
+			// `c` is `x` for when you already know you are going to run the agent
+			// there: the same new worktree, with the agent cli started in it.
+			case k == "c" && underHerdr():
+				if err := act("creating…", u.newAgent); err != nil {
+					return err
+				}
 			case k == "\x1b[A", k == "k":
 				u.move(-1)
 			case k == "\x1b[B", k == "j":
@@ -2214,7 +2220,7 @@ func actions(sel listRow, searching, global bool) []action {
 		queue = nil
 	}
 	if herdr {
-		as = append(as, action{"x", "new"})
+		as = append(as, action{"x", "new"}, action{"c", "new+agent"})
 	}
 	switch {
 	case sel.worktree():
@@ -2443,15 +2449,50 @@ func underHerdr() bool { return os.Getenv("HERDR_ENV") != "" }
 // since the tui is usually run from inside the repo and sometimes from inside a
 // worktree, and either way what "new" should do there is make a fresh one.
 func (u *ui) newWorktree() string {
+	_, msg := u.newWorktreePath()
+	return msg
+}
+
+// newWorktreePath is newWorktree for the caller that has something to run in
+// what it made, so it hands back the path as well as the message. The path is
+// "" when there is no worktree, in which case the message says why.
+func (u *ui) newWorktreePath() (string, string) {
 	root, err := u.root()
 	if err != nil {
-		return "new failed: " + err.Error()
+		return "", "new failed: " + err.Error()
 	}
 	path, _, err := (&NewWorktreeBranchCmd{ForceCreate: true}).create(root)
 	if err != nil {
+		return "", "new failed: " + err.Error()
+	}
+	return path, herdrOpen(path, filepath.Base(path))
+}
+
+// newAgent is `x` with the agent already running in it: the same new worktree,
+// with task_command's cli — `claude` unless the config says otherwise — started
+// in its pane, and no prompt, since there isn't one yet. It is the command you
+// would have typed on arriving, which is every time.
+//
+// A worktree that was made but couldn't be handed the agent is still a
+// worktree, so the open's own message stands rather than an error: `c` got as
+// far as `x` gets.
+func (u *ui) newAgent() string {
+	argv, err := taskCommand()
+	if err != nil {
 		return "new failed: " + err.Error()
 	}
-	return herdrOpen(path, filepath.Base(path))
+	path, msg := u.newWorktreePath()
+	if path == "" {
+		return msg
+	}
+	pane := herdrPane(path)
+	if pane == "" {
+		return msg
+	}
+	if out, err := exec.Command(herdrBin(), append([]string{"pane", "run", pane}, argv...)...).CombinedOutput(); err != nil {
+		return "opened, but the agent did not start: " + lastLine(out, err)
+	}
+	return msg
 }
 
 // startPending is what opening a "<new>" row does: make the worktree its prompt
