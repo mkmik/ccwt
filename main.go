@@ -283,7 +283,7 @@ func (c *RemoveCmd) remove(root string) error {
 	// is gone, so an unmerged branch used to leave the worktree removed and the
 	// branch stranded behind it. Settle it before anything is touched. A branch
 	// that doesn't exist (a worktree made by `new --switch`, say) can't strand.
-	if !c.KeepBranch && !c.Force && gitutil.BranchExists(root, branch) && !gitutil.MergedBranches(root)[branch] {
+	if !c.KeepBranch && !c.Force && gitutil.BranchExists(root, branch) && !gitutil.Merged(root, branch) {
 		return fmt.Errorf("%s is not merged: re-run with -D to delete it anyway, or --keep-branch to remove only the worktree", branch)
 	}
 
@@ -527,11 +527,10 @@ func gcCandidates(root string, active map[string]bool) ([]string, error) {
 	if err != nil {
 		return nil, gitError(root, err)
 	}
-	merged := gitutil.MergedBranches(root)
 	prefix := filepath.Join(root, ".claude", "worktrees") + string(filepath.Separator)
 	var names []string
 	for _, wt := range wts {
-		if strings.HasPrefix(wt.Path, prefix) && merged[wt.Branch] && !gitutil.Dirty(wt.Path) && !activeIn(wt.Path, active) {
+		if strings.HasPrefix(wt.Path, prefix) && wt.Branch != "" && gitutil.Merged(root, wt.Branch) && !gitutil.Dirty(wt.Path) && !activeIn(wt.Path, active) {
 			names = append(names, filepath.Base(wt.Path))
 		}
 	}
@@ -674,7 +673,7 @@ const gitScanWindow = 30 * time.Second
 var (
 	dirtyCache  cached[bool]
 	pushedCache cached[bool]
-	mergedCache cached[map[string]bool]
+	mergedCache cached[bool]
 	commitCache cached[gitutil.Commit]
 	topicCache  cached[string]
 )
@@ -724,12 +723,11 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	// two rounds — which worktrees exist, then what each one looks like — since
 	// the second can't be started until the first says what to look at.
 	var (
-		wg     sync.WaitGroup
-		roots  = make([]string, len(projects))
-		lists  = make([][]gitutil.Worktree, len(projects))
-		merged = make([]map[string]bool, len(projects))
-		errs   = make([]error, len(projects))
-		cur    string
+		wg    sync.WaitGroup
+		roots = make([]string, len(projects))
+		lists = make([][]gitutil.Worktree, len(projects))
+		errs  = make([]error, len(projects))
+		cur   string
 	)
 	// The lsof scan is the slowest single thing here (~200ms) and nothing in
 	// either git round needs it, so it gets its own WaitGroup and runs
@@ -768,20 +766,6 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 				return !strings.HasPrefix(wt.Path, claudeDir)
 			})
 		})
-		if tty {
-			// "" is "the repo we're in", which names a different repo from one
-			// working directory to the next — so the cache key is where that
-			// resolves to, not the empty string every such caller passes.
-			key := dir
-			if key == "" {
-				key, _ = os.Getwd()
-			}
-			wg.Go(func() {
-				merged[i] = mergedCache.get(key, window(gitScanWindow), func() map[string]bool {
-					return gitutil.MergedBranches(dir)
-				})
-			})
-		}
 	}
 	wg.Wait()
 	if err := errors.Join(errs...); err != nil {
@@ -791,13 +775,12 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	// One flat list of worktrees, each still knowing which project it came from.
 	type ref struct {
 		project string
-		merged  map[string]bool
 		wt      gitutil.Worktree
 	}
 	var refs []ref
 	for i, wts := range lists {
 		for _, wt := range wts {
-			refs = append(refs, ref{roots[i], merged[i], wt})
+			refs = append(refs, ref{roots[i], wt})
 		}
 	}
 
@@ -854,7 +837,9 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 				r.sortTime = wrote
 			}
 			if tty {
-				glyph, on := "✓", rf.merged[rf.wt.Branch]
+				glyph, on := "✓", rf.wt.Branch != "" && mergedCache.get(rf.wt.Path, window(gitScanWindow), func() bool {
+					return gitutil.Merged(rf.project, rf.wt.Branch)
+				})
 				if !on && pushedCache.get(rf.wt.Path, window(gitScanWindow), func() bool {
 					return gitutil.Pushed(rf.wt.Path)
 				}) {
