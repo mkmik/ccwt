@@ -73,7 +73,8 @@ Claude Code session is currently running in each, and what each one is about:
 
 Every row leads with two glyphs. The first is a `*` on the worktree you're currently in.
 The second says whether the worktree can go: `✓` means its branch is already merged into
-`main` (or `master`), so it's safe to `ccwt remove`; `☐` means it isn't merged but every
+`main` (or `master`), so it's safe to `ccwt remove` — a [squash, a rebase or a
+cherry-pick](#squash-merges) counts too; `☐` means it isn't merged but every
 commit is already on its upstream, so nothing here is waiting on you — it's waiting on a
 review or on CI; `*` means it has uncommitted changes, which isn't safe to remove whatever
 git makes of the branch or the remote; `✳` beats them all and means an
@@ -104,6 +105,17 @@ since the last word is usually what tells them apart, while a session summary si
 * * dreamy-foraging-hickey   worktree-dreamy-…-hickey 2h   yes     ✳ Goal was a widget on…
   ✓ calm-baking-otter        worktree-calm-b…-otter   1d   no      ⎇ Fix the flux ca… (#41)
 ```
+
+### Squash merges
+
+Squash, rebase and cherry-pick all rewrite commit SHAs, so the branch a PR landed from is
+no ancestor of `main` afterwards — which is how most projects merge, and it leaves `ccwt`
+refusing to remove worktrees whose work is long since shipped.
+
+If the `git-tree-merged` plugin is on your `PATH`, `ccwt` asks
+it instead: it compares tree hashes rather than SHAs, so a branch whose content is on
+`main` byte for byte reads as merged however the history was rewritten. Without it `ccwt`
+falls back to plain ancestry, which errs the safe way — a missed `✓`, never a wrong one.
 
 ### What's running in them
 

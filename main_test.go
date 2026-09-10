@@ -189,7 +189,7 @@ func TestListMarksMerged(t *testing.T) {
 	initRepo(t)
 	capture(t, &NewWorktreeBranchCmd{Name: "merged"})
 	ahead := capture(t, &NewWorktreeBranchCmd{Name: "ahead", Path: true})
-	git(t, "-C", ahead, "commit", "--allow-empty", "-m", "ahead")
+	commitWork(t, ahead, "ahead")
 
 	defer func(orig func() bool) { stdoutIsTTY = orig }(stdoutIsTTY)
 	for _, tty := range []bool{true, false} {
@@ -212,14 +212,14 @@ func TestListMarksWaitingForReview(t *testing.T) {
 	git(t, "remote", "add", "origin", repo)
 	for _, name := range []string{"pushed", "unpushed"} {
 		path := capture(t, &NewWorktreeBranchCmd{Name: name, Path: true})
-		git(t, "-C", path, "commit", "--allow-empty", "-m", name)
+		commitWork(t, path, name)
 		branch := "worktree-" + name
 		// The branch as pushed, then a commit on top of it for "unpushed".
 		git(t, "update-ref", "refs/remotes/origin/"+branch, "refs/heads/"+branch)
 		git(t, "config", "branch."+branch+".remote", "origin")
 		git(t, "config", "branch."+branch+".merge", "refs/heads/"+branch)
 		if name == "unpushed" {
-			git(t, "-C", path, "commit", "--allow-empty", "-m", "more")
+			commitWork(t, path, "more")
 		}
 	}
 
@@ -268,7 +268,7 @@ func TestListRowsStayPaired(t *testing.T) {
 func TestRemoveUnmerged(t *testing.T) {
 	initRepo(t)
 	path := capture(t, &NewWorktreeBranchCmd{Name: "ahead", Path: true})
-	git(t, "-C", path, "commit", "--allow-empty", "-m", "ahead")
+	commitWork(t, path, "ahead")
 
 	if err := (&RemoveCmd{Name: "ahead"}).Run(); err == nil {
 		t.Error("removing an unmerged worktree succeeded, want refusal")
@@ -313,6 +313,31 @@ func TestRemoveSquashMerged(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("worktree %s still exists (%v)", path, err)
+	}
+	if gitutil.BranchExists("", "worktree-squashed") {
+		t.Error("worktree removed but the branch was stranded")
+	}
+}
+
+// TestRemoveSquashMergedNotAncestor: the real shape of a squash-merged PR —
+// main carries a new commit with the branch's content, the branch still
+// carries its own commits, so its tip is no ancestor of anything. Ancestry
+// calls that unmerged and strands the branch; `git tree-merged` sees the
+// identical tree and lets it go.
+func TestRemoveSquashMergedNotAncestor(t *testing.T) {
+	if _, err := exec.LookPath("git-tree-merged"); err != nil {
+		t.Skip("git-tree-merged not installed")
+	}
+	initRepo(t)
+	path := capture(t, &NewWorktreeBranchCmd{Name: "squashed", Path: true})
+	commitWork(t, path, "work")
+
+	// The PR squash-merged: same content on main, under a commit of its own.
+	git(t, "merge", "--squash", "worktree-squashed")
+	git(t, "commit", "-m", "squashed work (#1)")
+
+	if err := (&RemoveCmd{Name: "squashed"}).Run(); err != nil {
+		t.Fatalf("removing a squash-merged worktree: %v", err)
 	}
 	if gitutil.BranchExists("", "worktree-squashed") {
 		t.Error("worktree removed but the branch was stranded")
@@ -625,7 +650,7 @@ func TestGc(t *testing.T) {
 	merged := capture(t, &NewWorktreeBranchCmd{Name: "merged", Path: true})
 	busy := capture(t, &NewWorktreeBranchCmd{Name: "busy", Path: true})
 	ahead := capture(t, &NewWorktreeBranchCmd{Name: "ahead", Path: true})
-	git(t, "-C", ahead, "commit", "--allow-empty", "-m", "ahead")
+	commitWork(t, ahead, "ahead")
 
 	root, err := gitutil.RepoRoot("", true)
 	if err != nil {
@@ -740,6 +765,19 @@ func initRepo(t *testing.T) string {
 	git(t, "config", "core.hooksPath", "/dev/null") // ignore the user's global hooks
 	git(t, "commit", "--allow-empty", "-m", "init")
 	return repo
+}
+
+// commitWork commits a file holding msg in the worktree at path. The content
+// is the point: an empty commit leaves the tree identical to main's, and a
+// branch whose content is already on main reads — correctly — as merged, so
+// "this branch has work of its own" has to actually change something.
+func commitWork(t *testing.T, path, msg string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(path, "f"), []byte(msg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git(t, "-C", path, "add", "f")
+	git(t, "-C", path, "commit", "-m", msg)
 }
 
 func git(t *testing.T, args ...string) {
@@ -2743,7 +2781,7 @@ func TestMenuOnlyGc(t *testing.T) {
 	initRepo(t)
 	merged := capture(t, &NewWorktreeBranchCmd{Name: "merged", Path: true})
 	ahead := capture(t, &NewWorktreeBranchCmd{Name: "ahead", Path: true})
-	git(t, "-C", ahead, "commit", "--allow-empty", "-m", "ahead")
+	commitWork(t, ahead, "ahead")
 
 	if bar := statusBar(200, "", listRow{}, "", false, false); strings.Contains(bar, "G:gc") {
 		t.Errorf("the bar lists gc: %q", bar)

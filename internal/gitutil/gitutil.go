@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -255,33 +256,61 @@ func LastCommit(repoPath string) (Commit, error) {
 	return Commit{Time: time.Unix(sec, 0), Subject: subject}, nil
 }
 
-// MergedBranches returns the set of local branches already contained in the
-// repo's main branch ("main", or "master" when there is no "main") — local or
-// remote-tracking, whichever contains them. A branch merged into origin/main
-// is safe to delete even when nobody has pulled main yet, and a local-only
-// merge is safe even when it hasn't been pushed, so take the union of the two.
-// A git failure yields an empty set: this only decorates a listing.
-func MergedBranches(dir string) map[string]bool {
-	merged := map[string]bool{}
+// mainRefs names the refs a branch could have landed on: the repo's main
+// branch ("main", or "master" when there is no "main"), local and
+// remote-tracking, whichever of the two exist. A branch merged into
+// origin/main is safe to delete even when nobody has pulled main yet, and a
+// local-only merge is safe even when it hasn't been pushed, so both count.
+func mainRefs(dir string) []string {
 	for _, base := range []string{"main", "master"} {
-		var found bool
+		var refs []string
 		for _, ref := range []string{base, "origin/" + base} {
-			out, err := git(dir, "branch", "--merged", ref, "--format=%(refname:short)").Output()
-			if err != nil {
-				continue // ref doesn't resolve: no remote, or the other base name
-			}
-			found = true
-			for b := range strings.SplitSeq(string(out), "\n") {
-				if b != "" {
-					merged[b] = true
-				}
+			if git(dir, "rev-parse", "--verify", "--quiet", ref).Run() == nil {
+				refs = append(refs, ref)
 			}
 		}
-		if found {
-			break
+		if len(refs) > 0 {
+			return refs
 		}
 	}
-	return merged
+	return nil
+}
+
+// haveTreeMerged reports whether the git-tree-merged plugin is installed. An
+// unknown git subcommand exits 1, which is also its "not merged", so this is
+// asked up front rather than read off a failure. PATH doesn't move under us,
+// so it is asked once.
+var haveTreeMerged = sync.OnceValue(func() bool {
+	_, err := exec.LookPath("git-tree-merged")
+	return err == nil
+})
+
+// Merged reports whether branch's work is already on the repo's main branch,
+// and so is safe to delete. A git failure reads as not merged: the answer
+// gates a deletion, so the unsure side of it has to be the one that keeps
+// things.
+//
+// Squash, rebase and cherry-pick all rewrite commit SHAs, so ancestry alone
+// misses the most common way a branch actually lands. `git tree-merged`
+// compares tree hashes instead — an equal tree means every file is
+// byte-identical, whatever the history looks like — and catches those.
+// Ancestry is still asked first: it is the cheap answer, and the tree walk is
+// only needed once it says no. Without the plugin we stop there, which errs
+// the safe way: a missed "merged", never a false one.
+//
+// ponytail: one `git log` walk of main per unmerged branch, unbounded. Fine at
+// worktree-sized branch counts behind the tui's cache window; capping the walk
+// is the upgrade if a huge repo ever makes it stutter.
+func Merged(dir, branch string) bool {
+	for _, ref := range mainRefs(dir) {
+		if git(dir, "merge-base", "--is-ancestor", branch, ref).Run() == nil {
+			return true
+		}
+		if haveTreeMerged() && git(dir, "tree-merged", branch, "--onto", ref, "-q").Run() == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // BranchExists reports whether refs/heads/<branch> resolves.
