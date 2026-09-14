@@ -393,6 +393,16 @@ func (c *TuiCmd) Run() error {
 				if err := act("collecting…", u.gc); err != nil {
 					return err
 				}
+			// The project's directory on the clipboard, to paste into a shell
+			// that isn't this one. No key at all: the menu is the whole of it.
+			case k == copyDirKey:
+				root, err := u.root()
+				if err != nil {
+					u.msg = "copy: " + err.Error()
+					break
+				}
+				copyClip(root)
+				u.msg = "copied " + root
 			// Not in the ps view: every row there carries a worktree, the
 			// processes included, and what that list is for is going to what's
 			// running — not tearing down the tree it's running in.
@@ -1441,14 +1451,14 @@ func logFits(rows int) int { return max(rows-3, 1) }
 func menuPane(menu []action, sel, cols, rows int) (lines []string, first int) {
 	inner := 0
 	for _, a := range menu {
-		inner = max(inner, len([]rune(a.name()+":"+a.label))+2)
+		inner = max(inner, len([]rune(a.entry()))+2)
 	}
 	inner = min(inner, max(cols-2, 1))
 	row := paneRow("", inner)
 
 	var body []string
 	for i, a := range menu {
-		l := row(" " + a.name() + ":" + a.label)
+		l := row(" " + a.entry())
 		if i == sel {
 			l = band(l)
 		}
@@ -2162,18 +2172,38 @@ func (a action) name() string {
 		return "↵"
 	case "\x1b":
 		return "esc"
+	case copyDirKey:
+		return "" // nothing to press: the menu is the only way to it
 	}
 	return a.key
 }
 
-// menuActions is what the hamburger lists: the bar's keys, plus the two that
+// entry is how the menu lists the action: the key and what it does, or — for
+// one with no key — what it does, alone.
+func (a action) entry() string {
+	if a.name() == "" {
+		return a.label
+	}
+	return a.name() + ":" + a.label
+}
+
+// copyDirKey stands in for the key the copy-dir action hasn't got: a string no
+// keystroke produces, so the menu is the only thing that can send it, while the
+// entry still works like every other one — pick it and its key goes through the
+// switch, which is where the copying happens.
+const copyDirKey = "\x00copy-dir"
+
+// menuActions is what the hamburger lists: the bar's keys, plus the three that
 // belong in a menu and nowhere else. `G` collects every worktree that's done
 // with at once — rare, and too much of a mouthful for a bar that has to say
 // what every other key does — so it's listed where there's room for it, and `P`
 // (the ps view) is the way in for a hand that's on the mouse, the view's own bar
-// being the way back out.
+// being the way back out. "copy dir" puts the project's path on the clipboard
+// and has no key at all — a path is fetched to paste somewhere else, which is
+// already a hand off the keyboard.
 func menuActions(sel listRow, searching, global bool) []action {
-	return append(actions(sel, searching, global), action{"G", "gc"}, action{"P", "ps"})
+	return append(actions(sel, searching, global), action{"G", "gc"}, action{"P", "ps"},
+		action{copyDirKey, "copy dir"})
 }
 
 // psDepth is how far under each shell the ps view draws, `ccwt ps`'s own
