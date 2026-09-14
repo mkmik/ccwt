@@ -2841,6 +2841,23 @@ func TestMenuOnlyCopyDir(t *testing.T) {
 		t.Errorf("picking it = %q, want the copy-dir key", got)
 	}
 
+	// And picking it with the mouse, which is what a menu with no key is for.
+	// A click is two reports, and the press half comes back from the drag as ""
+	// — which the menu must sit through rather than shut on, or the release
+	// that carries the pick arrives with no menu left to pick from.
+	u = ui{menu: menu, menuSel: 0}
+	if _, err := u.frame(); err != nil { // sets menuFirst, which the click is measured against
+		t.Fatal(err)
+	}
+	row := u.menuFirst + len(menu) - 1 // the last entry: copy dir
+	press := fmt.Sprintf("\x1b[<0;3;%dM", row)
+	if got, _ := u.key(press); got != "" || u.menu == nil {
+		t.Errorf("the press gave %q and left menu %v, want nothing and the menu still up", got, u.menu != nil)
+	}
+	if got, _ := u.key(fmt.Sprintf("\x1b[<0;3;%dm", row)); got != copyDirKey {
+		t.Errorf("clicking it = %q, want the copy-dir key", got)
+	}
+
 	// What the key would copy: the selected row's project, or — with nothing
 	// selected, outside -g — the repo we're standing in.
 	repo, _ = filepath.EvalSymlinks(repo) // macOS puts the temp dir under /private
