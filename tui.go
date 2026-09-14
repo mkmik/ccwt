@@ -203,19 +203,10 @@ func (c *TuiCmd) Run() error {
 			u.checkUpgrade()
 		case k := <-keys:
 			u.nav = time.Now() // hold the list still while it's being walked
-			// The mouse goes through the drag first: a press that then moves is
-			// a text selection rather than a click, and what comes back is the
-			// keystroke the rest of the loop should act on.
-			k, copied := u.drag(k)
+			k, copied := u.key(k)
 			if copied != "" {
 				copyClip(copied)
 				u.msg = fmt.Sprintf("copied %d characters", utf8.RuneCountInString(copied))
-			}
-			// The menu gets first refusal, and what it hands back is a key like
-			// any other — the one it was picked for — which the switch below
-			// then runs. "" is a keystroke it dealt with itself.
-			if u.menu != nil {
-				k = u.menuPick(k)
 			}
 			switch {
 			case k == "": // the menu dealt with it itself
@@ -402,7 +393,7 @@ func (c *TuiCmd) Run() error {
 					break
 				}
 				copyClip(root)
-				u.msg = "copied " + root
+				u.msg = "copied to clipboard: " + root
 			// Not in the ps view: every row there carries a worktree, the
 			// processes included, and what that list is for is going to what's
 			// running — not tearing down the tree it's running in.
@@ -1070,6 +1061,22 @@ func (u *ui) logClick(i int) bool {
 		u.clicked = time.Time{} // a third click starts a fresh pair
 	}
 	return double
+}
+
+// key is the keystroke the rest of the loop acts on, and the text a drag took
+// on the way: the mouse goes through the drag first — a press that then moves
+// is a text selection rather than a click — and then, while the menu is up,
+// through the menu, which hands back the key its picked entry stands for.
+//
+// A drag that swallowed the keystroke never reaches the menu. A mouse press is
+// half a click, and the menu must not read the "" that stands for it as a key
+// it has no entry for and shut on it: the pick is in the release that follows.
+func (u *ui) key(k string) (string, string) {
+	k, copied := u.drag(k)
+	if k != "" && u.menu != nil {
+		k = u.menuPick(k)
+	}
+	return k, copied
 }
 
 // menuPick is the open menu's turn at a keystroke: it walks and closes on its
