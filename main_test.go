@@ -2806,6 +2806,53 @@ func TestMenuOnlyGc(t *testing.T) {
 	}
 }
 
+// "copy dir" is the one action with no key: the menu lists it by name alone,
+// picking it sends a string no keystroke can produce, and what it copies is the
+// project the selection is in — the repo the tui is running in when that's
+// nothing.
+func TestMenuOnlyCopyDir(t *testing.T) {
+	repo := initRepo(t)
+	defer func(old func() (int, int)) { termSize = old }(termSize)
+	termSize = func() (int, int) { return 120, 40 }
+
+	if bar := statusBar(200, "", listRow{}, "", false, false); strings.Contains(bar, "copy dir") {
+		t.Errorf("the bar lists copy dir: %q", bar)
+	}
+	menu := menuActions(listRow{}, false, false)
+	if !slices.Contains(menu, action{copyDirKey, "copy dir"}) {
+		t.Errorf("the menu doesn't offer copy dir: %v", menu)
+	}
+	for _, a := range menu {
+		if len([]rune(a.key)) == 1 && a.key == copyDirKey {
+			t.Errorf("copy dir has a key after all: %q", a.key)
+		}
+	}
+
+	u := ui{menu: menu, menuSel: len(menu) - 1}
+	lines, err := u.frame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	screen := strings.Join(lines, "\n")
+	if !strings.Contains(screen, " copy dir ") || strings.Contains(screen, ":copy dir") {
+		t.Errorf("the entry isn't listed by name alone:\n%s", screen)
+	}
+	if got := u.menuPick("\r"); got != copyDirKey {
+		t.Errorf("picking it = %q, want the copy-dir key", got)
+	}
+
+	// What the key would copy: the selected row's project, or — with nothing
+	// selected, outside -g — the repo we're standing in.
+	repo, _ = filepath.EvalSymlinks(repo) // macOS puts the temp dir under /private
+	if got, err := (&ui{}).root(); err != nil || got != repo {
+		t.Errorf("root() = (%q, %v), want the repo %q", got, err, repo)
+	}
+	sel := listRow{project: "/some/project", path: "/some/project/.claude/worktrees/alpha"}
+	if got, err := (&ui{sel: sel}).root(); err != nil || got != sel.project {
+		t.Errorf("root() = (%q, %v), want the selected row's project", got, err)
+	}
+}
+
 // The worklog's rows select and open like the list's, and what they open is the
 // only account of the work left anywhere: what the log recorded, and the
 // session that produced it — which survives the removal because Claude Code
