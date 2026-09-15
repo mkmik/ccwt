@@ -1586,7 +1586,7 @@ func TestListFitsTerminalWidth(t *testing.T) {
 		}
 		// Every column bottoms out at minCol, so a terminal narrower than that
 		// floor gets the floor rather than an ever-thinner table.
-		floor := 3*minCol + len("AGE") + len("CLAUDE") + 2*(len(allColumns())-1)
+		floor := 3*minCol + len("AGE") + len("AGENT") + 2*(len(allColumns())-1)
 		for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
 			if got := len([]rune(line)); got > max(width, floor) {
 				t.Errorf("width=%d: line is %d columns wide: %q", width, got, line)
@@ -1721,10 +1721,21 @@ func TestConfigColumns(t *testing.T) {
 	if i, j := strings.Index(head, "TOPIC"), strings.Index(head, "NAME"); i != 0 || j < i {
 		t.Errorf("header = %q, want TOPIC then NAME", head)
 	}
-	for _, gone := range []string{"BRANCH", "CLAUDE", "worktree-one"} {
+	for _, gone := range []string{"BRANCH", "AGENT", "worktree-one"} {
 		if strings.Contains(out, gone) {
 			t.Errorf("%q is in a table that asked for topic and name only:\n%s", gone, out)
 		}
+	}
+
+	// The column was called CLAUDE until v0.112, so a config written before the
+	// rename still names it that.
+	writeConfig("columns = [\"claude\"]\n")
+	buf.Reset()
+	if _, _, err := renderList(&buf, false, 0, nil, nil, true, ""); err != nil {
+		t.Fatalf("columns = [\"claude\"]: %v", err)
+	}
+	if head := strings.Split(buf.String(), "\n")[0]; !strings.HasPrefix(head, "AGENT") {
+		t.Errorf("header = %q, want the AGENT column", head)
 	}
 
 	writeConfig("columns = [\"nmae\"]\n")

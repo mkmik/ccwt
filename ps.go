@@ -54,7 +54,7 @@ var listProcesses = func() ([]process, error) {
 }
 
 // procCwds is the working directory of every process we can see, by pid — what
-// says which worktree a process is running in. The same lsof the CLAUDE column
+// says which worktree a process is running in. The same lsof the AGENT column
 // asks (claudeCwds), without its command-name prefilter, since here every
 // process counts, and restricted to our own uid instead, which is what keeps
 // it from walking the whole machine.
