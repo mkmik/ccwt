@@ -286,12 +286,22 @@ func (c *TuiCmd) Run() error {
 				if err := act("pulling…", func() string { return gitPull(u.gitDir()) }); err != nil {
 					return err
 				}
-			// `g` is the worktree's review, in the browser — the branch is here,
+			// `m` is the worktree's review, in the browser — the branch is here,
 			// the review is over there.
-			case k == "g" && u.sel.worktree():
+			case k == "m" && u.sel.worktree():
 				if err := act("looking for the review…", func() string { return openMR(u.sel.path) }); err != nil {
 					return err
 				}
+			// `g` is the history, in a pane over the list: `git ll` in whichever
+			// worktree the selected row is in — a process row's included — and in
+			// the repo itself when the row isn't in one, as a "<new>" row isn't:
+			// the path it still carries is the removed worktree's.
+			case k == "g":
+				dir := u.gitDir()
+				if u.sel.worktree() || u.sel.process() {
+					dir = u.sel.path
+				}
+				u.page, u.msg = gitPage(dir)
 			case k == "x" && underHerdr():
 				if err := act("creating…", u.newWorktree); err != nil {
 					return err
@@ -505,8 +515,8 @@ type ui struct {
 	logFirst       int
 	logShown       int
 
-	// The page open over the worklog: one removal in full, the session that was
-	// run in it included. nil when there is none.
+	// The page open over the list: one removal in full, the session that was
+	// run in it included, or the history `g` shows. nil when there is none.
 	page *page
 
 	// The hamburger's menu: the actions it was opened on, which of them is
@@ -536,7 +546,7 @@ type ui struct {
 // long enough for several ticks, and rows sliding about behind the box you're
 // typing into is nothing but distraction.
 func (u *ui) stale() {
-	if u.detail == nil && !u.entry.open && !u.logOpen && u.menu == nil {
+	if u.detail == nil && !u.entry.open && !u.logOpen && u.menu == nil && u.page == nil {
 		u.body = nil
 	}
 }
@@ -1478,9 +1488,9 @@ func menuPane(menu []action, sel, cols, rows int) (lines []string, first int) {
 }
 
 // page is a read of something far longer than a pane: a title, the text as it
-// was built, and a window onto it. The worklog's is the one there is — what was
-// recorded about a removed worktree, and then the whole Claude Code session
-// that was run in it.
+// was built, and a window onto it. The worklog's is one — what was recorded
+// about a removed worktree, and then the whole Claude Code session that was run
+// in it — and `git ll`, which `g` shows, is the other.
 //
 // The text is kept as it was built and wrapped again whenever the terminal
 // changes width, so that top counts lines of the screen rather than lines of
@@ -2245,7 +2255,7 @@ func psActions(sel listRow) []action {
 // then, and queues a prompt the rest of the time.
 func actions(sel listRow, searching, global bool) []action {
 	herdr := underHerdr()
-	as := []action{{"q", "quit"}, {"p", "pull"}, {"/", "search"}, {"l", "log"}}
+	as := []action{{"q", "quit"}, {"p", "pull"}, {"g", "git"}, {"/", "search"}, {"l", "log"}}
 	// `n` queues behind whatever is selected, or as a "<new>" row of its own when
 	// that's nothing — which under -g takes a project selected to say whose, so
 	// there it's the one state the key has nothing to do in.
@@ -2265,7 +2275,7 @@ func actions(sel listRow, searching, global bool) []action {
 			as = append(as, action{" ", "open"})
 		}
 		as = append(as, queue...)
-		as = append(as, action{"g", "vcs"}, action{"d", "details"}, action{"r", "remove"})
+		as = append(as, action{"m", "vcs"}, action{"d", "details"}, action{"r", "remove"})
 	case sel.pending(): // a queued prompt whose worktree space would make
 		if herdr {
 			as = append(as, action{" ", "start"})
@@ -2378,7 +2388,36 @@ func gitPull(dir string) string {
 	return "pull: " + strings.TrimSpace(lines[0])
 }
 
-// forges is how `g` asks a review host about the branch in front of it: the
+// gitPage is what `g` shows: `git ll` in dir, as a page to scroll over the
+// list. The alias is the user's own — whatever `git ll` prints in their shell
+// is what the pane shows — so the history comes out in the shape they already
+// read it in. It returns the page, or the one line the bar has room for when
+// there is no page to show.
+//
+// ponytail: `ll` hardcoded, so a git with no such alias gets git's own
+// complaint in the bar. Put the argv in the config file, next to
+// `task_command`, once there's a second command worth a pane of its own.
+func gitPage(dir string) (*page, string) {
+	if dir == "" {
+		return nil, "no worktree selected"
+	}
+	// The alias is likely a shell pipeline ending in a pager, which copies its
+	// input through like `cat` when stdout is a pipe rather than a terminal.
+	cmd := exec.Command("git", "ll")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	if err != nil {
+		return nil, "git ll: " + cmp.Or(strings.TrimSpace(lines[len(lines)-1]), err.Error())
+	}
+	name := dir
+	if abs, err := filepath.Abs(dir); err == nil {
+		name = abs // "." is the repo the tui was started in
+	}
+	return &page{title: "git ll — " + filepath.Base(name), text: lines}, ""
+}
+
+// forges is how `m` asks a review host about the branch in front of it: the
 // arguments that make its cli print the url of that branch's review and
 // nothing else, and the host's own word for one, since the bar says it back.
 //
@@ -2393,7 +2432,7 @@ var forges = map[string]struct {
 	"glab": {"merge request", []string{"mr", "view", "-F", "json", "--jq", ".web_url"}},
 }
 
-// openMR is what `g` does: find the review of the branch checked out in dir —
+// openMR is what `m` does: find the review of the branch checked out in dir —
 // a pull request or a merge request, depending on where the remote is — and
 // hand its url to the desktop's browser.
 //
