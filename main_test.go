@@ -2611,6 +2611,59 @@ func TestWindowNamesOneStretchPerDuration(t *testing.T) {
 }
 
 // capture runs cmd with stdout redirected and returns what it printed.
+// .worktreeinclude names the gitignored files a new worktree should start
+// with, but the patterns alone aren't the selector: what's copied is their
+// intersection with what git actually ignores, so a pattern can't drag a
+// tracked file or somebody's stray scratch file into the worktree.
+func TestNewCopiesWorktreeInclude(t *testing.T) {
+	repo := initRepo(t)
+	write := func(rel, content string, mode os.FileMode) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(repo, rel)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, rel), []byte(content), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(".gitignore", ".env\nsecrets/\n", 0o644)
+	write(".worktreeinclude", ".env\nsecrets/**\n*.md\nmissing.env\n", 0o644)
+	write(".env", "TOKEN=1", 0o600)     // ignored + matched: copied, and still 0600
+	write("secrets/s.json", "S", 0o644) // ... from inside a wholly ignored dir, too
+	write("notes.md", "scratch", 0o644) // matched but not ignored: left behind
+	write("README.md", "doc", 0o644)    // matched but tracked: left behind
+	git(t, "-C", repo, "add", "README.md", ".gitignore")
+	git(t, "-C", repo, "commit", "-m", "readme")
+
+	wt := capture(t, &NewWorktreeBranchCmd{Name: "inc", Path: true})
+	for _, tc := range []struct {
+		rel  string
+		want string // "" means the file must not be there
+	}{
+		{".env", "TOKEN=1"},
+		{"secrets/s.json", "S"},
+		{"notes.md", ""},
+		{"README.md", "doc"}, // present because git checked it out, not copied
+	} {
+		got, err := os.ReadFile(filepath.Join(wt, tc.rel))
+		switch {
+		case tc.want == "" && err == nil:
+			t.Errorf("%s was copied into the worktree, want absent", tc.rel)
+		case tc.want != "" && err != nil:
+			t.Errorf("%s: %v", tc.rel, err)
+		case tc.want != "" && string(got) != tc.want:
+			t.Errorf("%s = %q, want %q", tc.rel, got, tc.want)
+		}
+	}
+	fi, err := os.Stat(filepath.Join(wt, ".env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode().Perm(); got != 0o600 {
+		t.Errorf(".env mode = %v, want 0600", got)
+	}
+}
+
 func capture(t *testing.T, cmd interface{ Run() error }) string {
 	t.Helper()
 	r, w, err := os.Pipe()

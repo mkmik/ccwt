@@ -386,3 +386,78 @@ func ClaudeWorktreeRepoRoot(path string) (string, bool) {
 	}
 	return "", false
 }
+
+// IncludeFile is the .gitignore-syntax file at the repository root naming the
+// gitignored files — .env and friends — that every new worktree should start
+// with. The convention is Claude Code's, which reads the same file when it
+// creates a worktree; ccwt honours it so worktrees from either side match.
+const IncludeFile = ".worktreeinclude"
+
+// CopyInclude copies the files root's .worktreeinclude asks for into the
+// freshly-created worktree at path. What gets copied is the intersection of
+// "matches a pattern in the file" and "git ignores it": tracked files are in
+// the checkout already, and an untracked file nobody ignored is a stray
+// scratch file rather than the local configuration this is for. No
+// .worktreeinclude — the common case — is a no-op.
+func CopyInclude(root, path string) error {
+	inc := filepath.Join(root, IncludeFile)
+	if _, err := os.Stat(inc); err != nil {
+		return nil
+	}
+	// Two ls-files runs, not one: git unions the exclude sources it is handed,
+	// so --exclude-standard alongside --exclude-from would select every
+	// gitignored file rather than only the asked-for ones.
+	ignored, err := lsIgnored(root, "--exclude-standard")
+	if err != nil {
+		return err
+	}
+	wanted, err := lsIgnored(root, "--exclude-from="+inc)
+	if err != nil {
+		return err
+	}
+	ignoredSet := make(map[string]bool, len(ignored))
+	for _, rel := range ignored {
+		ignoredSet[rel] = true
+	}
+	for _, rel := range wanted {
+		if !ignoredSet[rel] {
+			continue
+		}
+		if err := copyFile(filepath.Join(root, rel), filepath.Join(path, rel)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// lsIgnored lists the untracked files of the repo at dir matched by the single
+// --exclude-* source in exclude, as paths relative to dir.
+func lsIgnored(dir, exclude string) ([]string, error) {
+	out, err := git(dir, "ls-files", "-z", "--others", "--ignored", exclude).Output()
+	if err != nil {
+		return nil, fmt.Errorf("git ls-files %s: %w", exclude, err)
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00"), nil
+}
+
+// copyFile copies src to dst, creating dst's parent directories. The source
+// mode carries over, so a 0600 credentials file doesn't land in the worktree
+// world-readable.
+// ponytail: whole file in memory — these are .env-sized by construction.
+func copyFile(src, dst string) error {
+	b, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	fi, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(dst, b, fi.Mode().Perm())
+}

@@ -169,6 +169,12 @@ func (c *NewWorktreeBranchCmd) create(root string) (string, string, error) {
 		if addErr != nil {
 			return "", "", addErr
 		}
+		// A copy failure isn't fatal: the worktree exists and is usable, and
+		// failing here would strand the caller outside a directory that is
+		// already on disk. Say so on stderr and carry on.
+		if err := gitutil.CopyInclude(root, worktreePath); err != nil {
+			fmt.Fprintf(os.Stderr, "ccwt: %s: %v\n", gitutil.IncludeFile, err)
+		}
 	default:
 		return "", "", statErr
 	}

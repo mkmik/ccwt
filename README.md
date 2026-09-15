@@ -60,6 +60,24 @@ ccwt new mywt --switch foobar     # ... in a worktree of your own name
 ccwt new --path                   # print the absolute path instead of the name
 ```
 
+### Carrying `.env` and friends over
+
+A worktree is a fresh checkout, so the gitignored files your build needs — `.env`,
+local credentials, editor settings — aren't in it. List them in a `.worktreeinclude`
+file at the repository root and `ccwt new` copies them into every worktree it creates:
+
+```
+.env
+.env.local
+config/secrets.json
+```
+
+The syntax is `.gitignore`'s. Only files that *both* match a pattern and are ignored by
+git are copied, so a broad pattern can't duplicate a tracked file or drag in a stray
+scratch file — and file modes carry over, so a `0600` secret stays `0600`. This is the
+same file [Claude Code reads](https://code.claude.com/docs/en/worktrees) when it creates
+a worktree, so either tool gives you the same result.
+
 ## Listing worktrees
 
 `ccwt list` renders a table of the repo's worktrees with their branch, age, whether a
