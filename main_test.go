@@ -3004,6 +3004,51 @@ func TestWorklogPageShowsTheRemovedWorktreesSession(t *testing.T) {
 	}
 }
 
+// `g` is the history over the list: `git ll` as the user's own alias prints it,
+// in a page that scrolls like the worklog's. A git with no such alias has no
+// page to show, and says so in the one line the bar has instead.
+func TestGitPageShowsWhatTheAliasPrints(t *testing.T) {
+	repo := initRepo(t)
+	// The alias is the user's, so the test brings its own — and its own config
+	// files, so that the machine the test runs on can neither supply the alias
+	// nor take it away.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+	git(t, "config", "alias.ll", "log --format=%s")
+	git(t, "commit", "--allow-empty", "-m", "teach the widget to fly")
+
+	defer func(old func() (int, int)) { termSize = old }(termSize)
+	termSize = func() (int, int) { return 100, 20 }
+
+	var u ui
+	u.page, u.msg = gitPage(".") // what `g` does outside -g
+	if u.page == nil {
+		t.Fatalf("gitPage(\".\") opened no page: %q", u.msg)
+	}
+	lines, err := u.frame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := strings.Join(lines, "\n")
+	for _, want := range []string{"git ll — " + filepath.Base(repo), "teach the widget to fly", "esc:back"} {
+		if !strings.Contains(frame, want) {
+			t.Errorf("the git page doesn't show %q:\n%s", want, frame)
+		}
+	}
+
+	// Without the alias there is nothing to show, and git's own complaint is
+	// what the bar says — a page of one error line would be a worse way to put it.
+	git(t, "config", "--unset", "alias.ll")
+	if page, msg := gitPage("."); page != nil || !strings.Contains(msg, "git ll: ") {
+		t.Errorf("gitPage without the alias = %v, %q, want git's complaint and no page", page, msg)
+	}
+	// Under -g with nothing selected there is no repo to ask, as with the other
+	// whole-repo keys.
+	if page, msg := gitPage(""); page != nil || msg != "no worktree selected" {
+		t.Errorf("gitPage(\"\") = %v, %q, want \"no worktree selected\"", page, msg)
+	}
+}
+
 // TestNavFuzzy covers the ranking `ccwt nav` navigates by: the pattern matches
 // as a subsequence, case ignored, and of everything it matches the tightest
 // run wins, the earlier one breaking a tie. Spelled out in one piece it must
