@@ -1,11 +1,19 @@
 # ccwt
 
-A small command-line helper for managing [Claude Code](https://claude.com/claude-code) git worktrees.
+A small command-line helper for managing coding-agent git worktrees.
 
-Claude Code can run agents in isolated git worktrees under `.claude/worktrees/<name>`.
-`ccwt` lets you create, list, jump between, and tear down those same worktrees from
-your own shell — using the same layout and the same adjective-verb-noun naming scheme
-that Claude Code uses, so the two stay interoperable.
+An agent works best in a worktree of its own, one per task, under
+`<repo-root>/.claude/worktrees/<name>`. `ccwt` lets you create, list, jump between, and
+tear down those worktrees from your own shell, with a table saying what each one is about
+and whether something is running in it.
+
+It started out as a [Claude Code](https://claude.com/claude-code) helper, and Claude Code
+is still hardcoded in a handful of places: the `.claude/worktrees/` layout and the
+adjective-verb-noun naming scheme (which is what keeps `ccwt` and `claude --worktree`
+interoperable), the `AGENT` column, which looks for running Claude Code processes, and
+`TOPIC`, the freshness sort and the worklog's session page, which all read Claude Code
+transcripts. The rest — the worktrees, the table, the tui, the queue, the `✳` marker —
+doesn't care which agent you run, and `task_command` is where you say which one that is.
 
 ## Install
 
@@ -37,9 +45,9 @@ before, you keep the `cd` and silently get no completion.
 
 ```sh
 ccwt new            # create a fresh worktree on a new branch, and cd into it
-                    # ... do your work, run `claude`, commit, etc. ...
+                    # ... do your work, run your agent, commit, etc. ...
 
-ccwt list           # show all Claude Code worktrees in this repo
+ccwt list           # show all agent worktrees in this repo
 ccwt list -g        # ... or in every project in ~/.config/ccwt/config.toml
 ccwt ..             # jump back to the repository root
 ccwt remove <name>  # delete a worktree and its branch when you're done
@@ -62,13 +70,13 @@ ccwt new --path                   # print the absolute path instead of the name
 
 ## Listing worktrees
 
-`ccwt list` renders a table of the repo's worktrees with their branch, age, whether a
-Claude Code session is currently running in each, and what each one is about:
+`ccwt list` renders a table of the repo's worktrees with their branch, age, whether an
+agent session is currently running in each, and what each one is about:
 
 ```
-    NAME                    BRANCH                    AGE  CLAUDE  TOPIC
-* * dreamy-foraging-hickey  worktree-dreamy-…-hickey  2h   yes     ✳ Goal was a widget on the dashboard; it's built and…
-  ✓ calm-baking-otter       worktree-calm-bak…-otter  1d   no      ⎇ Fix the flux capacitor
+    NAME                    BRANCH                    AGE  AGENT  TOPIC
+* * dreamy-foraging-hickey  worktree-dreamy-…-hickey  2h   yes    ✳ Goal was a widget on the dashboard; it's built and…
+  ✓ calm-baking-otter       worktree-calm-bak…-otter  1d   no     ⎇ Fix the flux capacitor
 ```
 
 Every row leads with two glyphs. The first is a `*` on the worktree you're currently in.
@@ -82,7 +90,7 @@ agent is working in there right now — see [Herdr integration](#herdr-integrati
 The glyphs are omitted when stdout isn't a terminal, so piped output stays parseable.
 
 The freshest worktree is on top. Freshness is the younger of two things: the worktree's
-last commit, and the last line written to its newest Claude Code session — so a worktree an
+last commit, and the last line written to its newest agent session — so a worktree an
 agent has been working in all afternoon without committing sorts above one whose commit is
 newer but that nobody has touched since, and one an agent started twenty minutes ago sorts
 to the top rather than to the bottom on its zero commits. `--sort=commit` is git's answer
@@ -90,10 +98,14 @@ on its own, which is what the list did before there was a choice; the default is
 [configurable](#several-projects-at-once) and `--sort` overrides it, on both `ccwt list` and
 `ccwt tui`.
 
-TOPIC says what the worktree is about, and its glyph says where that came from. `✳` is a
-Claude Code session — the newest transcript for that worktree, showing the last recap it
-produced (`/recap`, or one Claude wrote on its own), or the first prompt you typed when it
-never recapped. `⎇` is the last commit, for a worktree nobody has run a session in.
+TOPIC says what the worktree is about, and its glyph says where that came from. `✳` is an
+agent session — the newest transcript for that worktree, showing the last recap it produced
+(`/recap`, or one the agent wrote on its own), or the first prompt you typed when it never
+recapped. `⎇` is the last commit, for a worktree nobody has run a session in.
+
+AGENT and TOPIC's `✳` both read Claude Code's own transcripts, so an agent that files its
+sessions somewhere else reads as `no` with its last commit for a topic — the worktree, and
+everything else the row says about it, is the same either way.
 
 The table is sized to your terminal, so it never wraps. BRANCH is kept narrow even when
 there's room — it's usually the worktree's own name with a `worktree-` in front — and the
@@ -101,9 +113,9 @@ space goes to TOPIC. Branches and commit subjects lose their middle rather than 
 since the last word is usually what tells them apart, while a session summary simply stops:
 
 ```
-    NAME                     BRANCH                   AGE  CLAUDE  TOPIC
-* * dreamy-foraging-hickey   worktree-dreamy-…-hickey 2h   yes     ✳ Goal was a widget on…
-  ✓ calm-baking-otter        worktree-calm-b…-otter   1d   no      ⎇ Fix the flux ca… (#41)
+    NAME                     BRANCH                   AGE  AGENT  TOPIC
+* * dreamy-foraging-hickey   worktree-dreamy-…-hickey 2h   yes    ✳ Goal was a widget on…
+  ✓ calm-baking-otter        worktree-calm-b…-otter   1d   no     ⎇ Fix the flux ca… (#41)
 ```
 
 ### Squash merges
@@ -150,9 +162,9 @@ full-screen and keeps it up to date, repainting in place so it doesn't flicker, 
 status bar along the bottom:
 
 ```
-    NAME                    BRANCH                    AGE  CLAUDE  TOPIC
-* * dreamy-foraging-hickey  worktree-dreamy-…-hickey  2h   yes     ✳ Goal was a widget on the dashboard; it's built and…
-  ✓ calm-baking-otter       worktree-calm-bak…-otter  1d   no      ⎇ Fix the flux capacitor
+    NAME                    BRANCH                    AGE  AGENT  TOPIC
+* * dreamy-foraging-hickey  worktree-dreamy-…-hickey  2h   yes    ✳ Goal was a widget on the dashboard; it's built and…
+  ✓ calm-baking-otter       worktree-calm-bak…-otter  1d   no     ⎇ Fix the flux capacitor
 
  ☰  q:quit  p:pull  g:git  /:search  l:log  x:new  space:open  n:queue  m:vcs  d:details  r:remove │ main ↑1
 ```
@@ -214,13 +226,13 @@ fit. It's modal — `esc` closes it, and while it's up the other keys do nothing
 knows about is in there, including any the config leaves out of the list.
 
 ```
-    NAME                  BRANCH                    AGE  CLAUDE  TOPIC
-  ✓ calm-baking-otter     worktree-calm-bak…-otter  1d   no      ⎇ Fix the flux capacitor
+    NAME                  BRANCH                    AGE  AGENT  TOPIC
+  ✓ calm-baking-otter     worktree-calm-bak…-otter  1d   no     ⎇ Fix the flux capacitor
     ┌─ dreamy-foraging-hickey ───────────────────────────────────────────────────────┐
     │ NAME    dreamy-foraging-hickey                                                 │
     │ BRANCH  worktree-dreamy-foraging-hickey                                        │
     │ AGE     2h                                                                     │
-    │ CLAUDE  yes                                                                    │
+    │ AGENT   yes                                                                    │
     │ TOPIC   ✳ Goal was a widget on the dashboard; it's built and wired up, and the │
     │         numbers on it are still the mocked ones                                │
     └────────────────────────────────────────────────────────────────────────────────┘
@@ -260,7 +272,7 @@ something is running under it.
 ### The worklog
 
 Removing a worktree also removes the only record of what it was for: the branch is deleted,
-the directory is gone, and Claude Code files its transcript under a path that no longer
+the directory is gone, and the agent files its transcript under a path that no longer
 exists. So `ccwt remove` writes a line about it first — when it went, what it was called,
 and the `TOPIC` the list showed — into `$XDG_STATE_HOME/ccwt/tasks.db`, next to the queued
 prompts, and every removal goes in: `ccwt remove`, `ccwt done`, `ccwt gc`, and `r` in the
@@ -271,8 +283,8 @@ Its rows select like the list's — the arrows (or `j`/`k`) walk them, a click l
 and `↵` opens the selected removal's page.
 
 ```
-    NAME                  BRANCH                    AGE  CLAUDE  TOPIC
-  ✓ calm-baking-otter     worktree-calm-bak…-otter  1d   no      ⎇ Fix the flux capacitor
+    NAME                  BRANCH                    AGE  AGENT  TOPIC
+  ✓ calm-baking-otter     worktree-calm-bak…-otter  1d   no     ⎇ Fix the flux capacitor
     ┌─ worklog ──────────────────────────────────────────────────────────────────────┐
     │ AGE  NAME                    TOPIC                                             │
     │ 2h   kind-munching-melody    ✳ Kept a log of removed worktrees, with a pane in… │
@@ -281,9 +293,9 @@ and `↵` opens the selected removal's page.
 ```
 
 That page is everything left to know about one removed worktree: what the log recorded, and
-then the whole of the last Claude Code session that ran in it — the prompts, what Claude
-said back, and the tools it reached for, which survive the removal because Claude Code files
-transcripts under your home directory rather than in the tree they were about. It scrolls:
+then the whole of the last Claude Code session that ran in it — the prompts, what the agent
+said back, and the tools it reached for, which survive the removal because transcripts are
+filed under your home directory rather than in the tree they were about. It scrolls:
 the arrows (or `j`/`k`) by a line, `space`/`b` by a screenful, `g`/`G` to either end, `esc`
 back to the log.
 
@@ -321,9 +333,9 @@ opens a box over the middle of the list, and what you type there is recorded und
 selected row:
 
 ```
-    NAME                    BRANCH                    AGE  CLAUDE  TOPIC
-* * dreamy-foraging-hickey  worktree-dreamy-…-hickey  2h   yes     ✳ Goal was a widget on…
-  ✓ calm-baking-otter       worktree-calm-bak…-otter  1d   no      ⎇ Fix the flux capacitor
+    NAME                    BRANCH                    AGE  AGENT  TOPIC
+* * dreamy-foraging-hickey  worktree-dreamy-…-hickey  2h   yes    ✳ Goal was a widget on…
+  ✓ calm-baking-otter       worktree-calm-bak…-otter  1d   no     ⎇ Fix the flux capacitor
           ┌─ dreamy-foraging-hickey ──────────────────────────┐
           │ rebase onto main, open the PR, and then port the  │
           │ widget to the mobile layout█                      │
@@ -342,11 +354,11 @@ several links and the worktree's name wouldn't say which one you're extending.
 Once recorded it's a row of the list:
 
 ```
-    NAME                    BRANCH                    AGE  CLAUDE  TOPIC
-* * dreamy-foraging-hickey  worktree-dreamy-…-hickey  2h   yes     ✳ Goal was a widget on…
-    ↳ <queued>                                        4m           rebase onto main and open the PR
-      ↳ <queued>                                      3m           then port the widget to the mobile layout
-  ✓ calm-baking-otter       worktree-calm-bak…-otter  1d   no      ⎇ Fix the flux capacitor
+    NAME                    BRANCH                    AGE  AGENT  TOPIC
+* * dreamy-foraging-hickey  worktree-dreamy-…-hickey  2h   yes    ✳ Goal was a widget on…
+    ↳ <queued>                                        4m          rebase onto main and open the PR
+      ↳ <queued>                                      3m          then port the widget to the mobile layout
+  ✓ calm-baking-otter       worktree-calm-bak…-otter  1d   no     ⎇ Fix the flux capacitor
 ```
 
 It has no worktree of its own yet, and `<queued>` in NAME says that's why the column is
@@ -395,10 +407,10 @@ has come and it hasn't got a worktree yet, with whatever was queued behind it st
 it:
 
 ```
-    NAME                    BRANCH                    AGE  CLAUDE  TOPIC
-  ✓ calm-baking-otter       worktree-calm-bak…-otter  1d   no      ⎇ Fix the flux capacitor
-    <new>                                             2h           rebase onto main and open the PR
-    ↳ <queued>                                        2h           then port the widget to the mobile layout
+    NAME                    BRANCH                    AGE  AGENT  TOPIC
+  ✓ calm-baking-otter       worktree-calm-bak…-otter  1d   no     ⎇ Fix the flux capacitor
+    <new>                                             2h          rebase onto main and open the PR
+    ↳ <queued>                                        2h          then port the widget to the mobile layout
 ```
 
 `space` (or a double-click) on a `<new>` row is where the worktree finally gets made: a
@@ -434,7 +446,7 @@ again, and the bar drops the keys that only apply to a row.
 
 The pattern is a [regular expression](https://pkg.go.dev/regexp/syntax), always
 case-insensitive, matched against the whole line as drawn — name, branch, age and topic
-alike, so `/✓` finds the worktrees whose branch is merged and `/yes` the ones with Claude
+alike, so `/✓` finds the worktrees whose branch is merged and `/yes` the ones with an agent
 running in them. One that doesn't compile simply matches nothing, which is what half of one
 is while you're still typing it.
 
@@ -456,10 +468,10 @@ the repo you're standing in, a section per project, each holding that project's 
 newest-first:
 
 ```
-    NAME                      BRANCH                    AGE  CLAUDE  TOPIC
+    NAME                      BRANCH                    AGE  AGENT  TOPIC
 ▾ ccwt (2)
-  * dreamy-foraging-hickey    worktree-dreamy-…-hickey  2h   yes     ✳ Goal was a widget on…
-  ✓ calm-baking-otter         worktree-calm-bak…-otter  1d   no      ⎇ Fix the flux capacitor
+  * dreamy-foraging-hickey    worktree-dreamy-…-hickey  2h   yes    ✳ Goal was a widget on…
+  ✓ calm-baking-otter         worktree-calm-bak…-otter  1d   no     ⎇ Fix the flux capacitor
 ▸ platform (14)
 ```
 
@@ -501,7 +513,7 @@ branches, and `ccwt remove` on one of them leaves that branch behind rather than
 it — remove it with `git branch -D` if you want it gone.
 
 `columns` picks which columns `ccwt list` and `ccwt tui` draw, in the order you name them
-— `name`, `branch`, `age`, `claude`, `topic`, all of them when unset:
+— `name`, `branch`, `age`, `agent`, `topic`, all of them when unset:
 
 ```toml
 columns = ["name", "age", "topic"]
@@ -517,9 +529,10 @@ younger, or `commit` for git's answer alone. `--sort` overrides it for one run:
 sort = "commit"
 ```
 
-`task_command` is the agent cli: what a [queued prompt](#queued-prompts) is handed to when
-its worktree is made, and what the tui's [`c`](#herdr-integration-optional) runs on its own —
-`claude` when unset, split on spaces so flags get through:
+`task_command` is the agent cli — which agent `ccwt` starts for you, and the one place that
+choice lives: what a [queued prompt](#queued-prompts) is handed to when its worktree is made,
+and what the tui's [`c`](#herdr-integration-optional) runs on its own. It is `claude` when
+unset, and split on spaces so flags get through:
 
 ```toml
 task_command = "claude --permission-mode plan"
@@ -546,9 +559,10 @@ this section is the whole of it:
 **The `✳` marker.** In `ccwt list` and the tui, `✳` in the leading glyphs means Herdr says an
 agent is working in that worktree right now. It outranks `*`, `☐` and `✓`, and it's the case git
 can't see at all: a branch made a minute ago with nothing committed to it is merged and clean.
-It comes from Herdr rather than from Claude Code, so it holds for whatever agent is running
-there. `ccwt remove`, `ccwt done` and `ccwt gc` all refuse a worktree marked this way
-(`ccwt remove -D` interrupts the agent anyway).
+It comes from Herdr rather than from the agent's own files, so it holds for whatever agent is
+running there — unlike the `AGENT` column, which knows Claude Code alone. `ccwt remove`,
+`ccwt done` and `ccwt gc` all refuse a worktree marked this way (`ccwt remove -D` interrupts
+the agent anyway).
 
 **Opening workspaces from the tui.** `space` opens the selected worktree as its own Herdr
 workspace (via `herdr worktree open`), and a double-click on its row does the same. `x`
@@ -656,11 +670,11 @@ swallow stderr, or you'll lose the cwd report.
 | --- | --- |
 | `ccwt new [name]` | Create a worktree under `.claude/worktrees/<name>` on a new branch `worktree-<name>`, and print `<name>`. Generates a name if omitted; reuses an existing worktree of the same name. `--switch <branch>` checks the worktree out on an existing branch instead of creating one (`ccwt new` + `git switch <branch>`). When run inside a worktree it returns the enclosing one instead of creating a new one (override with `--force-create`). `--path` prints the worktree's absolute path instead of `<name>`. |
 | `ccwt cd <name>` | `cd` into an existing worktree under `.claude/worktrees/<name>` (with shell integration) — never creates it, errors if it doesn't exist, and the name is required. `ccwt cd ..` is shorthand for `ccwt ..`, and `ccwt cd -` jumps to the previous directory (`$OLDPWD`), like the shell's `cd -`. |
-| `ccwt list` | List the repo's Claude Code worktrees with branch, age, running-session status, and last commit, freshest first — the last commit or the last thing written to the newest Claude Code session there, whichever is younger. `--sort=commit` orders by the commit alone, `--sort=freshness` is the default, and `sort` in the config file picks which one you get without the flag. `-g` lists every project in `$XDG_CONFIG_HOME/ccwt/config.toml` instead, a section per project. `--no-headers` leaves out the header row, for feeding the table to `cut`, `awk` or a shell loop. |
-| `ccwt tui` | The default command, so a bare `ccwt` runs it. Show the `ccwt list` table full-screen, refreshing in place without flicker, over a status bar showing how far the current branch is ahead/behind its upstream. `q` (or Ctrl-C) quits, `p` runs `git pull`. Arrow keys (or `j`/`k`) select a worktree, a click on its row selects it, dragging selects text and copies it to the clipboard, the `☰` in the bar's corner drops the bar's actions out as a clickable menu, `/` (or `?`) searches the way vim does — incrementally, case-insensitive regexp, all matches highlighted, `n`/`N` for the next and previous while a pattern is in force; `d` shows the selected worktree's column values in full in a pane over the list (`esc` closes it), `g` shows the history your own `git ll` alias prints, in a scrolling page over the list, `m` opens the branch's review in the browser, and `r` removes it, like `ccwt remove`. `l` shows the [worklog](#the-worklog) — the worktrees already removed and what they were about — in a pane of the same kind, whose rows select like the list's; `↵` (or a double-click) opens the selected removal's page, which is what the log recorded about it followed by the whole Claude Code session that ran in it, scrolled with the arrows, `space`/`b` and `g`/`G`. `n` with no pattern in force queues a prompt behind the selected row — work to start once that worktree (or the prompt above it) is finished — typed into a box over the list and drawn as a tree under the row it waits on, kept in `$XDG_STATE_HOME/ccwt/tasks.db` and so shared with every other `ccwt` running; `e` in a queued prompt's details pane rewrites it in place — the box is a line editor, with the arrows, `home`/`end` and Ctrl-W/U/K, shift-`↵` for a line break, and Ctrl-G to finish the prompt in `$EDITOR`, as in Claude Code — `r` deletes it and everything queued behind it, and removing the worktree promotes what was queued on it to `<new>` rows — worktrees waiting to be made, which `space` makes and starts the prompt in. `n` with nothing selected queues a prompt that waits on nothing, which is a `<new>` row from the start; under `-g` that takes a project selected, its section header included. `-g` spans the configured projects as a foldable section each (`↵`, or a double-click on the header, folds one shut) and ignores the current directory entirely, every action (`p` included) applying to the selected row's project. `--interval` (default `2s`) sets the refresh rate, `--fetch` (default `1m`) how often `origin/main` is fetched in the background, and `--sort` orders the worktrees, as it does on `ccwt list`. The bar also says when the `ccwt` binary underneath it has been upgraded, and to which version. Under [Herdr](#herdr-integration-optional) `space` opens the selected worktree as a workspace (double-click does too), `x` creates one and opens it, and `c` also starts the agent cli (`task_command`) in it. |
+| `ccwt list` | List the repo's agent worktrees with branch, age, running-session status, and last commit, freshest first — the last commit or the last thing written to the newest agent session there, whichever is younger. `--sort=commit` orders by the commit alone, `--sort=freshness` is the default, and `sort` in the config file picks which one you get without the flag. `-g` lists every project in `$XDG_CONFIG_HOME/ccwt/config.toml` instead, a section per project. `--no-headers` leaves out the header row, for feeding the table to `cut`, `awk` or a shell loop. |
+| `ccwt tui` | The default command, so a bare `ccwt` runs it. Show the `ccwt list` table full-screen, refreshing in place without flicker, over a status bar showing how far the current branch is ahead/behind its upstream. `q` (or Ctrl-C) quits, `p` runs `git pull`. Arrow keys (or `j`/`k`) select a worktree, a click on its row selects it, dragging selects text and copies it to the clipboard, the `☰` in the bar's corner drops the bar's actions out as a clickable menu, `/` (or `?`) searches the way vim does — incrementally, case-insensitive regexp, all matches highlighted, `n`/`N` for the next and previous while a pattern is in force; `d` shows the selected worktree's column values in full in a pane over the list (`esc` closes it), `g` shows the history your own `git ll` alias prints, in a scrolling page over the list, `m` opens the branch's review in the browser, and `r` removes it, like `ccwt remove`. `l` shows the [worklog](#the-worklog) — the worktrees already removed and what they were about — in a pane of the same kind, whose rows select like the list's; `↵` (or a double-click) opens the selected removal's page, which is what the log recorded about it followed by the whole agent session that ran in it, scrolled with the arrows, `space`/`b` and `g`/`G`. `n` with no pattern in force queues a prompt behind the selected row — work to start once that worktree (or the prompt above it) is finished — typed into a box over the list and drawn as a tree under the row it waits on, kept in `$XDG_STATE_HOME/ccwt/tasks.db` and so shared with every other `ccwt` running; `e` in a queued prompt's details pane rewrites it in place — the box is a line editor, with the arrows, `home`/`end` and Ctrl-W/U/K, shift-`↵` for a line break, and Ctrl-G to finish the prompt in `$EDITOR`, as in Claude Code — `r` deletes it and everything queued behind it, and removing the worktree promotes what was queued on it to `<new>` rows — worktrees waiting to be made, which `space` makes and starts the prompt in. `n` with nothing selected queues a prompt that waits on nothing, which is a `<new>` row from the start; under `-g` that takes a project selected, its section header included. `-g` spans the configured projects as a foldable section each (`↵`, or a double-click on the header, folds one shut) and ignores the current directory entirely, every action (`p` included) applying to the selected row's project. `--interval` (default `2s`) sets the refresh rate, `--fetch` (default `1m`) how often `origin/main` is fetched in the background, and `--sort` orders the worktrees, as it does on `ccwt list`. The bar also says when the `ccwt` binary underneath it has been upgraded, and to which version. Under [Herdr](#herdr-integration-optional) `space` opens the selected worktree as a workspace (double-click does too), `x` creates one and opens it, and `c` also starts the agent cli (`task_command`) in it. |
 | `ccwt remove <name>` | Remove the worktree at `.claude/worktrees/<name>` and delete its branch. `.` means the worktree you're currently in; removing the one you're in cds you to the repo root, like `ccwt ..`. The branch is deleted only if merged: an unmerged branch refuses the whole removal, worktree included, so nothing is stranded, and so does a worktree with uncommitted changes, and so does one with an agent working in it (the `✳` of `ccwt list`). Pass `-D` to remove anyway (unmerged branch deleted, uncommitted changes thrown away, working agent interrupted), or `--keep-branch` to remove only the worktree. Under [Herdr](#herdr-integration-optional) the worktree's workspace is closed too, once those checks pass — your own one last, after the removal, with focus handed to the repo's own workspace first if yours is the workspace on screen — and a terminal is asked before that happens (`-y`/`--yes` skips the question). |
 | `ccwt done` | Finish with the worktree you're in: `ccwt remove . -y` — the removal, and then, under [Herdr](#herdr-integration-optional), closing the workspace you're sitting in, without asking (closing it is what "done" means). Same checks and same flags (`-D`, `--keep-branch`); a refusal leaves the workspace open. Outside Herdr it's just `ccwt remove .`. |
-| `ccwt gc` | Remove every worktree that's finished with: branch already merged (the `✓` of `ccwt list`), nothing uncommitted in it (no `*`), no agent working in it (no `✳`) and no Claude Code session running in it (a `no` in the `CLAUDE` column). Prints the list it found and asks before touching anything — `-y`/`--yes` skips the question. Each removal is exactly what `ccwt remove <name>` does, branch included. The worktree you're standing in is never removed — it says so on stderr and leaves it to `ccwt remove .`. |
+| `ccwt gc` | Remove every worktree that's finished with: branch already merged (the `✓` of `ccwt list`), nothing uncommitted in it (no `*`), no agent working in it (no `✳`) and no agent session running in it (a `no` in the `AGENT` column). Prints the list it found and asks before touching anything — `-y`/`--yes` skips the question. Each removal is exactly what `ccwt remove <name>` does, branch included. The worktree you're standing in is never removed — it says so on stderr and leaves it to `ccwt remove .`. |
 | `ccwt worklog` | Print the worktrees that have been removed, newest first, with what each one was about — the `TOPIC` its row had, recorded by the removal because nothing else survives it. `-n` (default 20) says how many lines. `-g` covers every project in `$XDG_CONFIG_HOME/ccwt/config.toml` rather than this repo's, with a `PROJECT` column saying which one each removal was in. The log lives in `$XDG_STATE_HOME/ccwt/tasks.db`, alongside the queued prompts, and `l` in the tui shows the same table. |
 | `ccwt ps` | Show what is running in each worktree, [a process tree per worktree](#whats-running-in-them): every process whose working directory is in the worktree while its parent's isn't — the shell you started there, or something orphaned that outlived it — with what each one spawned underneath. `--depth`/`-d` (default 1) says how many generations below those roots to draw: `0` for the roots alone, `--depth=-1` for the whole tree (spelled with an `=`, since a bare `-1` reads as a flag). Worktrees with nothing running in them are left out. `-g` covers every project in `$XDG_CONFIG_HOME/ccwt/config.toml`, a section per project, like `ccwt list -g`. The working directories come from `lsof`, so a process whose cwd can't be read simply isn't placed in a worktree. |
 | `ccwt new-worktree-name` | Print a generated worktree name (`adjective-verb-noun`) without creating anything. |

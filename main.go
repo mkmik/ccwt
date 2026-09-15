@@ -518,7 +518,7 @@ func gcNames(root string) (names []string, kept string, err error) {
 // gcCandidates names the Claude Code worktrees of the repo at root that are
 // safe to reclaim: the "✓" of `ccwt list` (branch contained in main, which is
 // also what `remove` requires), no "*" (uncommitted changes, which `remove`
-// also refuses) and a "no" in its CLAUDE column. active is the set of cwds of
+// also refuses) and a "no" in its AGENT column. active is the set of cwds of
 // running Claude Code processes, as claudeCwds reports them.
 //
 // A detached worktree is never a candidate: it has no branch to be merged.
@@ -1102,7 +1102,7 @@ type column struct {
 
 // allColumns says how each column of the table may be shortened when it
 // doesn't all fit, and how wide it is allowed to get when it does. AGE and
-// CLAUDE are never longer than their own headers, so there is nothing to cut
+// AGENT are never longer than their own headers, so there is nothing to cut
 // there.
 //
 // BRANCH, and a TOPIC showing a commit, lose their middle rather than their
@@ -1118,7 +1118,7 @@ func allColumns() []column {
 		{name: "NAME", cut: truncate},
 		{name: "BRANCH", cut: elide, max: 26},
 		{name: "AGE"},
-		{name: "CLAUDE"},
+		{name: "AGENT"},
 		{name: "TOPIC", cut: topicCut, pipe: 60},
 	}
 	for i := range cols {
@@ -1142,6 +1142,11 @@ func listColumns() ([]column, error) {
 	}
 	cols := make([]column, 0, len(cfg.Columns))
 	for _, name := range cfg.Columns {
+		// ponytail: AGENT was called CLAUDE until v0.112; one alias beats a
+		// hard error on every config written before the rename.
+		if strings.EqualFold(name, "claude") {
+			name = "agent"
+		}
 		i := slices.IndexFunc(all, func(c column) bool { return strings.EqualFold(c.name, name) })
 		if i < 0 {
 			names := make([]string, len(all))
@@ -1238,7 +1243,7 @@ func fitTable(table [][]string, width int, columns []column) {
 // of `ccwt list` (~200ms vs ~70ms here). The txt check below still decides.
 //
 // On any lsof failure we return an empty set rather than erroring out:
-// the worst case is that the CLAUDE column reads "no" everywhere.
+// the worst case is that the AGENT column reads "no" everywhere.
 func claudeCwds() map[string]bool {
 	cwds := map[string]bool{}
 	out, err := exec.Command("lsof", "-a",
