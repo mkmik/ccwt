@@ -34,6 +34,8 @@ type TuiCmd struct {
 	Fetch    time.Duration `default:"1m" help:"How often to fetch origin/main in the background (0 to never)."`
 	Global   bool          `short:"g" help:"Show the worktrees of every project listed in $XDG_CONFIG_HOME/ccwt/config.toml, not just this repo's."`
 	Sort     string        `help:"Order the worktrees by \"freshness\" — the last commit or the last thing written to the newest Claude Code session there, whichever is younger — or by \"commit\" alone. Overrides sort in the config file (freshness when neither says)."`
+
+	ws bool // `ccwt ws`: the workspace's tabs instead of the repo's worktrees
 }
 
 func (c *TuiCmd) Run() error {
@@ -101,7 +103,10 @@ func (c *TuiCmd) Run() error {
 	tick := time.NewTicker(c.Interval)
 	defer tick.Stop()
 
-	u := ui{projects: projects, sort: c.Sort, stamp: selfStamp()}
+	u := ui{projects: projects, sort: c.Sort, stamp: selfStamp(), ws: c.ws}
+	if c.ws {
+		u.askSeed() // a fresh workspace opens on the question of what it is for
+	}
 	var last string
 	redraw := func() error {
 		lines, err := u.frame()
@@ -142,6 +147,10 @@ func (c *TuiCmd) Run() error {
 		if u.sel.process() {
 			return act("going there…", func() string { return focusPid(u.sel.pid) })
 		}
+		// A tab of the ws view is somewhere to go too.
+		if u.sel.tab != "" {
+			return act("going there…", func() string { return herdrFocusTab(u.sel.tab) })
+		}
 		if !underHerdr() {
 			return nil
 		}
@@ -159,7 +168,7 @@ func (c *TuiCmd) Run() error {
 	// misfire into opening a worktree; a click can't, since it names the row it
 	// means.
 	activate := func() error {
-		if u.sel.worktree() || u.sel.pending() || u.sel.process() {
+		if u.sel.worktree() || u.sel.pending() || u.sel.process() || u.sel.tab != "" {
 			return open()
 		}
 		u.toggle()
@@ -214,6 +223,13 @@ func (c *TuiCmd) Run() error {
 			// first: `q` there is a letter, not the quit key.
 			case u.entry.open && k == "\x07": // Ctrl-G: finish the prompt in $EDITOR
 				external()
+			// The seed prompt starts its agent rather than queueing: a worktree,
+			// a tab and a herdr round trip, so through act, which says so while
+			// it happens.
+			case u.entry.open && u.ws && k == "\r":
+				if err := act("starting…", u.startSeed); err != nil {
+					return err
+				}
 			case u.entry.open:
 				u.queue(k)
 			case u.typing:
@@ -298,17 +314,20 @@ func (c *TuiCmd) Run() error {
 			// the path it still carries is the removed worktree's.
 			case k == "g":
 				dir := u.gitDir()
-				if u.sel.worktree() || u.sel.process() {
+				if u.sel.worktree() || u.sel.process() || u.sel.tab != "" {
 					dir = u.sel.path
 				}
 				u.page, u.msg = gitPage(dir)
-			case k == "x" && underHerdr():
+			// Not in the ws view, `x`, `c`, `r` and `G` below: they make and
+			// unmake worktrees and workspaces, and what that view is for is the
+			// tabs of the one you are in — `n` is how a worktree gets made there.
+			case k == "x" && underHerdr() && !u.ws:
 				if err := act("creating…", u.newWorktree); err != nil {
 					return err
 				}
 			// `c` is `x` for when you already know you are going to run the agent
 			// there: the same new worktree, with the agent cli started in it.
-			case k == "c" && underHerdr():
+			case k == "c" && underHerdr() && !u.ws:
 				if err := act("creating…", u.newAgent); err != nil {
 					return err
 				}
@@ -333,6 +352,12 @@ func (c *TuiCmd) Run() error {
 			// Unless a search is in force, where `n` is vim's next match, as it
 			// has to be for the pattern you just typed to be walkable at all.
 			// `esc` clears the pattern and gives the key back.
+			//
+			// In the ws view it is the seed prompt: the same box, and what's
+			// typed there starts an agent in a tab of its own rather than
+			// waiting on anything.
+			case k == "n" && u.query == "" && u.ws:
+				u.entry = newEntry(listRow{}, "", 0)
 			case k == "n" && u.query == "":
 				if parent, err := u.queueParent(); err != nil {
 					u.msg = "queue: " + err.Error()
@@ -364,6 +389,12 @@ func (c *TuiCmd) Run() error {
 				if err := open(); err != nil {
 					return err
 				}
+			// In the ws view there is nothing to fold, and a table of tabs to
+			// jump between is one ↵ should jump from.
+			case (k == "\r" || k == "\n") && u.ws:
+				if err := open(); err != nil {
+					return err
+				}
 			case k == "\r", k == "\n": // folds a section, and does nothing on a worktree
 				u.toggle()
 			case k == "d":
@@ -390,7 +421,7 @@ func (c *TuiCmd) Run() error {
 				u.stale()
 			// `G` is `ccwt gc`: everything merged, clean and idle, in one go. It
 			// isn't on the bar — the hamburger is the only place it's listed.
-			case k == "G":
+			case k == "G" && !u.ws:
 				if err := act("collecting…", u.gc); err != nil {
 					return err
 				}
@@ -407,7 +438,7 @@ func (c *TuiCmd) Run() error {
 			// Not in the ps view: every row there carries a worktree, the
 			// processes included, and what that list is for is going to what's
 			// running — not tearing down the tree it's running in.
-			case k == "r" && !u.ps:
+			case k == "r" && !u.ps && !u.ws:
 				if path := u.sel.path; path != "" {
 					if err := act("removing "+filepath.Base(path)+"…", func() string {
 						msg, ok := removeWorktree(path)
@@ -472,6 +503,11 @@ type ui struct {
 	// search and the mouse are the ones you already have; only what the rows
 	// are, and so what the keys do with one, changes.
 	ps bool
+
+	// `ccwt ws`: the list is the herdr workspace's tabs, and the prompt box
+	// starts an agent in a new one rather than queueing. A mode of the list for
+	// the same reason ps is — see WsCmd.
+	ws bool
 
 	entry entry // the queue prompt, when it's up
 
@@ -563,6 +599,9 @@ func (u *ui) psView() {
 func (u *ui) menuFor() []action {
 	if u.ps {
 		return psActions(u.sel)
+	}
+	if u.ws {
+		return wsActions(u.sel, u.query != "")
 	}
 	return menuActions(u.sel, u.query != "", u.projects != nil)
 }
@@ -1196,6 +1235,11 @@ func (u *ui) frame() ([]string, error) {
 			}
 			u.body = append([]string{psHeader}, lines...)
 			u.all, u.cols, u.div, u.cells = rows, cols, nil, nil
+		} else if u.ws {
+			// No cells: `d` has nothing to show for a tab yet, and the details
+			// pane's labels are the worktree table's.
+			u.body, u.all = wsTable(cols)
+			u.cols, u.div, u.cells = cols, nil, nil
 		} else {
 			var buf bytes.Buffer
 			listRows, cells, err := renderList(&buf, true, cols, u.projects, u.collapsed, true, u.sort)
@@ -1316,6 +1360,9 @@ func (u *ui) frame() ([]string, error) {
 		if u.entry.id != 0 {
 			keys = " ↵:save  ctrl-g:$EDITOR  esc:cancel "
 		}
+		if u.ws {
+			keys = " ↵:start  ctrl-g:$EDITOR  esc:cancel "
+		}
 		// The bar is the only line left to say why the editor didn't open.
 		return append(lines[:body], highlight(keys+u.msg, cols)), nil
 	}
@@ -1343,6 +1390,8 @@ func (u *ui) frame() ([]string, error) {
 	// only thing to do with a process is go to where it's running.
 	if u.ps {
 		bar = keyBar(cols, u.msg, "", psActions(u.sel))
+	} else if u.ws {
+		bar = keyBar(cols, cmp.Or(u.msg, u.restart), "", wsActions(u.sel, u.query != ""))
 	}
 	if u.typing {
 		p := "/"
@@ -1364,6 +1413,8 @@ func (u *ui) entryTitle() string {
 	switch {
 	case u.entry.id != 0:
 		return "edit" // rewriting one, not queueing behind it
+	case u.ws:
+		return "new agent" // the seed prompt: it becomes a tab, not a row
 	case u.entry.parent.path == "" && u.entry.parent.task == 0:
 		return newName // behind nothing: it is the row it will become
 	case len(cells) == 0:
