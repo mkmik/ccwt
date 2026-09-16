@@ -1,0 +1,246 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
+	"text/tabwriter"
+	"time"
+)
+
+// WsCmd is `ccwt ws`: the tui for the first tab of a herdr workspace. It asks
+// for a seed prompt, starts an agent on it in a tab of its own, and keeps a
+// table of the workspace's tabs to jump between — the workspace's own view of
+// what is running in it, where the plain tui is the repo's.
+//
+// It is the tui in another mode, as the ps view is, rather than a program of
+// its own: the window, the selection, the search, the mouse and the prompt box
+// are the ones the list already has. Only what the rows are, and so what the
+// keys do with one, changes.
+type WsCmd struct {
+	Interval time.Duration `default:"2s" help:"How often to re-read the workspace's tabs."`
+}
+
+func (c *WsCmd) Run() error {
+	if !underHerdr() {
+		return errors.New("ws runs in a herdr workspace, and this isn't one (no HERDR_ENV)")
+	}
+	return (&TuiCmd{Interval: c.Interval, ws: true}).Run()
+}
+
+// wsTab is one tab of the workspace as the ws view draws it: what `herdr tab
+// list` says about the tab, joined with what `herdr pane list` says about the
+// first pane in it — where it sits and what its terminal calls itself, which
+// for an agent is the agent's own one-line account of what it is doing.
+type wsTab struct {
+	ID, Label, Status string
+	Number            int
+	Cwd, Title        string
+}
+
+// herdrTabs is the workspace's tabs in the order herdr numbers them. The two
+// lists are asked for separately because that is how herdr keeps them: a tab
+// has a label and an agent status, a pane has a cwd and a title.
+func herdrTabs() ([]wsTab, error) {
+	ws := os.Getenv("HERDR_WORKSPACE_ID")
+	out, err := exec.Command(herdrBin(), "tab", "list", "--workspace", ws).Output()
+	if err != nil {
+		return nil, fmt.Errorf("herdr tab list: %w", err)
+	}
+	var tabs struct {
+		Result struct {
+			Tabs []struct {
+				ID     string `json:"tab_id"`
+				Label  string `json:"label"`
+				Number int    `json:"number"`
+				Status string `json:"agent_status"`
+			} `json:"tabs"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out, &tabs); err != nil {
+		return nil, fmt.Errorf("herdr tab list: %w", err)
+	}
+	out, err = exec.Command(herdrBin(), "pane", "list", "--workspace", ws).Output()
+	if err != nil {
+		return nil, fmt.Errorf("herdr pane list: %w", err)
+	}
+	var panes struct {
+		Result struct {
+			Panes []struct {
+				Tab   string `json:"tab_id"`
+				Cwd   string `json:"cwd"`
+				Title string `json:"terminal_title_stripped"`
+			} `json:"panes"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out, &panes); err != nil {
+		return nil, fmt.Errorf("herdr pane list: %w", err)
+	}
+	// ponytail: the first pane herdr lists for the tab stands for it — a split
+	// tab is two panes, and the table has one row to say what the tab is.
+	first := map[string]int{}
+	for i, p := range panes.Result.Panes {
+		if _, ok := first[p.Tab]; !ok {
+			first[p.Tab] = i
+		}
+	}
+	var ts []wsTab
+	for _, t := range tabs.Result.Tabs {
+		wt := wsTab{ID: t.ID, Label: t.Label, Status: t.Status, Number: t.Number}
+		if i, ok := first[t.ID]; ok {
+			wt.Cwd, wt.Title = panes.Result.Panes[i].Cwd, panes.Result.Panes[i].Title
+		}
+		ts = append(ts, wt)
+	}
+	slices.SortFunc(ts, func(a, b wsTab) int { return a.Number - b.Number })
+	return ts, nil
+}
+
+// wsTable is the ws view's list: the header line, then a line per tab, fitted
+// to width the way the worktree table is, and alongside them the row each line
+// stands for — a tab by its id, carrying the directory it sits in so that `g`
+// has a history to show. A `*` leads the tab the tui itself is in, as it leads
+// the worktree you are standing in on the list.
+//
+// A herdr that won't answer is a line saying so rather than an error: the tui
+// is parked in a pane for the day, and a hiccup on the socket is no reason to
+// take it down.
+func wsTable(width int) ([]string, []listRow) {
+	tabs, err := herdrTabs()
+	if err != nil {
+		return []string{"  TAB", "  " + err.Error()}, []listRow{{pid: -1}}
+	}
+	cols := []column{{name: "TAB", cut: truncate, max: 30}, {name: "AGENT"}, {name: "DIR", cut: elide, max: 30}, {name: "TITLE", cut: truncate}}
+	table := [][]string{{"  TAB", "AGENT", "DIR", "TITLE"}}
+	var rows []listRow
+	self := os.Getenv("HERDR_TAB_ID")
+	for _, t := range tabs {
+		mark := "  "
+		if t.ID == self {
+			mark = "* "
+		}
+		status := t.Status
+		if status == "unknown" { // no agent herdr can see: a shell, or nothing yet
+			status = ""
+		}
+		table = append(table, []string{mark + t.Label, status, filepath.Base(t.Cwd), t.Title})
+		rows = append(rows, listRow{path: t.Cwd, tab: t.ID})
+	}
+	fitTable(table, width, cols)
+
+	var buf bytes.Buffer
+	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
+	for _, r := range table {
+		fmt.Fprintln(w, strings.Join(r, "\t"))
+	}
+	w.Flush()
+	return strings.Split(strings.TrimRight(buf.String(), "\n"), "\n"), rows
+}
+
+// wsActions is what the keys do in the ws view. `n` is the seed prompt — a new
+// agent in a tab of its own — unless a search is in force, where it is vim's
+// next match as it is on the list; a tab is somewhere to go, and `g` shows the
+// history of the worktree it sits in.
+func wsActions(sel listRow, searching bool) []action {
+	as := []action{{"q", "quit"}, {"/", "search"}}
+	if searching {
+		as = append(as, action{"n", "next"}, action{"N", "prev"})
+	} else {
+		as = append(as, action{"n", "agent"})
+	}
+	if sel.tab != "" {
+		as = append(as, action{" ", "go"}, action{"g", "git"})
+	}
+	return as
+}
+
+// askSeed is what `ccwt ws` opens with in a workspace that has no other tab
+// yet: the seed prompt, since the first thing to do in a fresh workspace is to
+// say what it is for. A workspace with tabs already in it gets the table.
+func (u *ui) askSeed() {
+	if tabs, err := herdrTabs(); err == nil && len(tabs) <= 1 {
+		u.entry = newEntry(listRow{}, "", 0)
+	}
+}
+
+// startSeed is ↵ on the seed prompt: start the agent, and close the box only
+// once it is running. A failure leaves the prompt up with the text still in it
+// — retyping a paragraph because herdr was busy is not a reasonable thing to
+// ask — and says why in the bar.
+func (u *ui) startSeed() string {
+	if strings.TrimSpace(u.entry.text) == "" { // nothing typed: same as abandoning it
+		u.entry = entry{}
+		return ""
+	}
+	name, err := u.seed(u.entry.text)
+	if err != nil {
+		return "start failed: " + err.Error()
+	}
+	u.entry = entry{}
+	return "started " + name
+}
+
+// seed starts an agent on prompt in a tab of its own: a fresh worktree of the
+// repo, a tab of this workspace sitting in it and labelled after it, and
+// task_command's cli run there with the prompt — what opening a "<new>" row
+// does, in a tab of the workspace you are in rather than a workspace of its
+// own. It returns the worktree's name.
+//
+// The pane comes out of the create's own answer, which is the one place that
+// can't confuse it with another; a herdr that doesn't say is asked the way a
+// workspace open is, by the directory the pane sits in.
+func (u *ui) seed(prompt string) (string, error) {
+	argv, err := taskCommand()
+	if err != nil {
+		return "", err
+	}
+	root, err := u.root()
+	if err != nil {
+		return "", err
+	}
+	path, _, err := (&NewWorktreeBranchCmd{ForceCreate: true}).create(root)
+	if err != nil {
+		return "", err
+	}
+	name := filepath.Base(path)
+	out, err := exec.Command(herdrBin(), "tab", "create", "--workspace", os.Getenv("HERDR_WORKSPACE_ID"),
+		"--cwd", path, "--label", name, "--no-focus").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("herdr tab create: %s", lastLine(out, err))
+	}
+	var resp struct {
+		Result struct {
+			Pane struct {
+				ID string `json:"pane_id"`
+			} `json:"root_pane"`
+		} `json:"result"`
+	}
+	_ = json.Unmarshal(out, &resp)
+	pane := resp.Result.Pane.ID
+	if pane == "" {
+		pane = herdrPane(path)
+	}
+	if pane == "" {
+		return "", errors.New("no pane in the new tab to run the agent in")
+	}
+	if out, err := exec.Command(herdrBin(), append([]string{"pane", "run", pane}, append(argv, shellQuote(prompt))...)...).CombinedOutput(); err != nil {
+		return "", fmt.Errorf("herdr pane run: %s", lastLine(out, err))
+	}
+	return name, nil
+}
+
+// herdrFocusTab goes to one tab, which is what `space` does on a row of the ws
+// view. It reports for the bar, and has nothing to say when it worked: you are
+// looking at the other tab by then.
+func herdrFocusTab(id string) string {
+	if out, err := exec.Command(herdrBin(), "tab", "focus", id).CombinedOutput(); err != nil {
+		return "herdr tab focus: " + lastLine(out, err)
+	}
+	return ""
+}

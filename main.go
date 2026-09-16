@@ -594,8 +594,9 @@ func (c *ListCmd) Run() error {
 // worktree's. Only pid tells those apart, so the predicates below check it.
 type listRow struct {
 	project, path string
-	task          int64 // a queued prompt's id; 0 for the other rows
-	pid           int   // a process in the ps view; 0 for the other rows
+	task          int64  // a queued prompt's id; 0 for the other rows
+	pid           int    // a process in the ps view; 0 for the other rows
+	tab           string // a herdr tab's id in the ws view; "" for the other rows
 }
 
 // worktree reports whether the row is a live worktree — the rows the
@@ -603,8 +604,9 @@ type listRow struct {
 // land on but not open, pull or remove. A process in the ps view carries the
 // worktree it is running in, so that two worktrees running the same pid — a
 // child of one of them, cd'd into the other — stay two rows; the pid is what
-// says the row is the process rather than the worktree.
-func (r listRow) worktree() bool { return r.pid == 0 && r.path != "" && r.task == 0 }
+// says the row is the process rather than the worktree — as the tab id says a
+// row of the ws view is the tab, the directory it carries being where it sits.
+func (r listRow) worktree() bool { return r.pid == 0 && r.tab == "" && r.path != "" && r.task == 0 }
 
 // pending reports whether the row is a "<new>": a queued prompt with no
 // worktree left under it — the path it still carries is the removed one's — and
@@ -616,7 +618,7 @@ func (r listRow) pending() bool { return r.path != "" && r.task > 0 }
 // fold into nothing, so a pid — its own, or the -1 of a line that is only a
 // line — is what says this isn't one of them.
 func (r listRow) section() bool {
-	return r.path == "" && r.task == 0 && r.pid == 0 && r.project != ""
+	return r.path == "" && r.task == 0 && r.pid == 0 && r.tab == "" && r.project != ""
 }
 
 // process reports whether the row is a process in the ps view — the rows
@@ -2104,6 +2106,7 @@ var cli struct {
 	Cd                CdCmd                `cmd:"" name:"cd" help:"cd into an existing worktree under .claude/worktrees/<name> (errors if it doesn't exist). Use \"..\" for the enclosing repo root, or \"-\" for the previous directory."`
 	List              ListCmd              `cmd:"" name:"list" aliases:"ls" help:"List Claude Code worktrees with branch, age, running-session, and what each one is about: the last Claude Code session there, or its last commit."`
 	Tui               TuiCmd               `cmd:"" name:"tui" default:"withargs" help:"Show the worktree list full-screen, refreshing as things change. q quits, p runs git pull, arrows select a worktree, r removes it, P shows what is running in each worktree instead (space goes to a process's pane, esc goes back). Under herdr, x creates a worktree and opens it, and space (or a click) opens the selected one."`
+	Ws                WsCmd                `cmd:"" name:"ws" help:"The tui for the first tab of a herdr workspace: asks for a seed prompt and starts an agent on it in a tab of its own (a fresh worktree, task_command run in it), and lists the workspace's tabs — arrows select one, space goes to it, n asks for another prompt."`
 	Remove            RemoveCmd            `cmd:"" name:"remove" help:"Delete a worktree under .claude/worktrees/<name> and its branch (merged, clean and no agent working in it; -D to remove anyway, --keep-branch to remove only the worktree). Under herdr its workspace is closed too, after asking on a terminal (-y skips the question). Use \".\" for the current worktree; removing it cds to the repo root."`
 	Done              DoneCmd              `cmd:"" name:"done" help:"Finish with the worktree you're in: remove it and its branch (same checks and flags as \"remove .\"), then under herdr close the workspace you're sitting in."`
 	Lock              LockCmd              `cmd:"" name:"lock" help:"Lock a worktree the way \"ccwt new\" does, so \"git worktree prune\" can't reclaim it while its directory is unavailable. Use \".\" for the worktree you're currently in."`
