@@ -39,6 +39,15 @@ type Config struct {
 	//	[forges]
 	//	"code.example.com" = "glab"
 	Forges map[string]string `toml:"forges"`
+	// Environments renames an environment in the ENV column of `mr`: the name
+	// gitlab knows it by on the left, what to call it on the right. The names
+	// a deployment pipeline uses are written to be unambiguous in a settings
+	// page, which is longer than a column that gets glanced at wants:
+	//
+	//	[environments]
+	//	production = "prod"
+	//	staging = "stg"
+	Environments map[string]string `toml:"environments"`
 }
 
 // sortOrders are the orders the worktree list can be in, the first being the
