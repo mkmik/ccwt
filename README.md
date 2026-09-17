@@ -625,7 +625,8 @@ sit along the tab bar, so dragging one about in Herdr moves its row with it.
 The `AGENT` mark is Herdr's own: a circle, and the state is the colour of it —
 red blocked, yellow working, green done, grey idle, and a `·` for a tab Herdr sees no agent
 in at all. Herdr draws the three busy states as the same circle too, so a workspace reads the
-same in the tab bar and in the table below it.
+same in the tab bar and in the table below it — in the same colours, too: the dots are asked
+for by palette number, and Herdr's theme is what answers.
 
 `n` opens the same box the [queue](#queued-prompts) types into, and what goes in it is a seed
 prompt: `↵` opens a tab of the workspace in the workspace's own worktree — the one the tui is

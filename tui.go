@@ -1973,13 +1973,15 @@ const rowBar = "\x1b[48;2;44;100;118m\x1b[38;2;251;241;199m"
 // terminal title comes out a green dot; take the cell apart if that shows up.
 func paintDots(line, bg string) string {
 	off := cmp.Or(bg, "\x1b[0m")
-	// gruvbox bright, to sit with the selection band: red, yellow, green, grey.
+	// The palette's own red, yellow, green and greys, not hexes of our own:
+	// herdr paints its theme over the ansi sixteen, so a dot asked for by
+	// number comes out herdr's colour and follows it when the theme changes.
 	return strings.NewReplacer(
-		"×", "\x1b[38;2;251;73;52m●"+off,
-		"◐", "\x1b[38;2;250;189;47m●"+off,
-		"✓", "\x1b[38;2;184;187;38m●"+off,
-		"○", "\x1b[38;2;168;153;132m○"+off,
-		"·", "\x1b[38;2;124;111;100m·"+off,
+		"×", "\x1b[91m●"+off,
+		"◐", "\x1b[33m●"+off,
+		"✓", "\x1b[92m●"+off,
+		"○", "\x1b[37m○"+off,
+		"·", "\x1b[90m·"+off,
 	).Replace(line)
 }
 
