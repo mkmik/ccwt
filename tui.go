@@ -2695,6 +2695,12 @@ func (u *ui) newWorkspace() string {
 	if out, err := exec.Command(herdrBin(), "pane", "run", pane, exe, "ws").CombinedOutput(); err != nil {
 		return "opened, but `ccwt ws` did not start: " + lastLine(out, err)
 	}
+	// "ws", since an unlabelled tab is named after what runs in it and that
+	// reads as the shell the tui happens to sit in. Best effort: a tab with the
+	// wrong name is still the workspace's tui.
+	if tab, err := herdrPaneTab(pane); err == nil {
+		_ = exec.Command(herdrBin(), "tab", "rename", tab, "ws").Run()
+	}
 	return msg
 }
 
