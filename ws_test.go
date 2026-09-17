@@ -100,6 +100,100 @@ func noMR(t *testing.T) {
 	})
 }
 
+// A tab's dot is its agents' status rather than the tab's own: herdr keeps one
+// per agent, and a tab is only where they happen to sit. What the one row has
+// to say about a split full of them is the one that most wants you — the
+// approval waiting on an answer ahead of the agent still working alongside it.
+// A tab with no agent in it has nothing but herdr's word for the tab, which is
+// what keeps a bare shell a bare shell.
+func TestWsTabDotIsTheAgentThatMostWantsYou(t *testing.T) {
+	dir := t.TempDir()
+	herdr := filepath.Join(dir, "herdr")
+	script := `#!/bin/sh
+case "$1 $2" in
+"tab list") printf '%s' '{"result":{"tabs":[{"tab_id":"w1:t1","label":"1","agent_status":"unknown"},{"tab_id":"w1:t2","label":"2","agent_status":"working"}]}}' ;;
+"pane list") printf '%s' '{"result":{"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1","cwd":"/src/ccwt","terminal_title_stripped":"zsh"},{"pane_id":"w1:p2","tab_id":"w1:t2","cwd":"/src/ccwt","terminal_title_stripped":"Writing the tests","agent":"claude","agent_status":"working"},{"pane_id":"w1:p3","tab_id":"w1:t2","cwd":"/src/ccwt","terminal_title_stripped":"May I?","agent":"codex","agent_status":"blocked"}]}}' ;;
+esac
+`
+	if err := os.WriteFile(herdr, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_BIN_PATH", herdr)
+	t.Setenv("HERDR_WORKSPACE_ID", "w1")
+	wsWatched = map[string]wsWatch{}
+
+	tabs, err := herdrTabs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := wsDot(tabs[0].Status); got != "·" {
+		t.Errorf("a tab of shells = %q, want no agent on it", got)
+	}
+	if got := wsDot(tabs[1].Status); got != "×" {
+		t.Errorf("a split with a blocked agent in it = %q, want the blocked one", got)
+	}
+}
+
+// The green dot is a turn that ended while nobody was looking, and it is the ws
+// view's own bookkeeping rather than herdr's `done`: that one is the server's
+// seen state, which anyone's focus spends, so a conductor that took herdr's
+// word for it would hardly ever show one. What it watches instead is an agent
+// settling, and what puts the dot out is herdr saying that tab is the one being
+// looked at — or `space`, which is this tui going there itself.
+func TestWsGreenUntilTheTabIsLookedAt(t *testing.T) {
+	dir := t.TempDir()
+	herdr := filepath.Join(dir, "herdr")
+	tabs := filepath.Join(dir, "tabs.json")
+	script := fmt.Sprintf(`#!/bin/sh
+case "$1 $2" in
+"tab list") cat %s ;;
+"pane list") printf '%%s' '{"result":{"panes":[]}}' ;;
+esac
+`, tabs)
+	if err := os.WriteFile(herdr, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_BIN_PATH", herdr)
+	t.Setenv("HERDR_WORKSPACE_ID", "w1")
+	wsWatched = map[string]wsWatch{}
+
+	round := func(status, focused string) string {
+		t.Helper()
+		body := fmt.Sprintf(`{"result":{"tabs":[{"tab_id":"w1:t2","label":"2","agent_status":%q,"focused":%s}]}}`, status, focused)
+		if err := os.WriteFile(tabs, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		ts, err := herdrTabs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return wsDot(ts[0].Status)
+	}
+	for _, step := range []struct{ status, focused, want string }{
+		{"working", "false", "◐"}, // off working: nothing said yet
+		{"idle", "false", "✓"},    // the turn ended with nobody there to read it
+		{"idle", "false", "✓"},    // and it stays unread until someone is
+		{"done", "false", "✓"},    // herdr's own, while the server still has it
+		{"idle", "false", "✓"},    // spent over there, still unread over here
+		{"idle", "true", "○"},     // read
+		{"idle", "false", "○"},    // and read it stays
+		{"working", "false", "◐"}, // off again, so there will be something new
+		{"idle", "false", "✓"},    // and here it is
+	} {
+		if got := round(step.status, step.focused); got != step.want {
+			t.Errorf("%s (focused=%s) = %q, want %q", step.status, step.focused, got, step.want)
+		}
+	}
+	if msg := herdrFocusTab("w1:t2"); msg != "" {
+		t.Fatalf("herdr tab focus = %q", msg)
+	}
+	if got := round("idle", "false"); got != "○" { // going there is reading it
+		t.Errorf("after space = %q, want a read tab", got)
+	}
+}
+
 // The ws view's first section is where the workspace's merge request stands,
 // in the columns `ccwt mr` prints it in. Most of a workspace's life there isn't
 // one — the branch is fresh, nothing is pushed — and that has to read as one
