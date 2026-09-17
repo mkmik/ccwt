@@ -511,6 +511,7 @@ type ui struct {
 	sel       listRow // selected row, the zero value when nothing is selected yet
 	rows      []listRow
 	top       int // rows[top] is the first row on screen
+	head      int // lines pinned above the window: the column headers, and the ws view's merge request
 	height    int // how many rows the frame has room for
 	projects  []string
 	collapsed map[string]bool // project root -> section folded shut
@@ -653,12 +654,13 @@ func (u *ui) refresh() {
 }
 
 // at returns the row on screen line n, counting the way a mouse report does:
-// line 1 is the table header, so line 2 is the first row of the window. The
-// zero row comes back for a line with nothing on it — the header, or the blank
-// space under a list too short to fill the screen.
+// the first u.head lines are pinned — the column headers, and in the ws view
+// the merge request above them — so line u.head+1 is the first row of the
+// window. The zero row comes back for a line with nothing on it: one of the
+// pinned ones, or the blank space under a list too short to fill the screen.
 func (u *ui) at(n int) listRow {
-	i := u.top + n - 2
-	if n < 2 || n-2 >= u.height || i >= len(u.rows) {
+	i := u.top + n - u.head - 1
+	if n <= u.head || n-u.head-1 >= u.height || i >= len(u.rows) {
 		return listRow{}
 	}
 	return u.rows[i]
@@ -1281,6 +1283,12 @@ func (u *ui) frame() ([]string, error) {
 		}
 	}
 
+	// Whatever the body has beyond one line per row is the part that doesn't
+	// scroll: the column headers, and in the ws view the merge request above
+	// them. Counted rather than declared, so a view that grows a section says
+	// so by returning it.
+	u.head = max(len(u.body)-len(u.all), 1)
+
 	body := max(rows-1, 1)
 
 	// The list scrolls, but only as far as it takes to keep the selection on
@@ -1291,7 +1299,7 @@ func (u *ui) frame() ([]string, error) {
 	// bottom edge and the section headers you'd fold to get past it were
 	// themselves below it.
 	u.rows = u.all
-	u.height = max(body-1, 0) // the header takes the frame's first line
+	u.height = max(body-u.head, 0) // what's left once the pinned lines have theirs
 	sel := slices.Index(u.rows, u.sel)
 	if sel < 0 {
 		u.sel = listRow{} // the selected row is gone (removed, or folded away)
@@ -1301,23 +1309,23 @@ func (u *ui) frame() ([]string, error) {
 		u.top = min(max(u.top, sel-u.height+1), sel)
 	}
 
-	// Line 0 of the cached table is the header, so its row i is line i+1. The
-	// window is a fresh slice, which is what keeps the highlight below out of
-	// the cache.
-	last := min(1+u.top+u.height, len(u.body))
-	lines := append([]string{u.body[0]}, u.body[min(1+u.top, last):last]...)
+	// The pinned lines come first and stay, so the cached table's row i is line
+	// i+u.head. The window is a fresh slice, which is what keeps the highlight
+	// below out of the cache.
+	last := min(u.head+u.top+u.height, len(u.body))
+	lines := append(slices.Clone(u.body[:u.head]), u.body[min(u.head+u.top, last):last]...)
 	// Every match on screen is picked out, not just the one the selection landed
 	// on — vim's hlsearch. In a list of near-identical generated names, a bar
 	// across one row doesn't say what about it matched.
 	re := u.re()
-	for i, line := range lines[1:] {
+	for i, line := range lines[u.head:] {
 		bg := ""
 		if i == sel-u.top {
 			bg = rowBar
 		}
-		lines[i+1] = draw(line, cols, re, bg)
+		lines[i+u.head] = draw(line, cols, re, bg)
 		if u.ws {
-			lines[i+1] = paintDots(lines[i+1], bg)
+			lines[i+u.head] = paintDots(lines[i+u.head], bg)
 		}
 	}
 
