@@ -10,7 +10,7 @@ stages; tick things off as they land.
 
 - [x] 1. `ccwt ws`: the seed prompt and the tab table
   - [x] `ccwt ws` runs the tui in a ws mode (as `P` runs it in the ps one); refuses to start outside Herdr
-  - [x] seed prompt: fresh worktree, `herdr tab create --cwd <it> --label <name> --no-focus`, `task_command '<prompt>'` in the pane the create names — a `<new>` row's `space`, in a tab rather than a workspace
+  - [x] seed prompt: `herdr tab create --cwd <the workspace's worktree> --no-focus`, `task_command '<prompt>'` in the pane the create names — no worktree and no label of its own
   - [x] opens on the seed prompt when the workspace has no other tab yet
   - [x] tab table: TAB, AGENT (Herdr's `agent_status`, blank for `unknown`), DIR (the first pane's cwd), TITLE (its terminal title); `*` on the tui's own tab
   - [x] `space`/`↵`/double-click go to the tab; `n` opens the prompt; `g` is the history of the worktree under the tab
@@ -26,15 +26,17 @@ stages; tick things off as they land.
 - [ ] 4. Later, if it earns its keep
   - [ ] queue a follow-up prompt behind a tab (the `tasks.db` chains already do this for worktrees)
   - [x] `r`: `ccwt done` for the workspace the tui is in, on the bar only when the removal would go through without -D — `removeBlocked` is the one test `remove`, `done` and the ws view all ask
-  - [ ] close a tab / remove its worktree from the table (`r` is the workspace's; a tab's would be a key of its own)
-  - [ ] a plugin action or `herdr workspace create` wrapper that opens a workspace with `ccwt ws` already in its first tab
+  - [ ] close a tab from the table (`r` is the workspace's — worktree and all; closing one tab would be a key of its own)
+  - [x] a way to open a workspace with `ccwt ws` already in its first tab — the tui's `c`, which runs it there instead of the agent (`TestNewWorkspaceRunsWs`); the herdr plugin's own action still opens a bare worktree
 
 ## Decisions
 
-- One worktree per seed prompt, as for queued prompts: agents in one workspace
-  don't share a checkout.
+- One worktree per workspace, not per seed prompt: the agents of a workspace
+  are working on one thing, and they share its checkout. `c` on the list makes
+  that worktree and puts `ccwt ws` in it.
 - New tabs open unfocused: the conductor stays on screen, the table shows the
   tab, `space` goes to it.
-- Tabs are labelled after their worktree, as workspaces are.
+- Tabs go unlabelled: with one worktree for all of them the name would be the
+  same every time, and herdr names a tab by what runs in it.
 - The seed isn't recorded in `tasks.db`: it runs at once, and the tab is the
   record. Stage 4's follow-ups would be.

@@ -472,23 +472,17 @@ func TestHerdrOpenLabelsNewWorkspacesOnly(t *testing.T) {
 	}
 }
 
-// TestNewAgentRunsTheConfiguredCli: `c` is `x` plus the agent — a new worktree,
-// opened, with task_command's cli started in the pane that open just made.
-func TestNewAgentRunsTheConfiguredCli(t *testing.T) {
+// TestNewWorkspaceRunsWs: `c` is `x` plus the workspace's own tui — a new
+// worktree, opened, with `ccwt ws` started in the pane that open just made.
+func TestNewWorkspaceRunsWs(t *testing.T) {
 	initRepo(t)
-	if err := os.MkdirAll(filepath.Dir(configPath()), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(configPath(), []byte("task_command = \"claude --resume\"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 
 	dir := t.TempDir()
 	log := filepath.Join(dir, "calls")
 	herdr := filepath.Join(dir, "herdr")
 	// Logs its arguments, and answers `pane list` with a pane sitting in the
 	// worktree the open before it named with --path — which is the pane the
-	// agent is to be started in.
+	// tui is to be started in.
 	script := fmt.Sprintf("#!/bin/sh\necho \"$@\" >> %[1]q\n"+
 		"[ \"$1 $2\" = \"worktree open\" ] && echo \"$6\" > %[2]q\n"+
 		"[ \"$1 $2\" = \"pane list\" ] && printf '{\"result\":{\"panes\":"+
@@ -500,11 +494,15 @@ func TestNewAgentRunsTheConfiguredCli(t *testing.T) {
 	t.Setenv("HERDR_ENV", "1")
 	t.Setenv("HERDR_BIN_PATH", herdr)
 
-	if msg := (&ui{}).newAgent(); !strings.HasPrefix(msg, "opened ") {
-		t.Fatalf("newAgent: %s", msg)
+	if msg := (&ui{}).newWorkspace(); !strings.HasPrefix(msg, "opened ") {
+		t.Fatalf("newWorkspace: %s", msg)
 	}
-	if got, _ := os.ReadFile(log); !strings.Contains(string(got), "pane run p1 claude --resume") {
-		t.Errorf("herdr calls = %q, want the configured cli run in the new pane", got)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(log); !strings.Contains(string(got), "pane run p1 "+exe+" ws") {
+		t.Errorf("herdr calls = %q, want `ccwt ws` run in the new pane", got)
 	}
 }
 
@@ -933,7 +931,7 @@ func TestStatusBarShowsHerdrActionsOnlyUnderHerdr(t *testing.T) {
 	}{{"", false}, {"1", true}} {
 		t.Setenv("HERDR_ENV", tc.env)
 		bar := statusBar(200, "", listRow{path: "some-worktree"}, "", false, false)
-		for _, key := range []string{"x:new", "c:new+agent", "space:open"} {
+		for _, key := range []string{"x:new", "c:new+ws", "space:open"} {
 			if strings.Contains(bar, key) != tc.want {
 				t.Errorf("HERDR_ENV=%q: %q in the bar = %v, want %v", tc.env, key, !tc.want, tc.want)
 			}
