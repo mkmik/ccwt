@@ -435,6 +435,13 @@ func (c *TuiCmd) Run() error {
 				}
 				copyClip(root)
 				u.msg = "copied to clipboard: " + root
+			// In the ws view `r` is `ccwt done` for the workspace itself, and
+			// only when this one is finished with: the worktree the tui stands
+			// in goes, and the workspace closes behind it.
+			case k == "r" && u.ws && wsRemovable():
+				if err := act("removing…", wsDone); err != nil {
+					return err
+				}
 			// Not in the ps view: every row there carries a worktree, the
 			// processes included, and what that list is for is going to what's
 			// running — not tearing down the tree it's running in.
@@ -2761,9 +2768,14 @@ func herdrBin() string {
 // under the agent. Asking herdr rather than the agent means it holds for
 // whatever herdr is running there, not just Claude Code.
 //
-// Our own workspace doesn't count: when the agent itself runs `ccwt done`, it
-// is the working agent, and counting it would leave it unable to clean up
-// after itself. No herdr, or none running, is nobody working.
+// Our own tab doesn't count: when the agent itself runs `ccwt done`, it is the
+// working agent, and counting it would leave it unable to clean up after
+// itself. The tab rather than the whole workspace, because a workspace can hold
+// several — `ccwt ws` is a tui in one tab of a workspace with agents in the
+// others — and an agent working a tab along is precisely what a removal must
+// not pull the floor out from under. For a worktree open as its own single-tab
+// workspace the two are the same thing. A pane whose environment names no tab
+// falls back to the workspace. No herdr, or none running, is nobody working.
 //
 // ponytail: package var so tests can fake the herdr answer.
 var herdrBusy = func() map[string]bool {
@@ -2779,18 +2791,21 @@ var herdrBusy = func() map[string]bool {
 				Cwd        string `json:"cwd"`
 				Foreground string `json:"foreground_cwd"`
 				Workspace  string `json:"workspace_id"`
+				Tab        string `json:"tab_id"`
 			} `json:"agents"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(out, &resp); err != nil {
 		return busy
 	}
-	self := os.Getenv("HERDR_WORKSPACE_ID")
+	// A tab id ("w1:t2") is never a workspace id ("w1"), so one comparison does
+	// for whichever of the two we were handed.
+	self := cmp.Or(os.Getenv("HERDR_TAB_ID"), os.Getenv("HERDR_WORKSPACE_ID"))
 	for _, a := range resp.Result.Agents {
 		if a.Status != "working" && a.Status != "blocked" {
 			continue
 		}
-		if self != "" && a.Workspace == self {
+		if self != "" && (a.Tab == self || a.Workspace == self) {
 			continue
 		}
 		// Both cwds: an agent started at the repo root and cd'd into a worktree

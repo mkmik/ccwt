@@ -249,6 +249,47 @@ func emitOSC7(path string) {
 	fmt.Fprintf(os.Stderr, "\x1b]7;%s\x1b\\", u.String())
 }
 
+// removeBlocked says why removing the worktree called name in the repo at root
+// would be refused without -D, or nil when it would go through — which is also
+// the question "is this one done with?", since the three refusals are the three
+// ways it isn't. `remove` (and so `ccwt done`) asks it before touching
+// anything, and the ws view asks it before offering the key that removes one,
+// so what a view offers and what the removal does can't drift apart.
+//
+// Asked of git and herdr directly, never of the tui's caches: a refusal to
+// delete unsaved work must not read a stale answer.
+func removeBlocked(root, name string, keepBranch bool) error {
+	worktreePath := filepath.Join(root, ".claude", "worktrees", name)
+	branch, err := branchName(name)
+	if err != nil {
+		return err
+	}
+
+	// A branch checked out in a worktree can only be deleted once that worktree
+	// is gone, so an unmerged branch used to leave the worktree removed and the
+	// branch stranded behind it. Settle it before anything is touched. A branch
+	// that doesn't exist (a worktree made by `new --switch`, say) can't strand.
+	if !keepBranch && gitutil.BranchExists(root, branch) && !gitutil.Merged(root, branch) {
+		return fmt.Errorf("%s is not merged: re-run with -D to delete it anyway, or --keep-branch to remove only the worktree", branch)
+	}
+
+	// The removal is a `git worktree remove --force`, so uncommitted work in it
+	// is gone for good and no branch is left holding it — the same reason to
+	// refuse as an unmerged branch, and the same way out of it.
+	if gitutil.Dirty(worktreePath) {
+		return fmt.Errorf("%s has uncommitted changes: commit them, or re-run with -D to throw them away", name)
+	}
+
+	// An agent mid-task is the third way a worktree isn't safe to remove, and
+	// the only one git can't see: a branch it made a minute ago and hasn't
+	// committed to is both merged and clean. Removing it closes the workspace
+	// out from under the agent, so ask first — the same way out as the others.
+	if activeIn(worktreePath, herdrBusy()) {
+		return fmt.Errorf("%s has an agent working in it: let it finish, or re-run with -D to remove it anyway", name)
+	}
+	return nil
+}
+
 type RemoveCmd struct {
 	Name       string `arg:"" help:"Worktree name to remove. Use \".\" for the worktree you're currently in."`
 	Force      bool   `short:"D" help:"Remove anyway: delete the branch even when it is not merged, and the worktree even when it has uncommitted changes."`
@@ -285,27 +326,10 @@ func (c *RemoveCmd) remove(root string) error {
 		return err
 	}
 
-	// A branch checked out in a worktree can only be deleted once that worktree
-	// is gone, so an unmerged branch used to leave the worktree removed and the
-	// branch stranded behind it. Settle it before anything is touched. A branch
-	// that doesn't exist (a worktree made by `new --switch`, say) can't strand.
-	if !c.KeepBranch && !c.Force && gitutil.BranchExists(root, branch) && !gitutil.Merged(root, branch) {
-		return fmt.Errorf("%s is not merged: re-run with -D to delete it anyway, or --keep-branch to remove only the worktree", branch)
-	}
-
-	// The removal is a `git worktree remove --force`, so uncommitted work in it
-	// is gone for good and no branch is left holding it — the same reason to
-	// refuse as an unmerged branch, and the same way out of it.
-	if !c.Force && gitutil.Dirty(worktreePath) {
-		return fmt.Errorf("%s has uncommitted changes: commit them, or re-run with -D to throw them away", name)
-	}
-
-	// An agent mid-task is the third way a worktree isn't safe to remove, and
-	// the only one git can't see: a branch it made a minute ago and hasn't
-	// committed to is both merged and clean. Removing it closes the workspace
-	// out from under the agent, so ask first — the same way out as the others.
-	if !c.Force && activeIn(worktreePath, herdrBusy()) {
-		return fmt.Errorf("%s has an agent working in it: let it finish, or re-run with -D to remove it anyway", name)
+	if !c.Force {
+		if err := removeBlocked(root, name, c.KeepBranch); err != nil {
+			return err
+		}
 	}
 
 	// Under herdr the worktree is usually an open workspace with an agent living

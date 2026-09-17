@@ -25,7 +25,8 @@ stages; tick things off as they land.
   - [ ] columns for both, and their state (open, approved, merged) in the table
 - [ ] 4. Later, if it earns its keep
   - [ ] queue a follow-up prompt behind a tab (the `tasks.db` chains already do this for worktrees)
-  - [ ] close a tab / remove its worktree from the table (`r`, with the tui's checks)
+  - [x] `r`: `ccwt done` for the workspace the tui is in, on the bar only when the removal would go through without -D — `removeBlocked` is the one test `remove`, `done` and the ws view all ask
+  - [ ] close a tab / remove its worktree from the table (`r` is the workspace's; a tab's would be a key of its own)
   - [ ] a plugin action or `herdr workspace create` wrapper that opens a workspace with `ccwt ws` already in its first tab
 
 ## Decisions
