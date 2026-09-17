@@ -49,8 +49,13 @@ esac
 			t.Errorf("line %d = %q, want %q… with %q and without %q", i+1, l, want.prefix, want.has, want.hasNot)
 		}
 	}
-	if !strings.Contains(lines[1], "idle") {
-		t.Errorf("line 1 = %q, want the agent's status on it", lines[1])
+	if !strings.Contains(lines[1], "○") || !strings.Contains(lines[2], "·") {
+		t.Errorf("lines = %q, want an idle dot and a no-agent dot on them", lines[1:])
+	}
+	// The dot is a stand-in until the frame paints it, and the colour has to
+	// hand the row back to whatever it was sitting on — the selection band here.
+	if got := paintDots("  a  ◐  b", rowBar); !strings.Contains(got, "●") || !strings.HasSuffix(got, rowBar+"  b") {
+		t.Errorf("paintDots = %q, want a coloured circle that restores the band", got)
 	}
 	want := []listRow{{path: "/src/ccwt/.claude/worktrees/calm-baking-otter", tab: "w1:t3"}, {path: "/src/ccwt", tab: "w1:t1"}}
 	if !slices.Equal(rows, want) {

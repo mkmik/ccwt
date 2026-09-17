@@ -126,11 +126,7 @@ func wsTable(width int) ([]string, []listRow) {
 		if t.ID == self {
 			mark = "* "
 		}
-		status := t.Status
-		if status == "unknown" { // no agent herdr can see: a shell, or nothing yet
-			status = ""
-		}
-		table = append(table, []string{mark + t.Label, status, filepath.Base(t.Cwd), t.Title})
+		table = append(table, []string{mark + t.Label, wsDot(t.Status), filepath.Base(t.Cwd), t.Title})
 		rows = append(rows, listRow{path: t.Cwd, tab: t.ID})
 	}
 	fitTable(table, width, cols)
@@ -142,6 +138,29 @@ func wsTable(width int) ([]string, []listRow) {
 	}
 	w.Flush()
 	return strings.Split(strings.TrimRight(buf.String(), "\n"), "\n"), rows
+}
+
+// wsDot is the AGENT column's mark for a tab's agent status, the way herdr
+// marks it in the tab bar: a circle, and the state is the colour of it.
+//
+// The cell carries herdr's other set, the colourless symbols it draws with
+// `ui.status_indicators = "symbols"`, and paintDots turns each one into the
+// coloured circle at the end of the frame. The stand-in is what keeps the
+// table honest: it is one rune, so fitTable and tabwriter measure the column
+// the way it will print, and the search looks at a character rather than at
+// the middle of an escape.
+func wsDot(status string) string {
+	switch status {
+	case "blocked":
+		return "×"
+	case "working":
+		return "◐"
+	case "done":
+		return "✓"
+	case "idle":
+		return "○"
+	}
+	return "·" // "unknown": a shell, or a tab with nothing in it yet
 }
 
 // wsActions is what the keys do in the ws view. `n` is the seed prompt — a new
