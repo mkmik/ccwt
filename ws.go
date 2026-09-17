@@ -227,41 +227,38 @@ func (u *ui) startSeed() string {
 		u.entry = entry{}
 		return ""
 	}
-	name, err := u.seed(u.entry.text)
-	if err != nil {
+	if err := u.seed(u.entry.text); err != nil {
 		return "start failed: " + err.Error()
 	}
 	u.entry = entry{}
-	return "started " + name
+	return "started"
 }
 
-// seed starts an agent on prompt in a tab of its own: a fresh worktree of the
-// repo, a tab of this workspace sitting in it and labelled after it, and
-// task_command's cli run there with the prompt — what opening a "<new>" row
-// does, in a tab of the workspace you are in rather than a workspace of its
-// own. It returns the worktree's name.
+// seed starts an agent on prompt in a tab of its own: a tab of this workspace
+// in the directory the tui is standing in, with task_command's cli run there on
+// the prompt.
 //
-// The pane comes out of the create's own answer, which is the one place that
-// can't confuse it with another; a herdr that doesn't say is asked the way a
-// workspace open is, by the directory the pane sits in.
-func (u *ui) seed(prompt string) (string, error) {
+// The worktree is the workspace's, not the tab's: the agents of one workspace
+// are working on one thing, and a `c` from the list has already made them a
+// worktree to work on it in. The tab goes unlabelled for the same reason — it
+// would be the same name every time, and herdr names an unlabelled tab after
+// what runs in it, which is the agent saying what it is doing.
+//
+// The pane comes out of the create's own answer: with every tab in the one
+// directory, there is nothing else that tells the new pane from the tui's own.
+func (u *ui) seed(prompt string) error {
 	argv, err := taskCommand()
 	if err != nil {
-		return "", err
+		return err
 	}
-	root, err := u.root()
+	cwd, err := os.Getwd()
 	if err != nil {
-		return "", err
+		return err
 	}
-	path, _, err := (&NewWorktreeBranchCmd{ForceCreate: true}).create(root)
-	if err != nil {
-		return "", err
-	}
-	name := filepath.Base(path)
 	out, err := exec.Command(herdrBin(), "tab", "create", "--workspace", os.Getenv("HERDR_WORKSPACE_ID"),
-		"--cwd", path, "--label", name, "--no-focus").CombinedOutput()
+		"--cwd", cwd, "--no-focus").CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("herdr tab create: %s", lastLine(out, err))
+		return fmt.Errorf("herdr tab create: %s", lastLine(out, err))
 	}
 	var resp struct {
 		Result struct {
@@ -273,15 +270,12 @@ func (u *ui) seed(prompt string) (string, error) {
 	_ = json.Unmarshal(out, &resp)
 	pane := resp.Result.Pane.ID
 	if pane == "" {
-		pane = herdrPane(path)
-	}
-	if pane == "" {
-		return "", errors.New("no pane in the new tab to run the agent in")
+		return errors.New("no pane in the new tab to run the agent in")
 	}
 	if out, err := exec.Command(herdrBin(), append([]string{"pane", "run", pane}, append(argv, shellQuote(prompt))...)...).CombinedOutput(); err != nil {
-		return "", fmt.Errorf("herdr pane run: %s", lastLine(out, err))
+		return fmt.Errorf("herdr pane run: %s", lastLine(out, err))
 	}
-	return name, nil
+	return nil
 }
 
 // herdrFocusTab goes to one tab, which is what `space` does on a row of the ws

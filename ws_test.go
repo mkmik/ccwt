@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -192,13 +191,14 @@ esac
 	}
 }
 
-// The seed prompt is a "<new>" row's space in a tab: a fresh worktree of the
-// repo, a tab of this workspace sitting in it and named after it, and the
-// configured cli run in the pane the create answered with, the whole prompt as
-// one argument. The box closes only once that has happened — a herdr that
-// refuses leaves the prompt where it was typed, to try again from.
+// The seed prompt starts an agent in a tab of its own: a tab of this workspace
+// in the worktree the tui is standing in — no worktree of its own, and no label
+// on the tab — with the configured cli run in the pane the create answered
+// with, the whole prompt as one argument. The box closes only once that has
+// happened — a herdr that refuses leaves the prompt where it was typed, to try
+// again from.
 func TestWsSeedStartsAnAgentInANewTab(t *testing.T) {
-	root := initRepo(t)
+	initRepo(t)
 	dir := t.TempDir()
 	log := filepath.Join(dir, "calls")
 	refuse := filepath.Join(dir, "refuse")
@@ -219,24 +219,25 @@ esac
 	t.Setenv("HERDR_WORKSPACE_ID", "w1")
 
 	u := ui{ws: true, entry: newEntry(listRow{}, "fix Bob's bug", 0)}
-	msg := u.startSeed()
-	name, ok := strings.CutPrefix(msg, "started ")
-	if !ok {
+	if msg := u.startSeed(); msg != "started" {
 		t.Fatalf("startSeed: %s", msg)
 	}
 	if u.entry.open {
 		t.Error("the box is still up after the agent started")
 	}
-	if _, err := os.Stat(filepath.Join(root, ".claude", "worktrees", name)); err != nil {
-		t.Errorf("no worktree %s was made: %v", name, err)
+	if entries, _ := os.ReadDir(filepath.Join(".claude", "worktrees")); len(entries) != 0 {
+		t.Errorf("worktrees %v were made; the seed runs in the workspace's own", entries)
 	}
 	calls, err := os.ReadFile(log)
 	if err != nil {
 		t.Fatal(err)
 	}
-	created := regexp.MustCompile(`tab create --workspace w1 --cwd (\S+) --label (\S+) --no-focus`).FindStringSubmatch(string(calls))
-	if created == nil || filepath.Base(created[1]) != name || created[2] != name {
-		t.Errorf("herdr calls = %q, want a tab of w1 in the worktree %s, named after it", calls, name)
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "tab create --workspace w1 --cwd " + cwd + " --no-focus"; !strings.Contains(string(calls), want) {
+		t.Errorf("herdr calls = %q, want %q — a tab of w1 here, unlabelled", calls, want)
 	}
 	if !strings.Contains(string(calls), `pane run w1:p2 claude 'fix Bob'\''s bug'`) {
 		t.Errorf("herdr calls = %q, want the cli run in the pane the create named, the prompt quoted as one argument", calls)

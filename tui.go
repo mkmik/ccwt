@@ -325,10 +325,12 @@ func (c *TuiCmd) Run() error {
 				if err := act("creating…", u.newWorktree); err != nil {
 					return err
 				}
-			// `c` is `x` for when you already know you are going to run the agent
-			// there: the same new worktree, with the agent cli started in it.
+			// `c` is `x` for when you already know the worktree is going to be a
+			// workspace of agents: the same new worktree, with `ccwt ws` started
+			// in it, which is where the prompts and the tabs they run in come
+			// from.
 			case k == "c" && underHerdr() && !u.ws:
-				if err := act("creating…", u.newAgent); err != nil {
+				if err := act("creating…", u.newWorkspace); err != nil {
 					return err
 				}
 			case k == "\x1b[A", k == "k":
@@ -2325,7 +2327,7 @@ func actions(sel listRow, searching, global bool) []action {
 		queue = nil
 	}
 	if herdr {
-		as = append(as, action{"x", "new"}, action{"c", "new+agent"})
+		as = append(as, action{"x", "new"}, action{"c", "new+ws"})
 	}
 	switch {
 	case sel.worktree():
@@ -2602,16 +2604,17 @@ func (u *ui) newWorktreePath() (string, string) {
 	return path, herdrOpen(path, filepath.Base(path))
 }
 
-// newAgent is `x` with the agent already running in it: the same new worktree,
-// with task_command's cli — `claude` unless the config says otherwise — started
-// in its pane, and no prompt, since there isn't one yet. It is the command you
-// would have typed on arriving, which is every time.
+// newWorkspace is `x` with the workspace's own tui already running in it: the
+// same new worktree, with `ccwt ws` started in its first pane rather than the
+// agent itself. It is the command you would have typed on arriving, which is
+// every time — and from there `n` seeds as many agents as the work turns out to
+// want, each in a tab of its own.
 //
-// A worktree that was made but couldn't be handed the agent is still a
-// worktree, so the open's own message stands rather than an error: `c` got as
-// far as `x` gets.
-func (u *ui) newAgent() string {
-	argv, err := taskCommand()
+// A worktree that was made but couldn't be handed the tui is still a worktree,
+// so the open's own message stands rather than an error: `c` got as far as `x`
+// gets.
+func (u *ui) newWorkspace() string {
+	exe, err := os.Executable()
 	if err != nil {
 		return "new failed: " + err.Error()
 	}
@@ -2623,8 +2626,8 @@ func (u *ui) newAgent() string {
 	if pane == "" {
 		return msg
 	}
-	if out, err := exec.Command(herdrBin(), append([]string{"pane", "run", pane}, argv...)...).CombinedOutput(); err != nil {
-		return "opened, but the agent did not start: " + lastLine(out, err)
+	if out, err := exec.Command(herdrBin(), "pane", "run", pane, exe, "ws").CombinedOutput(); err != nil {
+		return "opened, but `ccwt ws` did not start: " + lastLine(out, err)
 	}
 	return msg
 }
