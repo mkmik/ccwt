@@ -133,7 +133,7 @@ func TestWsMRSectionIsOneQuietLineUntilThereIsOne(t *testing.T) {
 	}
 	// Indented into the gutter the tab table's `*` sits in, so the two sections
 	// start at the same column.
-	if !strings.HasPrefix(got[1], "  acme/…/ccwt!42") {
+	if !strings.HasPrefix(plain(got[1]), "  acme/…/ccwt!42") {
 		t.Errorf("the row = %q, want the ref in the tab table's gutter", got[1])
 	}
 	for _, want := range []string{"needs approval", "green", "ws sections"} {
@@ -141,11 +141,18 @@ func TestWsMRSectionIsOneQuietLineUntilThereIsOne(t *testing.T) {
 			t.Errorf("the row = %q, want %q on it", got[1], want)
 		}
 	}
-	// No OSC 8 link on the ref, unlike `ccwt mr`'s own terminal table: the
-	// frame cuts its lines to the terminal by counting runes, and an escape is
-	// plenty of those and no width at all.
-	if strings.Contains(strings.Join(got, ""), "\x1b") {
-		t.Errorf("mrSection = %q, want no escapes in it", got)
+	// The whole ref links to the merge request, the way `ccwt mr`'s own
+	// terminal table does it — and the gutter it is indented by stays outside
+	// the link, so what underlines is the ref and nothing else.
+	if want := "  " + hyperlink(row.url, "acme/…/ccwt!42"); !strings.HasPrefix(got[1], want) {
+		t.Errorf("the row = %q, want it to start with the link %q", got[1], want)
+	}
+	// The link costs the line no width: the frame pins these lines as they
+	// are, and one that wrapped would take the cursor arithmetic with it. So
+	// what a mouse drag counts along — and copies — is the table without it.
+	bare := mrSection(&mrLook{rows: []mrRow{{ref: row.ref, status: row.status, pipeline: row.pipeline, title: row.title}}}, 0)
+	if plain(got[1]) != bare[1] {
+		t.Errorf("the row = %q bare of escapes, %q with no link at all", plain(got[1]), bare[1])
 	}
 }
 
