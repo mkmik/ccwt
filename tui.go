@@ -102,6 +102,8 @@ func (c *TuiCmd) Run() error {
 	out := bufio.NewWriter(os.Stdout)
 	tick := time.NewTicker(c.Interval)
 	defer tick.Stop()
+	resized, stopResize := watchResize()
+	defer stopResize()
 
 	u := ui{projects: projects, sort: c.Sort, stamp: selfStamp(), ws: c.ws}
 	if c.ws {
@@ -206,6 +208,12 @@ func (c *TuiCmd) Run() error {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-resized:
+			// A resize is the one event that can leave the screen wrong without
+			// changing a character of the frame — the terminal reflows what's on
+			// it, and a window dragged out and back lands on the same text — so
+			// this repaints all of it rather than trusting the diff.
+			last = ""
 		case <-tick.C:
 			u.msg = ""
 			u.refresh() // the tick is what re-reads the list
@@ -1221,11 +1229,10 @@ func (u *ui) dropSelected() {
 // frame renders the full screen: the worktree table, padding, and a status bar
 // pinned to the bottom row.
 //
-// The frame is sized to the terminal, which is also how a resize gets noticed:
-// different size, different frame, so the ordinary diff repaints it. That's
-// cheaper than a SIGWINCH handler — and portable, since SIGWINCH doesn't exist
-// on Windows. ponytail: costs up to one --interval of staleness after a
-// resize; wire up the signal (behind a build tag) if that ever grates.
+// The frame is sized to the terminal every time, so a resize needs nothing of
+// it but to be drawn again — which watchResize asks for the moment the window
+// changes, and the interval tick asks for anyway on Windows, where there is no
+// SIGWINCH to hear.
 func (u *ui) frame() ([]string, error) {
 	cols, rows := termSize()
 
