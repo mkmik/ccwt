@@ -606,14 +606,13 @@ Herdr would otherwise list it under its repo by branch, prefix and all. Reopenin
 its name alone, so a workspace you've renamed yourself stays renamed.
 
 **A workspace's own tui: `ccwt ws`.** The tui above is the repo's view: its worktrees,
-whatever workspace each is open in. `ccwt ws` is a workspace's. Run in the first tab of one,
-it lists that workspace's tabs — the tab's label, whether Herdr sees an agent working in it,
-the directory it sits in, and what its terminal calls itself, which for an agent is its own
-one-line account of what it is doing — and `space` (or `↵`, or a double-click) goes to the
-selected tab. A `*` leads the tab the tui itself is in. The rows come in the order the tabs
-sit along the tab bar, so dragging one about in Herdr moves its row with it.
+whatever workspace each is open in. `ccwt ws` is a workspace's, in two sections: where the
+workspace's review stands, and under it the tabs working towards it.
 
 ```
+  MR              STATUS          PIPELINE            TITLE
+  acme/…/api!42   needs approval  failed: unit, lint  Wire the widget to real numbers
+
   TAB  AGENT  DIR                     TITLE
 * 1    ·      dreamy-foraging-hickey  zsh
   2    ●      dreamy-foraging-hickey  Wiring the widget to real numbers
@@ -621,6 +620,27 @@ sit along the tab bar, so dragging one about in Herdr moves its row with it.
 
  ☰  q:quit  /:search  n:agent  space:go  g:git │ started
 ```
+
+The first section is what [`ccwt mr`](#the-commands) prints for the branch the workspace is
+working on — can it go in, and did its pipeline pass — which is the question the whole
+workspace exists to get a yes to. A fresh worktree hasn't got one yet, and says so in a line
+rather than in a row of column names with nothing under it:
+
+```
+  no merge request yet
+```
+
+The lookup is a handful of GitLab round trips, so it runs in the background and is asked
+again at most once a minute: the table you're reading never waits on the network, and the row
+appears under the heading a moment after the review does.
+
+The second section is the workspace's tabs — the tab's label, whether Herdr sees an agent
+working in it, the directory it sits in, and what its terminal calls itself, which for an
+agent is its own one-line account of what it is doing — and `space` (or `↵`, or a
+double-click) goes to the selected tab. A `*` leads the tab the tui itself is in. The rows
+come in the order the tabs sit along the tab bar, so dragging one about in Herdr moves its
+row with it. They're the only rows the selection walks: the review above them is something to
+read, and it stays put while they scroll.
 
 The `AGENT` mark is Herdr's own: a circle, and the state is the colour of it —
 red blocked, yellow working, green done, grey idle, and a `·` for a tab Herdr sees no agent
@@ -648,8 +668,8 @@ one tab, so it doesn't come and go as you walk the table: it's on the bar or it 
 whichever row is selected. A tui run somewhere that isn't a worktree — the repo itself —
 never has one.
 
-This is the first stage of a longer plan — what each tab is about, and which tickets and
-reviews it touches — and `TODO.md` has the rest of it.
+This is part of a longer plan — what each tab is about, and which tickets and reviews each
+one touches — and `TODO.md` has the rest of it.
 
 **Closing workspaces on removal.** Once its checks pass, `ccwt remove` closes the workspace
 open on the worktree, ending the agent living in it — including your own, which is closed
@@ -748,7 +768,7 @@ swallow stderr, or you'll lose the cwd report.
 | `ccwt cd <name>` | `cd` into an existing worktree under `.claude/worktrees/<name>` (with shell integration) — never creates it, errors if it doesn't exist, and the name is required. `ccwt cd ..` is shorthand for `ccwt ..`, and `ccwt cd -` jumps to the previous directory (`$OLDPWD`), like the shell's `cd -`. |
 | `ccwt list` | List the repo's agent worktrees with branch, age, running-session status, and last commit, freshest first — the last commit or the last thing written to the newest agent session there, whichever is younger. `--sort=commit` orders by the commit alone, `--sort=freshness` is the default, and `sort` in the config file picks which one you get without the flag. `-g` lists every project in `$XDG_CONFIG_HOME/ccwt/config.toml` instead, a section per project. `--no-headers` leaves out the header row, for feeding the table to `cut`, `awk` or a shell loop. |
 | `ccwt tui` | The default command, so a bare `ccwt` runs it. Show the `ccwt list` table full-screen, refreshing in place without flicker, over a status bar showing how far the current branch is ahead/behind its upstream. `q` (or Ctrl-C) quits, `p` runs `git pull`. Arrow keys (or `j`/`k`) select a worktree, a click on its row selects it, dragging selects text and copies it to the clipboard, the `☰` in the bar's corner drops the bar's actions out as a clickable menu, `/` (or `?`) searches the way vim does — incrementally, case-insensitive regexp, all matches highlighted, `n`/`N` for the next and previous while a pattern is in force; `d` shows the selected worktree's column values in full in a pane over the list (`esc` closes it), `g` shows the history your own `git ll` alias prints, in a scrolling page over the list, `m` opens the branch's review in the browser, and `r` removes it, like `ccwt remove`. `l` shows the [worklog](#the-worklog) — the worktrees already removed and what they were about — in a pane of the same kind, whose rows select like the list's; `↵` (or a double-click) opens the selected removal's page, which is what the log recorded about it followed by the whole agent session that ran in it, scrolled with the arrows, `space`/`b` and `g`/`G`. `n` with no pattern in force queues a prompt behind the selected row — work to start once that worktree (or the prompt above it) is finished — typed into a box over the list and drawn as a tree under the row it waits on, kept in `$XDG_STATE_HOME/ccwt/tasks.db` and so shared with every other `ccwt` running; `e` in a queued prompt's details pane rewrites it in place — the box is a line editor, with the arrows, `home`/`end` and Ctrl-W/U/K, shift-`↵` for a line break, and Ctrl-G to finish the prompt in `$EDITOR`, as in Claude Code — `r` deletes it and everything queued behind it, and removing the worktree promotes what was queued on it to `<new>` rows — worktrees waiting to be made, which `space` makes and starts the prompt in. `n` with nothing selected queues a prompt that waits on nothing, which is a `<new>` row from the start; under `-g` that takes a project selected, its section header included. `-g` spans the configured projects as a foldable section each (`↵`, or a double-click on the header, folds one shut) and ignores the current directory entirely, every action (`p` included) applying to the selected row's project. `--interval` (default `2s`) sets the refresh rate, `--fetch` (default `1m`) how often `origin/main` is fetched in the background, and `--sort` orders the worktrees, as it does on `ccwt list`. The bar also says when the `ccwt` binary underneath it has been upgraded, and to which version. Under [Herdr](#herdr-integration-optional) `space` opens the selected worktree as a workspace (double-click does too), `x` creates one and opens it, and `c` also starts `ccwt ws`, the workspace's own tui, in it. |
-| `ccwt ws` | The tui for the first tab of a [Herdr](#herdr-integration-optional) workspace: that workspace's tabs as a table — label, agent status, directory, terminal title — with `space`/`↵` (or a double-click) going to the selected tab, `n` asking for a seed prompt that starts an agent in a tab of its own (`task_command` run with the prompt in the workspace's own worktree, the tab unnamed and opened behind the current one), `g` the history of the worktree under the tab, `r` being `ccwt done` for the workspace itself — the worktree the tui is standing in removed and the workspace closed behind it, offered only when that removal would go through (merged branch, nothing uncommitted, no agent still working there), and so on the bar or not whichever row is selected — and `/` searching as in the tui. Opens on the prompt when the workspace has no other tab. `--interval` (default `2s`) sets the refresh rate. Refuses to run outside Herdr. |
+| `ccwt ws` | The tui for the first tab of a [Herdr](#herdr-integration-optional) workspace, in two sections. First the workspace's own review, as `ccwt mr` prints it for the branch the tui is standing on — one line saying there isn't one while the branch has none, and looked up in the background (at most once a minute) so the table never waits on GitLab. Then that workspace's tabs as a table — label, agent status, directory, terminal title — with `space`/`↵` (or a double-click) going to the selected tab, `n` asking for a seed prompt that starts an agent in a tab of its own (`task_command` run with the prompt in the workspace's own worktree, the tab unnamed and opened behind the current one), `g` the history of the worktree under the tab, `r` being `ccwt done` for the workspace itself — the worktree the tui is standing in removed and the workspace closed behind it, offered only when that removal would go through (merged branch, nothing uncommitted, no agent still working there), and so on the bar or not whichever row is selected — and `/` searching as in the tui. Opens on the prompt when the workspace has no other tab. `--interval` (default `2s`) sets the refresh rate. Refuses to run outside Herdr. |
 | `ccwt remove <name>` | Remove the worktree at `.claude/worktrees/<name>` and delete its branch. `.` means the worktree you're currently in; removing the one you're in cds you to the repo root, like `ccwt ..`. The branch is deleted only if merged: an unmerged branch refuses the whole removal, worktree included, so nothing is stranded, and so does a worktree with uncommitted changes, and so does one with an agent working in it (the `✳` of `ccwt list`). Pass `-D` to remove anyway (unmerged branch deleted, uncommitted changes thrown away, working agent interrupted), or `--keep-branch` to remove only the worktree. Under [Herdr](#herdr-integration-optional) the worktree's workspace is closed too, once those checks pass — your own one last, after the removal, with focus handed to the repo's own workspace first if yours is the workspace on screen — and a terminal is asked before that happens (`-y`/`--yes` skips the question). |
 | `ccwt done` | Finish with the worktree you're in: `ccwt remove . -y` — the removal, and then, under [Herdr](#herdr-integration-optional), closing the workspace you're sitting in, without asking (closing it is what "done" means). Same checks and same flags (`-D`, `--keep-branch`); a refusal leaves the workspace open. Outside Herdr it's just `ccwt remove .`. |
 | `ccwt gc` | Remove every worktree that's finished with: branch already merged (the `✓` of `ccwt list`), nothing uncommitted in it (no `*`), no agent working in it (no `✳`) and no agent session running in it (a `no` in the `AGENT` column). Prints the list it found and asks before touching anything — `-y`/`--yes` skips the question. Each removal is exactly what `ccwt remove <name>` does, branch included. The worktree you're standing in is never removed — it says so on stderr and leaves it to `ccwt remove .`. |

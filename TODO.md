@@ -21,6 +21,7 @@ stages; tick things off as they land.
   - [ ] `d` details pane for a tab — `detailPane` takes its labels from the worktree table today, so the ws view leaves `cells` nil
 - [ ] 3. Tickets and MRs
   - [ ] the ticket a tab is on: Jira keys in its prompt, branch or commits (`/jira`-style lookups, not curl)
+  - [x] the workspace's own review, as `ccwt mr` prints it, in a section above the tab table — one quiet line while the branch has no merge request yet (`mrSection`), looked up in the background so the frame never waits on gitlab
   - [ ] the review its branch has: `glab`/`gh`, as `m` finds it for a worktree; `m` on a tab opens it
   - [ ] columns for both, and their state (open, approved, merged) in the table
 - [ ] 4. Later, if it earns its keep

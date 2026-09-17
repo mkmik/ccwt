@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"cmp"
 	"encoding/json"
 	"errors"
@@ -15,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"text/tabwriter"
 	"time"
 
 	"golang.org/x/term"
@@ -503,6 +501,31 @@ func mrTable(subject string, rows []mrRow, width int) []string {
 	if len(rows) == 0 {
 		return []string{"no merge requests mention " + subject}
 	}
+	table, cols := mrCells(rows)
+	if !stdoutIsTTY() {
+		return mrMarkdown(table, rows)
+	}
+	fitTable(table, width, cols)
+	lines := tabbed(table)
+
+	// The MR column is the link to the merge request, so the table you read
+	// the answer off is also the way to go and look at it. The sequence goes
+	// on last, once the columns are padded: it takes no room on screen, but
+	// both fitTable and the tabwriter measure cells in characters and would
+	// lay the table out around it.
+	for i, r := range rows {
+		if rest, ok := strings.CutPrefix(lines[i+1], table[i+1][0]); ok {
+			lines[i+1] = hyperlink(r.url, table[i+1][0]) + rest
+		}
+	}
+	return lines
+}
+
+// mrCells is the merge requests as a table: the header and a row each, and
+// alongside it how wide each column may get and how it is to be shortened when
+// it can't have that. The ws view lays the same cells out in its first section
+// (see wsMR), so the two tables say a merge request the same way.
+func mrCells(rows []mrRow) ([][]string, []column) {
 	// TITLE goes last: it is the longest of them and the one that reads
 	// fine cut short, so it takes the shortening — and the answers you came
 	// for keep their place on the left however long it is.
@@ -530,30 +553,7 @@ func mrTable(subject string, rows []mrRow, width int) []string {
 			table[i] = slices.Delete(row, pipelineCol, pipelineCol+1)
 		}
 	}
-	if !stdoutIsTTY() {
-		return mrMarkdown(table, rows)
-	}
-	fitTable(table, width, cols)
-
-	var buf bytes.Buffer
-	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
-	for _, r := range table {
-		fmt.Fprintln(w, strings.Join(r, "\t"))
-	}
-	w.Flush()
-	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-
-	// The MR column is the link to the merge request, so the table you read
-	// the answer off is also the way to go and look at it. The sequence goes
-	// on last, once the columns are padded: it takes no room on screen, but
-	// both fitTable and the tabwriter measure cells in characters and would
-	// lay the table out around it.
-	for i, r := range rows {
-		if rest, ok := strings.CutPrefix(lines[i+1], table[i+1][0]); ok {
-			lines[i+1] = hyperlink(r.url, table[i+1][0]) + rest
-		}
-	}
-	return lines
+	return table, cols
 }
 
 // mrMarkdown is the same table written as markdown, which is what comes out

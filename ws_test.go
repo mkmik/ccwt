@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -36,21 +37,26 @@ esac
 	t.Setenv("HERDR_WORKSPACE_ID", "w1")
 	t.Setenv("HERDR_TAB_ID", "w1:t1")
 
+	noMR(t)
+
 	lines, rows := wsTable(0)
-	if len(lines) != 3 || !strings.HasPrefix(lines[0], "  TAB") {
-		t.Fatalf("wsTable = %q, want a header and two tabs", lines)
+	// The tabs are the rows; everything above them — the merge request section
+	// and the blank line dividing the two — is what the frame pins (u.head).
+	head := len(lines) - len(rows)
+	if head != 3 || lines[1] != "" || !strings.HasPrefix(lines[2], "  TAB") {
+		t.Fatalf("wsTable = %q, want the merge request, a blank line and a header above two tabs", lines)
 	}
 	for i, want := range []struct{ prefix, has, hasNot string }{
 		{"  calm-baking-otter ", "Waiting on your review", "a split"}, // moved in front of ours: the first pane speaks for the tab
 		{"* 1 ", "ccwt", "unknown"},                                   // ours, a bare shell: no agent to speak of
 	} {
-		l := lines[i+1]
+		l := lines[i+head]
 		if !strings.HasPrefix(l, want.prefix) || !strings.Contains(l, want.has) || strings.Contains(l, want.hasNot) {
-			t.Errorf("line %d = %q, want %q… with %q and without %q", i+1, l, want.prefix, want.has, want.hasNot)
+			t.Errorf("line %d = %q, want %q… with %q and without %q", i+head, l, want.prefix, want.has, want.hasNot)
 		}
 	}
-	if !strings.Contains(lines[1], "○") || !strings.Contains(lines[2], "·") {
-		t.Errorf("lines = %q, want an idle dot and a no-agent dot on them", lines[1:])
+	if !strings.Contains(lines[head], "○") || !strings.Contains(lines[head+1], "·") {
+		t.Errorf("lines = %q, want an idle dot and a no-agent dot on them", lines[head:])
 	}
 	// The dot is a stand-in until the frame paints it, and the colour has to
 	// hand the row back to whatever it was sitting on — the selection band here.
@@ -76,6 +82,134 @@ esac
 	}
 	if bar := keyBar(200, "", "", wsActions(listRow{}, false)); strings.Contains(bar, "space:go") {
 		t.Errorf("bar with nothing selected = %q, want nothing to go to", bar)
+	}
+}
+
+// noMR pins the ws view's first section to "there isn't one yet", so that a
+// test about the tabs underneath doesn't send a real glab out to a real gitlab
+// for the section above them.
+func noMR(t *testing.T) {
+	t.Helper()
+	wsMRLook.Lock()
+	defer wsMRLook.Unlock()
+	wsMRLook.stamp, wsMRLook.look, wsMRLook.running = window(mrWindow), &mrLook{}, false
+	t.Cleanup(func() {
+		wsMRLook.Lock()
+		defer wsMRLook.Unlock()
+		wsMRLook.stamp, wsMRLook.look = "", nil
+	})
+}
+
+// The ws view's first section is where the workspace's merge request stands,
+// in the columns `ccwt mr` prints it in. Most of a workspace's life there isn't
+// one — the branch is fresh, nothing is pushed — and that has to read as one
+// quiet line rather than as a row of column names with nothing under them, or
+// as whatever glab said about not finding one.
+func TestWsMRSectionIsOneQuietLineUntilThereIsOne(t *testing.T) {
+	for _, tc := range []struct {
+		what string
+		look *mrLook
+	}{
+		{"the first lookup still out", nil},
+		{"a branch with no merge request", &mrLook{}},
+		{"a lookup that failed", &mrLook{err: errors.New("glab api: no\nsuch host")}},
+	} {
+		got := mrSection(tc.look, 0)
+		if len(got) != 1 || strings.Contains(got[0], "MR") || strings.Contains(got[0], "\n") {
+			t.Errorf("%s: %q, want one line, no column names and no paragraph", tc.what, got)
+		}
+		// Pinned lines are the ones the frame doesn't trim, so they arrive
+		// already inside the terminal: one that wrapped would push the frame
+		// down a line and take the cursor arithmetic with it.
+		if got := mrSection(tc.look, 20); len([]rune(got[0])) > 20 {
+			t.Errorf("%s at width 20: %q, want it cut to fit", tc.what, got[0])
+		}
+	}
+
+	row := mrRow{ref: "acme/…/ccwt!42", url: "https://gl/acme/ccwt/-/merge_requests/42", status: "needs approval", pipeline: "green", title: "ws sections"}
+	got := mrSection(&mrLook{rows: []mrRow{row}}, 0)
+	if len(got) != 2 || !strings.HasPrefix(got[0], "  MR") {
+		t.Fatalf("mrSection = %q, want the header and the one row", got)
+	}
+	// Indented into the gutter the tab table's `*` sits in, so the two sections
+	// start at the same column.
+	if !strings.HasPrefix(got[1], "  acme/…/ccwt!42") {
+		t.Errorf("the row = %q, want the ref in the tab table's gutter", got[1])
+	}
+	for _, want := range []string{"needs approval", "green", "ws sections"} {
+		if !strings.Contains(got[1], want) {
+			t.Errorf("the row = %q, want %q on it", got[1], want)
+		}
+	}
+	// No OSC 8 link on the ref, unlike `ccwt mr`'s own terminal table: the
+	// frame cuts its lines to the terminal by counting runes, and an escape is
+	// plenty of those and no width at all.
+	if strings.Contains(strings.Join(got, ""), "\x1b") {
+		t.Errorf("mrSection = %q, want no escapes in it", got)
+	}
+}
+
+// The ws view's two sections mean the frame pins more than one line: the merge
+// request, the blank line under it and the tab table's own header all stay put
+// while the tabs scroll underneath, and a click still lands on the tab it was
+// aimed at however many lines are pinned above it.
+func TestWsFramePinsTheMergeRequestAboveTheTabs(t *testing.T) {
+	dir := t.TempDir()
+	herdr := filepath.Join(dir, "herdr")
+	script := `#!/bin/sh
+case "$1 $2" in
+"tab list") printf '%s' '{"result":{"tabs":[{"tab_id":"w1:t1","label":"one"},{"tab_id":"w1:t2","label":"two"},{"tab_id":"w1:t3","label":"three"}]}}' ;;
+"pane list") printf '%s' '{"result":{"panes":[{"tab_id":"w1:t1","cwd":"/src/a"},{"tab_id":"w1:t2","cwd":"/src/b"},{"tab_id":"w1:t3","cwd":"/src/c"}]}}' ;;
+esac
+`
+	if err := os.WriteFile(herdr, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_BIN_PATH", herdr)
+	t.Setenv("HERDR_WORKSPACE_ID", "w1")
+	noMR(t)
+
+	// Six lines: three pinned, two tabs, the bar. The third tab only exists once
+	// the frame scrolls to it — which is the whole point of counting the pinned
+	// ones, since they are what left room for two rather than three.
+	defer func(old func() (int, int)) { termSize = old }(termSize)
+	termSize = func() (int, int) { return 80, 6 }
+
+	u := ui{ws: true}
+	lines, err := u.frame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.head != 3 || len(u.rows) != 3 {
+		t.Fatalf("head %d over %d rows, want 3 pinned lines over the three tabs", u.head, len(u.rows))
+	}
+	if !strings.HasPrefix(lines[2], "  TAB") || !strings.Contains(lines[3], "one") {
+		t.Fatalf("frame = %q, want the tab header pinned third and the first tab under it", lines)
+	}
+
+	// Walk to the bottom tab: it is below the fold, so the frame scrolls — and
+	// the pinned lines don't move with it.
+	for range 3 {
+		u.move(1)
+	}
+	if lines, err = u.frame(); err != nil {
+		t.Fatal(err)
+	}
+	if u.top != 1 {
+		t.Errorf("frame scrolled to row %d, want 1 — just far enough to show the selection", u.top)
+	}
+	if !strings.HasPrefix(lines[2], "  TAB") || !strings.Contains(lines[4], "three") {
+		t.Errorf("scrolled frame = %q, want the header still pinned and the last tab on screen", lines)
+	}
+	// A click counts screen lines, so it has to count them past the pinned ones.
+	if got := u.at(5); got != u.rows[2] {
+		t.Errorf("clicking the last tab line selected %q, want %q", got.tab, u.rows[2].tab)
+	}
+	for _, n := range []int{1, 2, 3} { // the merge request, the blank, the header
+		if got := u.at(n); got != (listRow{}) {
+			t.Errorf("clicking pinned line %d selected %q, want nothing", n, got.tab)
+		}
 	}
 }
 
@@ -133,6 +267,7 @@ esac
 	}
 
 	t.Chdir(done)
+	noMR(t)
 	_, rows := wsTable(0)
 	if len(rows) != 2 {
 		t.Fatalf("rows = %v, want the two tabs", rows)

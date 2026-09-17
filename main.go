@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"cmp"
 	"encoding/json"
 	"errors"
@@ -1261,6 +1262,20 @@ func fitTable(table [][]string, width int, columns []column) {
 			}
 		}
 	}
+}
+
+// tabbed is a fitted table as lines: two spaces between the columns, and no
+// trailing blank one. fitTable decides the widths, this prints them, and every
+// table here is built out of the pair — the list's, `ccwt mr`'s, and both
+// sections of the ws view's.
+func tabbed(table [][]string) []string {
+	var buf bytes.Buffer
+	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
+	for _, row := range table {
+		fmt.Fprintln(w, strings.Join(row, "\t"))
+	}
+	w.Flush()
+	return strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
 }
 
 // claudeCwds returns the set of working directories of currently-running
