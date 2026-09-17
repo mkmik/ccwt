@@ -229,6 +229,14 @@ func (c *TuiCmd) Run() error {
 			case k == "": // the menu dealt with it itself
 			// While either prompt is up every keystroke is text, so these come
 			// first: `q` there is a letter, not the quit key.
+			// The model box sits over the seed prompt, so it takes the keys
+			// first. Ctrl-O and Alt-M open it, and not the ctrl-m a model is
+			// worth naming it after: a terminal sends that as ↵, which is the
+			// key that starts the agent.
+			case u.model.open:
+				u.askModel(k)
+			case u.entry.open && u.ws && (k == "\x0f" || k == "\x1bm"):
+				u.model = newEntry(listRow{}, u.modelName, 0)
 			case u.entry.open && k == "\x07": // Ctrl-G: finish the prompt in $EDITOR
 				external()
 			// The seed prompt starts its agent rather than queueing: a worktree,
@@ -527,6 +535,12 @@ type ui struct {
 	ws bool
 
 	entry entry // the queue prompt, when it's up
+
+	// The seed prompt's --model: the box it is typed into, when it's up, and
+	// the name it last set. Two fields rather than one because the box opens on
+	// the name already in force — esc has to be able to put it back.
+	model     entry
+	modelName string
 
 	// What the binary on disk looked like when this tui started, and the notice
 	// that goes in the bar once it stops looking like that — see checkUpgrade.
@@ -1366,6 +1380,14 @@ func (u *ui) frame() ([]string, error) {
 	// A search goes in the bar because it acts on the list as you type it; this
 	// doesn't act on anything until it's finished, and it's a sentence rather
 	// than a pattern, so it gets the room to be read back.
+	if u.model.open {
+		for i, l := range entryPane(u.model.text, u.model.cur, "model", cols, body) {
+			if l != "" && i < body {
+				lines[i] = l
+			}
+		}
+		return append(lines[:body], highlight(" ↵:set  esc:cancel ", cols)), nil
+	}
 	if u.entry.open {
 		for i, l := range entryPane(u.entry.text, u.entry.cur, u.entryTitle(), cols, body) {
 			if l != "" && i < body {
@@ -1377,7 +1399,7 @@ func (u *ui) frame() ([]string, error) {
 			keys = " ↵:save  ctrl-g:$EDITOR  esc:cancel "
 		}
 		if u.ws {
-			keys = " ↵:start  ctrl-g:$EDITOR  esc:cancel "
+			keys = " ↵:start  ctrl-o:model  ctrl-g:$EDITOR  esc:cancel "
 		}
 		// The bar is the only line left to say why the editor didn't open.
 		return append(lines[:body], highlight(keys+u.msg, cols)), nil
@@ -1429,6 +1451,8 @@ func (u *ui) entryTitle() string {
 	switch {
 	case u.entry.id != 0:
 		return "edit" // rewriting one, not queueing behind it
+	case u.ws && u.modelName != "":
+		return "new agent (" + u.modelName + ")" // the model ctrl-o set
 	case u.ws:
 		return "new agent" // the seed prompt: it becomes a tab, not a row
 	case u.entry.parent.path == "" && u.entry.parent.task == 0:
