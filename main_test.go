@@ -833,19 +833,23 @@ func TestGitDivergence(t *testing.T) {
 	}
 }
 
-// A remote is written three different ways, and which cli `g` reaches for
-// hangs on getting the host out of all of them.
+// A remote is written three different ways, and both halves of it are read
+// out of all three: the host is which cli `g` reaches for, and the path is
+// which project `ccwt mr` asks about the branch.
 func TestURLHost(t *testing.T) {
-	for _, tc := range []struct{ url, want string }{
-		{"https://github.com/mkmik/ccwt.git", "github.com"},
-		{"git@github.com:mkmik/ccwt.git", "github.com"},
-		{"ssh://git@code.example.com:2222/group/sub/repo", "code.example.com"},
-		{"https://user:token@code.example.com/group/repo.git", "code.example.com"},
-		{"/srv/git/repo.git", ""}, // a local remote is nobody's review host
-		{"", ""},                  // no remote at all
+	for _, tc := range []struct{ url, want, path string }{
+		{"https://github.com/mkmik/ccwt.git", "github.com", "mkmik/ccwt"},
+		{"git@github.com:mkmik/ccwt.git", "github.com", "mkmik/ccwt"},
+		{"ssh://git@code.example.com:2222/group/sub/repo", "code.example.com", "group/sub/repo"},
+		{"https://user:token@code.example.com/group/repo.git", "code.example.com", "group/repo"},
+		{"/srv/git/repo.git", "", ""}, // a local remote is nobody's review host
+		{"", "", ""},                  // no remote at all
 	} {
 		if got := urlHost(tc.url); got != tc.want {
 			t.Errorf("urlHost(%q) = %q, want %q", tc.url, got, tc.want)
+		}
+		if got := urlPath(tc.url); got != tc.path {
+			t.Errorf("urlPath(%q) = %q, want %q", tc.url, got, tc.path)
 		}
 	}
 }
