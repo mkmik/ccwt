@@ -614,13 +614,18 @@ selected tab. A `*` leads the tab the tui itself is in. The rows come in the ord
 sit along the tab bar, so dragging one about in Herdr moves its row with it.
 
 ```
-  TAB    AGENT    DIR                     TITLE
-* 1               dreamy-foraging-hickey  zsh
-  2      working  dreamy-foraging-hickey  Wiring the widget to real numbers
-  3      idle     dreamy-foraging-hickey  Waiting on your review
+  TAB  AGENT  DIR                     TITLE
+* 1    ·      dreamy-foraging-hickey  zsh
+  2    ●      dreamy-foraging-hickey  Wiring the widget to real numbers
+  3    ○      dreamy-foraging-hickey  Waiting on your review
 
  ☰  q:quit  /:search  n:agent  space:go  g:git │ started
 ```
+
+The `AGENT` mark is Herdr's own: a circle, and the state is the colour of it —
+red blocked, yellow working, green done, grey idle, and a `·` for a tab Herdr sees no agent
+in at all. Herdr draws the three busy states as the same circle too, so a workspace reads the
+same in the tab bar and in the table below it.
 
 `n` opens the same box the [queue](#queued-prompts) types into, and what goes in it is a seed
 prompt: `↵` opens a tab of the workspace in the workspace's own worktree — the one the tui is

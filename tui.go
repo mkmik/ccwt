@@ -1316,6 +1316,9 @@ func (u *ui) frame() ([]string, error) {
 			bg = rowBar
 		}
 		lines[i+1] = draw(line, cols, re, bg)
+		if u.ws {
+			lines[i+1] = paintDots(lines[i+1], bg)
+		}
 	}
 
 	for len(lines) < body {
@@ -1957,6 +1960,28 @@ var termSize = func() (cols, rows int) {
 // moves under the arrows. ponytail: truecolor, no 256-color fallback — every
 // terminal worth running a TUI in has had it for a decade.
 const rowBar = "\x1b[48;2;44;100;118m\x1b[38;2;251;241;199m"
+
+// paintDots colours the ws view's agent marks. herdr draws blocked, working
+// and done as the same ● and tells them apart by colour alone, so wsDot leaves
+// a colourless stand-in in the table and the colour goes on here — after the
+// cut and the match highlighting, since an escape is no width and the search
+// reads the text underneath. bg is what the row is sitting on, the selection
+// band or nothing, and is what each dot hands back to the rest of the line.
+//
+// ponytail: the whole line, not the AGENT column — the column's offset stops
+// being a rune count once draw has picked out the matches. A ✓ in an agent's
+// terminal title comes out a green dot; take the cell apart if that shows up.
+func paintDots(line, bg string) string {
+	off := cmp.Or(bg, "\x1b[0m")
+	// gruvbox bright, to sit with the selection band: red, yellow, green, grey.
+	return strings.NewReplacer(
+		"×", "\x1b[38;2;251;73;52m●"+off,
+		"◐", "\x1b[38;2;250;189;47m●"+off,
+		"✓", "\x1b[38;2;184;187;38m●"+off,
+		"○", "\x1b[38;2;168;153;132m○"+off,
+		"·", "\x1b[38;2;124;111;100m·"+off,
+	).Replace(line)
+}
 
 // draw is one line as it goes on the screen: cut to the terminal width, every
 // match of re picked out, and — when bar is set — laid on that background edge
