@@ -35,7 +35,8 @@ import (
 // comment is the difference, and it is missed. Ask Jira for its remote links
 // when that starts costing something.
 type MrCmd struct {
-	Thing string `arg:"" optional:"" help:"A merge request url, a Jira issue url, or a Jira key (PROJ-1234). \"-\" reads a list of those from stdin, one per line; left out, it's the merge request of the branch you're on."`
+	Thing              string `arg:"" optional:"" help:"A merge request url, a Jira issue url, or a Jira key (PROJ-1234). \"-\" reads a list of those from stdin, one per line; left out, it's the merge request of the branch you're on."`
+	GitlabEnvironments bool   `default:"true" negatable:"" help:"Ask GitLab what its environments are running, for the ENV column. Off (--no-gitlab-environments), ENV says \"??\" and the deployment lookups — a handful of round trips per merge request — don't go out."`
 }
 
 // mrURL is a merge request url: host, project path, iid. Gitlab's "/-/" is
@@ -81,7 +82,7 @@ func (c *MrCmd) look() ([]mrRow, string, error) {
 	var wg sync.WaitGroup
 	for i, thing := range things {
 		wg.Go(func() {
-			found[i], errs[i] = lookThing(thing)
+			found[i], errs[i] = lookThing(thing, c.GitlabEnvironments)
 		})
 	}
 	wg.Wait()
@@ -128,8 +129,10 @@ func (c *MrCmd) things() ([]string, error) {
 }
 
 // lookThing is the merge requests one argument comes to: the single one its
-// url points at, or every one that mentions the ticket it is.
-func lookThing(thing string) ([]mrRow, error) {
+// url points at, or every one that mentions the ticket it is. askEnvs is
+// --gitlab-environments: false and the ENV column is "??" rather than an
+// answer, with nothing asked to fill it.
+func lookThing(thing string, askEnvs bool) ([]mrRow, error) {
 	if m := mrURL.FindStringSubmatch(thing); m != nil {
 		iid, _ := strconv.Atoi(m[3])
 		host, project := m[1], url.PathEscape(m[2])
@@ -139,7 +142,7 @@ func lookThing(thing string) ([]mrRow, error) {
 		var envs []env
 		var wg sync.WaitGroup
 		wg.Go(func() {
-			envs = environments(host, project)
+			envs = environments(host, project, askEnvs)
 		})
 		got, err := fetchMR(host, project, iid)
 		wg.Wait()
@@ -148,10 +151,10 @@ func lookThing(thing string) ([]mrRow, error) {
 		}
 		// One of these two asks anything: a merge request that has landed
 		// reports no pipeline, and one that hasn't is running nowhere.
-		return []mrRow{got.row(pipelineNote(host, got), deployedTo(host, project, got, envs))}, nil
+		return []mrRow{got.row(pipelineNote(host, got), deployedTo(host, project, got, envs, askEnvs))}, nil
 	}
 	if key := ticketKey.FindString(thing); key != "" {
-		return ticketMRs(key)
+		return ticketMRs(key, askEnvs)
 	}
 	return nil, fmt.Errorf("%q is neither a merge request url nor a jira issue", thing)
 }
@@ -254,7 +257,7 @@ func fetchMR(host, project string, iid int) (mr, error) {
 // iid last, each looked up in full so its pipeline comes with it. The lookups
 // go out together: a handful of round trips one after another is most of the
 // wait, and there is nothing to order them by.
-func ticketMRs(key string) ([]mrRow, error) {
+func ticketMRs(key string, askEnvs bool) ([]mrRow, error) {
 	var hits []mr
 	if err := glabAPI("", "search?scope=merge_requests&search="+url.QueryEscape(key), &hits); err != nil {
 		return nil, err
@@ -281,7 +284,7 @@ func ticketMRs(key string) ([]mrRow, error) {
 	var wg sync.WaitGroup
 	for i, p := range projects {
 		wg.Go(func() {
-			envs[i] = environments("", strconv.Itoa(p))
+			envs[i] = environments("", strconv.Itoa(p), askEnvs)
 		})
 	}
 	for i, h := range hits {
@@ -305,7 +308,7 @@ func ticketMRs(key string) ([]mrRow, error) {
 	for i, m := range full {
 		wg.Go(func() {
 			project := strconv.Itoa(hits[i].ProjectID)
-			rows[i] = m.row(pipelineNote("", m), deployedTo("", project, m, envs[slices.Index(projects, hits[i].ProjectID)]))
+			rows[i] = m.row(pipelineNote("", m), deployedTo("", project, m, envs[slices.Index(projects, hits[i].ProjectID)], askEnvs))
 		})
 	}
 	wg.Wait()
@@ -331,8 +334,12 @@ type env struct{ name, sha string }
 // project deploys often enough for it to matter.
 //
 // A lookup that fails is an empty column rather than an error: nobody asked
-// about environments, they asked about a merge request.
-func environments(host, project string) []env {
+// about environments, they asked about a merge request. ask is false when
+// --gitlab-environments is off, and then nothing is asked at all.
+func environments(host, project string, ask bool) []env {
+	if !ask {
+		return nil
+	}
 	var deployed []struct {
 		SHA         string `json:"sha"`
 		Environment struct {
@@ -363,7 +370,14 @@ func environments(host, project string) []env {
 // The commit is the squashed one where there is one, since that is what a
 // squash-merging project puts on the target branch, and the merge commit
 // otherwise.
-func deployedTo(host, project string, m mr, envs []env) string {
+//
+// With --gitlab-environments off the column is "??" rather than empty: an
+// empty cell says the merge request is running nowhere, and not having asked
+// is a different thing to say.
+func deployedTo(host, project string, m mr, envs []env, ask bool) string {
+	if !ask {
+		return "??"
+	}
 	sha := cmp.Or(m.SquashSHA, m.MergeSHA)
 	if m.State != "merged" || sha == "" || len(envs) == 0 {
 		return ""

@@ -205,7 +205,7 @@ func branchLook() *mrLook {
 	if err != nil {
 		return &mrLook{}
 	}
-	rows, err := lookThing(u)
+	rows, err := lookThing(u, true)
 	return &mrLook{rows, err}
 }
 

@@ -113,9 +113,22 @@ func TestMrNotMergedIsOnNoEnvironment(t *testing.T) {
 	} {
 		// None of these asks gitlab anything, which is the point: an answer
 		// that is "none" whatever is deployed is not a question.
-		if got := deployedTo("", "1", tc.m, tc.envs); got != "" {
+		if got := deployedTo("", "1", tc.m, tc.envs, true); got != "" {
 			t.Errorf("deployedTo of one that %s = %q, want nothing", tc.why, got)
 		}
+	}
+}
+
+// --no-gitlab-environments doesn't leave the column empty: empty is "running
+// nowhere", and not having looked is a different answer. Nothing is asked to
+// arrive at it, which is the point of turning it off.
+func TestMrEnvironmentsOffSaysUnknown(t *testing.T) {
+	m := mr{State: "merged", SquashSHA: "56cb2be"}
+	if got := deployedTo("", "1", m, []env{{"staging", "5ee7ab1"}}, false); got != "??" {
+		t.Errorf("deployedTo with environments off = %q, want %q", got, "??")
+	}
+	if got := environments("", "1", false); got != nil {
+		t.Errorf("environments with them off = %v, want none asked for", got)
 	}
 }
 
