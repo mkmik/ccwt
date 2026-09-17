@@ -931,6 +931,19 @@ func TestStatusBarIsExactlyOneLineWide(t *testing.T) {
 	}
 }
 
+// The version sits in the bar's far corner when the line leaves room for it,
+// and is dropped rather than pushing the keys off a narrow one.
+func TestStatusBarEndsWithTheVersion(t *testing.T) {
+	bar := statusBar(200, "", listRow{path: "some-worktree"}, "", false, false)
+	bar = strings.TrimSuffix(strings.TrimPrefix(bar, "\x1b[7m"), "\x1b[0m")
+	if want := getVersion() + " "; !strings.HasSuffix(bar, want) {
+		t.Errorf("statusBar(200) ends %q, want it to end with the version %q", bar[max(len(bar)-20, 0):], want)
+	}
+	if narrow := statusBar(20, "", listRow{path: "some-worktree"}, "", false, false); strings.Contains(narrow, getVersion()) {
+		t.Errorf("statusBar(20) = %q, want no version on a bar with no room for it", narrow)
+	}
+}
+
 // The keys that call herdr only work inside a herdr pane, so outside one the
 // bar must not advertise them — while the keys that don't need herdr stay.
 func TestStatusBarShowsHerdrActionsOnlyUnderHerdr(t *testing.T) {

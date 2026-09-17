@@ -2316,7 +2316,12 @@ func statusBar(cols int, msg string, sel listRow, div string, searching, global 
 }
 
 // keyBar is the bar itself: the hamburger, the keys in force, and then what
-// there is to say — the message, or the branch's drift when there is none.
+// there is to say — the message, or the branch's drift when there is none —
+// with the version of the binary drawing it in the far corner, where it names
+// what you're looking at without taking room from anything that changes.
+//
+// The version only goes on when the rest of the line leaves room for it: on a
+// narrow terminal the keys are what the bar is read for.
 func keyBar(cols int, msg, div string, as []action) string {
 	keys := hamburger
 	for _, a := range as {
@@ -2325,7 +2330,12 @@ func keyBar(cols int, msg, div string, as []action) string {
 	if msg == "" {
 		msg = div
 	}
-	return highlight(keys+" │ "+msg+" ", cols)
+	line := keys + " │ " + msg + " "
+	v := getVersion() + " "
+	if gap := cols - len([]rune(line)) - len([]rune(v)); gap >= 0 {
+		line += strings.Repeat(" ", gap) + v
+	}
+	return highlight(line, cols)
 }
 
 // hamburger is the bar's left corner: the menu that lists the same actions the
