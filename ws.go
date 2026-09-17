@@ -233,6 +233,25 @@ func (u *ui) startSeed() string {
 	return "started"
 }
 
+// askModel feeds one keystroke to the model box: enter takes what's typed as
+// the --model the seed prompt's agent runs on, escape leaves the one already in
+// force alone, and the rest is the same line editor the prompt uses.
+//
+// An empty box accepted is how a model is taken back off: the agent runs on the
+// harness's default again, which is what it did before anyone pressed ctrl-o.
+// The name is not checked against anything — the harness knows its own models,
+// and a ccwt that kept a list of them would be wrong by the next release.
+func (u *ui) askModel(k string) {
+	switch k {
+	case "\r":
+		u.modelName, u.model = strings.TrimSpace(u.model.text), entry{}
+	case "\x1b", "\x03":
+		u.model = entry{}
+	default:
+		u.model.text, u.model.cur = lineEdit(u.model.text, u.model.cur, k)
+	}
+}
+
 // seed starts an agent on prompt in a tab of its own: a tab of this workspace
 // in the directory the tui is standing in, with task_command's cli run there on
 // the prompt.
@@ -243,12 +262,19 @@ func (u *ui) startSeed() string {
 // would be the same name every time, and herdr names an unlabelled tab after
 // what runs in it, which is the agent saying what it is doing.
 //
+// The model is whatever ctrl-o last set, appended as a flag rather than woven
+// into task_command: the command is the config's, the same for every agent, and
+// the model is this one's.
+//
 // The pane comes out of the create's own answer: with every tab in the one
 // directory, there is nothing else that tells the new pane from the tui's own.
 func (u *ui) seed(prompt string) error {
 	argv, err := taskCommand()
 	if err != nil {
 		return err
+	}
+	if u.modelName != "" {
+		argv = append(argv, "--model", shellQuote(u.modelName))
 	}
 	cwd, err := os.Getwd()
 	if err != nil {

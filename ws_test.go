@@ -253,3 +253,74 @@ esac
 		t.Errorf("after a refusal: %q, box open %v, text %q; want herdr's reason and the prompt kept", msg, u.entry.open, u.entry.text)
 	}
 }
+
+// Ctrl-O over the seed prompt names the model the agent is to run on, and the
+// name goes to the harness as --model. The box opens on the name already in
+// force, so escaping out of a look at it must leave that name alone, and an
+// empty box accepted takes the flag back off.
+func TestWsSeedRunsOnTheModelTheBoxNames(t *testing.T) {
+	initRepo(t)
+	dir := t.TempDir()
+	log := filepath.Join(dir, "calls")
+	herdr := filepath.Join(dir, "herdr")
+	script := fmt.Sprintf(`#!/bin/sh
+echo "$@" >> %[1]q
+case "$1 $2" in
+"tab create") printf '%%s' '{"result":{"root_pane":{"pane_id":"w1:p2"}}}' ;;
+esac
+`, log)
+	if err := os.WriteFile(herdr, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_BIN_PATH", herdr)
+	t.Setenv("HERDR_WORKSPACE_ID", "w1")
+
+	u := ui{ws: true, entry: newEntry(listRow{}, "fix Bob's bug", 0)}
+	u.model = newEntry(listRow{}, u.modelName, 0)
+	for _, k := range strings.Split("claude-opus-5", "") {
+		u.askModel(k)
+	}
+	u.askModel("\r")
+	if u.modelName != "claude-opus-5" || u.model.open {
+		t.Fatalf("after ↵: model %q, box open %v; want the typed name and the box shut", u.modelName, u.model.open)
+	}
+	if title := u.entryTitle(); !strings.Contains(title, "claude-opus-5") {
+		t.Errorf("the prompt's title = %q, want the model in force on it", title)
+	}
+
+	// A look at it, backed out of: the name stands.
+	u.model = newEntry(listRow{}, u.modelName, 0)
+	u.askModel("\x7f")
+	u.askModel("\x1b")
+	if u.modelName != "claude-opus-5" {
+		t.Errorf("after esc: model %q, want the one that was already in force", u.modelName)
+	}
+
+	if msg := u.startSeed(); msg != "started" {
+		t.Fatalf("startSeed: %s", msg)
+	}
+	calls, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `pane run w1:p2 claude --model 'claude-opus-5' 'fix Bob'\''s bug'`; !strings.Contains(string(calls), want) {
+		t.Errorf("herdr calls = %q, want %q — the model as a flag, the prompt still the last word", calls, want)
+	}
+
+	// Emptied and accepted: back to whatever the harness runs by default.
+	u.model = newEntry(listRow{}, u.modelName, 0)
+	u.askModel("\x15") // ctrl-u
+	u.askModel("\r")
+	u.entry = newEntry(listRow{}, "and the docs", 0)
+	if msg := u.startSeed(); msg != "started" {
+		t.Fatalf("startSeed: %s", msg)
+	}
+	calls, err = os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(calls), "pane run w1:p2 claude 'and the docs'") {
+		t.Errorf("herdr calls = %q, want no --model once the box was emptied", calls)
+	}
+}
