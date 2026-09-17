@@ -12,6 +12,8 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"github.com/mkmik/ccwt/internal/gitutil"
 )
 
 // WsCmd is `ccwt ws`: the tui for the first tab of a herdr workspace. It asks
@@ -157,7 +159,54 @@ func wsActions(sel listRow, searching bool) []action {
 	if sel.tab != "" {
 		as = append(as, action{" ", "go"}, action{"g", "git"})
 	}
+	// `r` is the workspace's own, not the selected row's — see wsRemovable —
+	// so it neither needs a selection nor comes and goes as you walk the table.
+	if wsRemovable() {
+		as = append(as, action{"r", "remove"})
+	}
 	return as
+}
+
+// wsRemovable reports whether this workspace is finished with: the tui is
+// standing in a worktree, and `ccwt done` there would go through without -D —
+// merged branch, nothing uncommitted, no agent still working in it.
+//
+// The question is the workspace's, which is to say the directory `ccwt ws` was
+// started in, and not any tab's: the tabs are where the work is happening, the
+// workspace is the thing that gets closed when it's over. So `r` is on the bar
+// or it isn't, the same whichever row is selected.
+//
+// ponytail: cached for the same stretch as the list's "can this go?" glyph and
+// for the same reason — it is a full worktree scan, and the bar asks on every
+// frame. A stale yes costs a refusal message, never a removal: `ccwt done`
+// asks git again itself.
+func wsRemovable() bool {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return false
+	}
+	return removableCache.get(cwd, window(gitScanWindow), func() bool {
+		_, name, err := gitutil.CurrentClaudeWorktree()
+		if err != nil || name == "" { // the repo itself, or anywhere else: nothing to remove
+			return false
+		}
+		root, err := gitutil.RepoRoot("", true)
+		return err == nil && removeBlocked(root, name, false) == nil
+	})
+}
+
+var removableCache cached[bool]
+
+// wsDone is `r` in the ws view: `ccwt done`, run where the tui is standing —
+// the worktree goes, branch and all, and the workspace closes behind it, this
+// tui with it. There is nothing to redraw when it works; when it doesn't, the
+// bar says why, as it does for the list's own `r`.
+func wsDone() string {
+	_, name, _ := gitutil.CurrentClaudeWorktree()
+	if err := (&DoneCmd{}).Run(); err != nil {
+		return "remove failed: " + err.Error()
+	}
+	return "removed " + name
 }
 
 // askSeed is what `ccwt ws` opens with in a workspace that has no other tab
