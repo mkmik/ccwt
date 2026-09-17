@@ -8,15 +8,18 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/mkmik/ccwt/internal/gitutil"
 )
 
 // `ccwt ws` is the tui of a herdr workspace: its list is the workspace's tabs
 // in herdr's order, each joined with the first pane in it — where it sits and
 // what its terminal calls itself — and a `*` leads the tab the tui is itself
-// in. Herdr's order is the tab bar's, so a tab dragged in front of an older
-// one comes first here too, whatever number it was born with. A tab is a row
-// to go to, not a worktree to remove, whatever directory it carries: the keys
-// that unmake things must not take it for one.
+// in. Herdr's order is the tab bar's, so a tab dragged in front of an older one
+// comes first here too, whatever number it was born with. A tab is a row of its
+// own, not one of the list's worktrees whatever directory it carries: the keys
+// that unmake things must not take it for one — what `r` does with a tab is its
+// own thing, see below.
 func TestWsTableListsTheWorkspaceTabs(t *testing.T) {
 	dir := t.TempDir()
 	herdr := filepath.Join(dir, "herdr")
@@ -69,6 +72,125 @@ esac
 	}
 	if bar := keyBar(200, "", "", wsActions(listRow{}, false)); strings.Contains(bar, "space:go") {
 		t.Errorf("bar with nothing selected = %q, want nothing to go to", bar)
+	}
+}
+
+// `r` in the ws view is `ccwt done` for the workspace itself: whether it is
+// there at all is a property of the directory the tui was started in — the
+// workspace's worktree — and not of any tab, so it stays on the bar, the same,
+// whichever row the selection happens to be on and with no row selected at all.
+// It is offered exactly when `ccwt done` would go through without -D, and
+// pressing it removes that worktree, branch included, and closes the workspace
+// the tui is sitting in.
+func TestWsRemovesTheWorkspaceWhenItIsDoneWith(t *testing.T) {
+	initRepo(t)
+	// git's own idea of the root: on a mac the temp dir is reached through a
+	// symlink, and herdr's answers have to name the path ccwt will ask about.
+	root, err := gitutil.RepoRoot("", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := capture(t, &NewWorktreeBranchCmd{Name: "done", Path: true})
+	dirty := capture(t, &NewWorktreeBranchCmd{Name: "dirty", Path: true})
+	if err := os.WriteFile(filepath.Join(dirty, "scratch.txt"), []byte("wip"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	log := filepath.Join(dir, "calls")
+	herdr := filepath.Join(dir, "herdr")
+	// w1 is the workspace the tui is in, open on the "done" worktree; w8 is the
+	// repo's own, which is where the focus goes before ours closes under us.
+	script := fmt.Sprintf(`#!/bin/sh
+echo "$@" >> %[1]q
+case "$1 $2" in
+"tab list") printf '%%s' '{"result":{"tabs":[{"tab_id":"w1:t1","label":"1","number":1},{"tab_id":"w1:t2","label":"agent","number":2,"agent_status":"idle"}]}}' ;;
+"pane list") printf '%%s' '{"result":{"panes":[{"tab_id":"w1:t1","cwd":%[2]q},{"tab_id":"w1:t2","cwd":%[3]q}]}}' ;;
+"agent list") printf '%%s' '{"result":{"agents":[]}}' ;;
+"worktree list") printf '%%s' '{"result":{"worktrees":[{"path":%[4]q,"open_workspace_id":"w8"},{"path":%[2]q,"open_workspace_id":"w1"}]}}' ;;
+"workspace get") printf '%%s' '{"result":{"workspace":{"focused":true}}}' ;;
+esac
+`, log, done, dirty, root)
+	if err := os.WriteFile(herdr, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_BIN_PATH", herdr)
+	t.Setenv("HERDR_WORKSPACE_ID", "w1")
+	t.Setenv("HERDR_TAB_ID", "w1:t1")
+
+	// A tui in the repo root: nothing to be done with, whatever its tabs are.
+	if wsRemovable() {
+		t.Error("the repo itself reads as removable")
+	}
+	t.Chdir(dirty)
+	if wsRemovable() {
+		t.Error("a workspace with uncommitted work in it reads as done with")
+	}
+
+	t.Chdir(done)
+	_, rows := wsTable(0)
+	if len(rows) != 2 {
+		t.Fatalf("rows = %v, want the two tabs", rows)
+	}
+	// The whole point: the same bar on every row, and on none.
+	for _, sel := range []listRow{{}, rows[0], rows[1]} {
+		if bar := keyBar(200, "", "", wsActions(sel, false)); !strings.Contains(bar, "r:remove") {
+			t.Errorf("bar with %v selected = %q, want r:remove on it", sel, bar)
+		}
+	}
+
+	if msg := wsDone(); msg != "removed done" {
+		t.Fatalf("wsDone: %q", msg)
+	}
+	if _, err := os.Stat(done); !os.IsNotExist(err) {
+		t.Errorf("worktree %s is still there (%v)", done, err)
+	}
+	if gitutil.BranchExists(root, "worktree-done") {
+		t.Error("the branch of the removed worktree is still there")
+	}
+	calls, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(calls), "workspace close w1") {
+		t.Errorf("herdr calls = %q, want our own workspace closed behind the removal", calls)
+	}
+	if !strings.Contains(string(calls), "workspace focus w8") {
+		t.Errorf("herdr calls = %q, want the repo's workspace focused before ours closes", calls)
+	}
+}
+
+// The agents to watch out for in the ws view are the workspace's own: one per
+// tab, all of them ours. Only the tab this tui is in is exempt, so that an
+// agent running `ccwt done` can still clean up after itself.
+func TestHerdrBusySeesTheOtherTabsOfOurWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	herdr := filepath.Join(dir, "herdr")
+	script := `#!/bin/sh
+case "$1 $2" in
+"agent list") printf '%s' '{"result":{"agents":[{"agent_status":"working","cwd":"/src/mine","tab_id":"w1:t1","workspace_id":"w1"},{"agent_status":"working","cwd":"/src/sibling","tab_id":"w1:t2","workspace_id":"w1"}]}}' ;;
+esac
+`
+	if err := os.WriteFile(herdr, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_BIN_PATH", herdr)
+	t.Setenv("HERDR_WORKSPACE_ID", "w1")
+	t.Setenv("HERDR_TAB_ID", "w1:t1")
+
+	busy := herdrBusy()
+	if busy["/src/mine"] {
+		t.Error("our own tab counts as busy: an agent could not run `ccwt done` on its own worktree")
+	}
+	if !busy["/src/sibling"] {
+		t.Error("an agent in another tab of our workspace is invisible: `r` would remove the worktree out from under it")
+	}
+	// No tab to go by — an older herdr, a pane outside one — and the whole
+	// workspace is ours again, which is what this used to do for everyone.
+	t.Setenv("HERDR_TAB_ID", "")
+	if busy := herdrBusy(); busy["/src/sibling"] {
+		t.Error("with no tab in the environment, our own workspace is no longer exempt")
 	}
 }
 
