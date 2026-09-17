@@ -542,6 +542,9 @@ func mrTable(subject string, rows []mrRow, width int) []string {
 			table[i] = slices.Delete(row, pipelineCol, pipelineCol+1)
 		}
 	}
+	if !stdoutIsTTY() {
+		return mrMarkdown(table, rows)
+	}
 	fitTable(table, width, cols)
 
 	var buf bytes.Buffer
@@ -564,6 +567,40 @@ func mrTable(subject string, rows []mrRow, width int) []string {
 	}
 	return lines
 }
+
+// mrMarkdown is the same table written as markdown, which is what comes out
+// when nothing is reading it on a terminal. Off a terminal the table is going
+// somewhere — a merge request comment, a ticket, a chat message, a status
+// note — and all of those render markdown, where padded columns arrive as a
+// wall of spaces and the OSC 8 link arrives as nothing at all. So the MR cell
+// becomes the markdown link it was, and the widths stop mattering: nothing is
+// cut to fit a terminal that isn't there.
+//
+// ponytail: no markdown package. A table is pipes and a rule under the header,
+// and the escaping below is the whole of what one would do for us.
+func mrMarkdown(table [][]string, rows []mrRow) []string {
+	lines := make([]string, 0, len(table)+1)
+	for i, row := range table {
+		cells := make([]string, len(row))
+		for j, cell := range row {
+			cells[j] = mdCell(cell)
+		}
+		// The header is the one row that isn't a merge request, so the rows
+		// run one behind it — and one with no url is left as its own text.
+		if i > 0 && rows[i-1].url != "" {
+			cells[0] = "[" + cells[0] + "](" + rows[i-1].url + ")"
+		}
+		lines = append(lines, "| "+strings.Join(cells, " | ")+" |")
+		if i == 0 {
+			lines = append(lines, strings.Repeat("| --- ", len(row))+"|")
+		}
+	}
+	return lines
+}
+
+// mdCell is a cell's text as a markdown table can hold it: a pipe in it would
+// end the cell early, and a line break would end the row.
+func mdCell(s string) string { return strings.ReplaceAll(oneLine(s), "|", `\|`) }
 
 // spin draws a spinner until the function it returns is called, so that a
 // handful of gitlab round trips look like something happening rather than
@@ -605,11 +642,11 @@ func spin() (stop func()) {
 
 // hyperlink makes text a link to url, the way OSC 8 does it — which terminals
 // that know the sequence render as something to click and the rest leave
-// alone. Not a terminal at all is the case that matters: an escape sequence
-// in a pipe is something for `cut` or `grep` to trip over, so redirected
-// output stays the plain text it was.
+// alone. Only the terminal table uses it: off one the link is a markdown one,
+// since an escape sequence in a pipe is something for `cut` or `grep` to trip
+// over.
 func hyperlink(url, text string) string {
-	if url == "" || !stdoutIsTTY() {
+	if url == "" {
 		return text
 	}
 	return "\x1b]8;;" + url + "\x1b\\" + text + "\x1b]8;;\x1b\\"

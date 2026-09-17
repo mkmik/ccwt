@@ -229,6 +229,8 @@ func TestMrStatusSaysWhatBlocksTheMerge(t *testing.T) {
 // worth of them or just the one — and a ticket no merge request mentions says
 // so instead.
 func TestMrTableIsARowPerMergeRequest(t *testing.T) {
+	defer func(orig func() bool) { stdoutIsTTY = orig }(stdoutIsTTY)
+	stdoutIsTTY = func() bool { return true } // the columns table; markdown has its own test
 	rows := []mrRow{
 		{ref: "acme/tools/backend/api!2596", url: "https://gitlab.example.com/acme/tools/backend/api/-/merge_requests/2596", title: "add a widget to the dashboard", status: "merged"},
 		{ref: "acme/tools/backend/api!2670", title: "fix the flux capacitor", status: "needs approval", pipeline: "failed: e2e", env: "staging, production"},
@@ -270,20 +272,15 @@ func TestMrTableIsARowPerMergeRequest(t *testing.T) {
 }
 
 // On a terminal the MR column is a link to the merge request, and the columns
-// still line up: the sequence around the text is no wider than the text. Off
-// one — a pipe, a file — the escape would be someone else's problem, so the
-// table stays as it reads.
+// still line up: the sequence around the text is no wider than the text.
 func TestMrTableLinksTheMergeRequest(t *testing.T) {
 	defer func(orig func() bool) { stdoutIsTTY = orig }(stdoutIsTTY)
+	stdoutIsTTY = func() bool { return true }
 	rows := []mrRow{
 		{ref: "api!2596", url: "https://gitlab.example.com/acme/tools/backend/api/-/merge_requests/2596", title: "a widget", status: "merged"},
 		{ref: "deploy!280", title: "a fix", status: "merged"}, // no url: nothing to link to
 	}
-
-	stdoutIsTTY = func() bool { return true }
 	linked := mrTable("PROJ-9", rows, 0)
-	stdoutIsTTY = func() bool { return false }
-	plain := mrTable("PROJ-9", rows, 0)
 
 	if want := "\x1b]8;;" + rows[0].url + "\x1b\\api!2596\x1b]8;;\x1b\\"; !strings.HasPrefix(linked[1], want) {
 		t.Errorf("line 1 = %q, want it to start with the link %q", linked[1], want)
@@ -291,15 +288,44 @@ func TestMrTableLinksTheMergeRequest(t *testing.T) {
 	if strings.Contains(linked[2], "\x1b") {
 		t.Errorf("line 2 = %q, want no link on a row with no url", linked[2])
 	}
-	if got := strings.Join(plain, ""); strings.Contains(got, "\x1b") {
-		t.Errorf("mrTable off a terminal = %q, want no escapes in it", plain)
-	}
-	// Taking the sequences back out gives exactly the table without them, so
-	// the link cost the layout nothing.
+	// Taking the sequences back out gives exactly the table of the same rows
+	// with nothing to link to, so the link cost the layout nothing.
+	bare := slices.Clone(rows)
+	bare[0].url = ""
+	plain := mrTable("PROJ-9", bare, 0)
 	strip := strings.NewReplacer("\x1b]8;;"+rows[0].url+"\x1b\\", "", "\x1b]8;;\x1b\\", "")
 	for i := range linked {
 		if got := strip.Replace(linked[i]); got != plain[i] {
 			t.Errorf("line %d = %q with links, %q without: the link took up room", i, got, plain[i])
 		}
+	}
+}
+
+// Off a terminal — piped, redirected, pasted into a comment — the table is
+// markdown, since that is what reads it there: a rule under the header, the
+// MR column as a markdown link, and a pipe in a title escaped rather than
+// left to end the cell early. Nothing is shortened to fit a width nothing
+// has.
+func TestMrTableIsMarkdownOffATerminal(t *testing.T) {
+	defer func(orig func() bool) { stdoutIsTTY = orig }(stdoutIsTTY)
+	stdoutIsTTY = func() bool { return false }
+	const long = "fix the flux capacitor, which had been running backwards since the rewrite"
+	rows := []mrRow{
+		{ref: "acme/…/api!2596", url: "https://gitlab.example.com/acme/tools/backend/api/-/merge_requests/2596", title: "add a | to the table", status: "merged", env: "prod"},
+		{ref: "acme/…/deploy!280", title: long, status: "needs approval", pipeline: "failed: e2e"},
+	}
+
+	want := []string{
+		"| MR | STATUS | PIPELINE | ENV | TITLE |",
+		"| --- | --- | --- | --- | --- |",
+		`| [acme/…/api!2596](` + rows[0].url + `) | merged |  | prod | add a \| to the table |`,
+		"| acme/…/deploy!280 | needs approval | failed: e2e |  | " + long + " |",
+	}
+	if got := mrTable("PROJ-1234", rows, 0); !slices.Equal(got, want) {
+		t.Errorf("markdown mrTable =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	// And the terminal's own escapes stay on the terminal.
+	if got := strings.Join(mrTable("PROJ-1234", rows, 0), ""); strings.Contains(got, "\x1b") {
+		t.Errorf("markdown mrTable = %q, want no escapes in it", got)
 	}
 }
