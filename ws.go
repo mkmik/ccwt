@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,6 +42,7 @@ func (c *WsCmd) Run() error {
 type wsTab struct {
 	ID, Label, Status string
 	Cwd, Title        string
+	Focused           bool // the one tab the user is looking at, herdr-wide
 }
 
 // herdrTabs is the workspace's tabs in the order herdr lists them, which is
@@ -58,9 +60,10 @@ func herdrTabs() ([]wsTab, error) {
 	var tabs struct {
 		Result struct {
 			Tabs []struct {
-				ID     string `json:"tab_id"`
-				Label  string `json:"label"`
-				Status string `json:"agent_status"`
+				ID      string `json:"tab_id"`
+				Label   string `json:"label"`
+				Status  string `json:"agent_status"`
+				Focused bool   `json:"focused"`
 			} `json:"tabs"`
 		} `json:"result"`
 	}
@@ -74,9 +77,11 @@ func herdrTabs() ([]wsTab, error) {
 	var panes struct {
 		Result struct {
 			Panes []struct {
-				Tab   string `json:"tab_id"`
-				Cwd   string `json:"cwd"`
-				Title string `json:"terminal_title_stripped"`
+				Tab    string `json:"tab_id"`
+				Cwd    string `json:"cwd"`
+				Title  string `json:"terminal_title_stripped"`
+				Agent  string `json:"agent"`
+				Status string `json:"agent_status"`
 			} `json:"panes"`
 		} `json:"result"`
 	}
@@ -85,21 +90,108 @@ func herdrTabs() ([]wsTab, error) {
 	}
 	// ponytail: the first pane herdr lists for the tab stands for it — a split
 	// tab is two panes, and the table has one row to say what the tab is.
+	//
+	// The dot is the exception, and is the agents' rather than the first pane's:
+	// herdr keeps a status per agent, and which pane of a tab an agent happens
+	// to sit in is no reason for the tab to go quiet about it.
 	first := map[string]int{}
+	loudest := map[string]string{}
 	for i, p := range panes.Result.Panes {
 		if _, ok := first[p.Tab]; !ok {
 			first[p.Tab] = i
 		}
+		if p.Agent != "" && wsRank(p.Status) > wsRank(loudest[p.Tab]) {
+			loudest[p.Tab] = p.Status
+		}
 	}
 	var ts []wsTab
 	for _, t := range tabs.Result.Tabs {
-		wt := wsTab{ID: t.ID, Label: t.Label, Status: t.Status}
+		// A tab with no agent in it has only herdr's own word to go on, which
+		// is what keeps a bare shell a bare shell.
+		wt := wsTab{ID: t.ID, Label: t.Label, Status: cmp.Or(loudest[t.ID], t.Status), Focused: t.Focused}
 		if i, ok := first[t.ID]; ok {
 			wt.Cwd, wt.Title = panes.Result.Panes[i].Cwd, panes.Result.Panes[i].Title
 		}
 		ts = append(ts, wt)
 	}
+	wsAttention(ts)
 	return ts, nil
+}
+
+// wsRank is how much a state wants you, which is what settles the dot on a tab
+// with more than one agent in it: an approval waiting on an answer first, then
+// a turn that has ended with something to read, then work still going on, and
+// last an agent with nothing to say. Nought is "unknown" — no agent, or one
+// herdr can't place — and a state this ccwt hasn't heard of, which is the same
+// "·" either way.
+func wsRank(status string) int {
+	switch status {
+	case "blocked":
+		return 4
+	case "done":
+		return 3
+	case "working":
+		return 2
+	case "idle":
+		return 1
+	}
+	return 0
+}
+
+// wsWatch is what the ws view remembers about a tab between rounds: the status
+// herdr gave it last time, and whether what its agent last said is still unread.
+type wsWatch struct {
+	was    string
+	unseen bool
+}
+
+// wsWatched is those, by tab — ccwt's own copy of the badge herdr's tui keeps
+// rather than a cache of herdr's answer. Herdr's `done` is the server's seen
+// state, and anyone's focus spends it: by the time the workspace's conductor
+// gets round to asking, the tab it wanted to colour is plain `idle` again, and
+// a `ccwt ws` that took herdr's word for it never went green. Herdr's own docs
+// say as much — each tui client tracks viewed completions independently — so
+// this is a client doing what herdr expects of one, off the states herdr gives.
+//
+// It is rebuilt from the tabs each round, which is what keeps closed tabs from
+// piling up in it, and it belongs to the frame: the tab list is read there, and
+// only the merge request lookup runs anywhere else.
+var wsWatched = map[string]wsWatch{}
+
+// wsAttention promotes the tabs with something unread in them to `done`, which
+// is the green dot. Herdr saying `done` itself counts as one, while it still
+// has it to give; otherwise what ccwt watches for is a turn ending — working,
+// or blocked, and then settled.
+//
+// The mark comes off when herdr says the tab is the focused one, which is what
+// "the user has read it" looks like from out here, and when the agent picks the
+// work up again, since then there is a newer answer coming.
+//
+// ponytail: a visit shorter than the poll interval goes unnoticed and the dot
+// stays green until the next one. `space` clears it on its way out, so what is
+// missed is a click on herdr's own tab bar and a bounce straight back.
+func wsAttention(tabs []wsTab) {
+	next := make(map[string]wsWatch, len(tabs))
+	for i, t := range tabs {
+		w := wsWatched[t.ID]
+		switch {
+		case t.Focused:
+			w.unseen = false
+		case t.Status == "done", t.Status == "idle" && (w.was == "working" || w.was == "blocked"):
+			w.unseen = true
+		case t.Status == "working", t.Status == "blocked":
+			w.unseen = false
+		}
+		w.was = t.Status
+		next[t.ID] = w
+		// Only a settled tab is coloured: an agent that has quit since leaves
+		// its last word on the screen, but "unknown" is a bare shell too, and
+		// a green dot on one of those says nothing anybody can act on.
+		if w.unseen && t.Status == "idle" {
+			tabs[i].Status = "done"
+		}
+	}
+	wsWatched = next
 }
 
 // wsTable is the ws view's screen, in two sections: where the workspace's
@@ -254,7 +346,9 @@ func mrSection(look *mrLook, width int) []string {
 }
 
 // wsDot is the AGENT column's mark for a tab's agent status, the way herdr
-// marks it in the tab bar: a circle, and the state is the colour of it.
+// marks it in the tab bar: a circle, and the state is the colour of it. The
+// status is herdr's, bar the one wsAttention makes: `done` is the green one,
+// and whether a finished turn is still green is this tui's own bookkeeping.
 //
 // The cell carries herdr's other set, the colourless symbols it draws with
 // `ui.status_indicators = "symbols"`, and paintDots turns each one into the
@@ -442,5 +536,8 @@ func herdrFocusTab(id string) string {
 	if out, err := exec.Command(herdrBin(), "tab", "focus", id).CombinedOutput(); err != nil {
 		return "herdr tab focus: " + lastLine(out, err)
 	}
+	// Going there is reading it, and it counts from now rather than from the
+	// next round: a look and a step straight back is quicker than the poll.
+	delete(wsWatched, id)
 	return ""
 }

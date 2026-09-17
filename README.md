@@ -644,9 +644,19 @@ read, and it stays put while they scroll.
 
 The `AGENT` mark is Herdr's own: a circle, and the state is the colour of it —
 red blocked, yellow working, green done, grey idle, and a `·` for a tab Herdr sees no agent
-in at all. Herdr draws the three busy states as the same circle too, so a workspace reads the
-same in the tab bar and in the table below it — in the same colours, too: the dots are asked
-for by palette number, and Herdr's theme is what answers.
+in at all. Herdr keeps that state per agent rather than per tab, so a tab split between
+several shows whichever of them most wants you: an approval waiting on an answer first, then
+a turn that has ended with something to read, then work still going on. Herdr draws the three
+busy states as the same circle too, so a workspace reads the same in the tab bar and in the
+table below it — in the same colours, too: the dots are asked for by palette number, and
+Herdr's theme is what answers.
+
+Green is the one mark the table keeps itself. Herdr's `done` is the server's seen state, and
+the first focus anywhere spends it, so a conductor that took Herdr's word for it would hardly
+ever show one — Herdr's own tui doesn't either, it keeps the badge per client, each tracking
+what it has been shown. This one goes on when a turn ends with nobody there to read it — an
+agent working, or blocked, and then settled — and comes off when you go: `space`, or Herdr
+saying that tab is the one you are looking at.
 
 `n` opens the same box the [queue](#queued-prompts) types into, and what goes in it is a seed
 prompt: `↵` opens a tab of the workspace in the workspace's own worktree — the one the tui is
