@@ -1520,7 +1520,7 @@ func transcriptLines(path string) []string {
 			return
 		}
 		out = append(out, "")
-		for _, l := range strings.Split(strings.Trim(text, "\n"), "\n") {
+		for l := range strings.SplitSeq(strings.Trim(text, "\n"), "\n") {
 			out = append(out, prefix+l)
 		}
 	}

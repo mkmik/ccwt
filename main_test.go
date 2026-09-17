@@ -57,7 +57,7 @@ func TestListMarksCurrent(t *testing.T) {
 
 	defer func(orig func() bool) { stdoutIsTTY = orig }(stdoutIsTTY)
 	stdoutIsTTY = func() bool { return true }
-	for _, line := range strings.Split(capture(t, &ListCmd{}), "\n") {
+	for line := range strings.SplitSeq(capture(t, &ListCmd{}), "\n") {
 		switch {
 		case line == "" || strings.HasPrefix(line, "    NAME"):
 		case strings.HasPrefix(line, "* * "+here+" "):
@@ -194,7 +194,7 @@ func TestListMarksMerged(t *testing.T) {
 	defer func(orig func() bool) { stdoutIsTTY = orig }(stdoutIsTTY)
 	for _, tty := range []bool{true, false} {
 		stdoutIsTTY = func() bool { return tty }
-		for _, line := range strings.Split(capture(t, &ListCmd{}), "\n") {
+		for line := range strings.SplitSeq(capture(t, &ListCmd{}), "\n") {
 			name, _, _ := strings.Cut(strings.TrimLeft(line, "✓* "), " ")
 			want := tty && name == "merged"
 			if got := strings.HasPrefix(line, "  ✓ "); got != want {
@@ -225,7 +225,7 @@ func TestListMarksWaitingForReview(t *testing.T) {
 
 	defer func(orig func() bool) { stdoutIsTTY = orig }(stdoutIsTTY)
 	stdoutIsTTY = func() bool { return true }
-	for _, line := range strings.Split(capture(t, &ListCmd{}), "\n") {
+	for line := range strings.SplitSeq(capture(t, &ListCmd{}), "\n") {
 		name, _, _ := strings.Cut(strings.TrimLeft(line, "✓*"+reviewGlyph+" "), " ")
 		want := name == "pushed"
 		if got := strings.HasPrefix(line, "  "+reviewGlyph+" "); got != want {
@@ -246,7 +246,7 @@ func TestListRowsStayPaired(t *testing.T) {
 		want[name] = "subject-" + name
 	}
 
-	for _, line := range strings.Split(capture(t, &ListCmd{}), "\n") {
+	for line := range strings.SplitSeq(capture(t, &ListCmd{}), "\n") {
 		name, rest, _ := strings.Cut(line, " ")
 		subject, ok := want[name]
 		if !ok {
@@ -720,7 +720,7 @@ func TestAgentWorkingIsNotSafeToRemove(t *testing.T) {
 
 	defer func(orig func() bool) { stdoutIsTTY = orig }(stdoutIsTTY)
 	stdoutIsTTY = func() bool { return true }
-	for _, line := range strings.Split(capture(t, &ListCmd{}), "\n") {
+	for line := range strings.SplitSeq(capture(t, &ListCmd{}), "\n") {
 		name, _, _ := strings.Cut(strings.TrimLeft(line, "✓* "+sessionGlyph), " ")
 		want := map[string]string{"busy": sessionGlyph, "idle": "✓"}[name]
 		if want == "" {
@@ -1585,7 +1585,7 @@ func TestListFitsTerminalWidth(t *testing.T) {
 		// Every column bottoms out at minCol, so a terminal narrower than that
 		// floor gets the floor rather than an ever-thinner table.
 		floor := 3*minCol + len("AGE") + len("AGENT") + 2*(len(allColumns())-1)
-		for _, line := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
+		for line := range strings.SplitSeq(strings.TrimRight(buf.String(), "\n"), "\n") {
 			if got := len([]rune(line)); got > max(width, floor) {
 				t.Errorf("width=%d: line is %d columns wide: %q", width, got, line)
 			}
@@ -1715,7 +1715,7 @@ func TestConfigColumns(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := buf.String()
-	head := strings.Split(out, "\n")[0]
+	head, _, _ := strings.Cut(out, "\n")
 	if i, j := strings.Index(head, "TOPIC"), strings.Index(head, "NAME"); i != 0 || j < i {
 		t.Errorf("header = %q, want TOPIC then NAME", head)
 	}
@@ -1732,7 +1732,7 @@ func TestConfigColumns(t *testing.T) {
 	if _, _, err := renderList(&buf, false, 0, nil, nil, true, ""); err != nil {
 		t.Fatalf("columns = [\"claude\"]: %v", err)
 	}
-	if head := strings.Split(buf.String(), "\n")[0]; !strings.HasPrefix(head, "AGENT") {
+	if head, _, _ := strings.Cut(buf.String(), "\n"); !strings.HasPrefix(head, "AGENT") {
 		t.Errorf("header = %q, want the AGENT column", head)
 	}
 
@@ -2019,7 +2019,7 @@ func TestZshCommandMenu(t *testing.T) {
 			t.Errorf("menu is missing %q:\n%s", want, menu)
 		}
 	}
-	for _, line := range strings.Split(strings.TrimSuffix(menu, "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSuffix(menu, "\n"), "\n") {
 		if !strings.HasPrefix(line, "        '") || !strings.HasSuffix(line, "'") {
 			t.Errorf("%q is not a quoted _describe entry", line)
 		}
