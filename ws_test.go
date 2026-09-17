@@ -13,8 +13,10 @@ import (
 // `ccwt ws` is the tui of a herdr workspace: its list is the workspace's tabs
 // in herdr's order, each joined with the first pane in it — where it sits and
 // what its terminal calls itself — and a `*` leads the tab the tui is itself
-// in. A tab is a row to go to, not a worktree to remove, whatever directory it
-// carries: the keys that unmake things must not take it for one.
+// in. Herdr's order is the tab bar's, so a tab dragged in front of an older
+// one comes first here too, whatever number it was born with. A tab is a row
+// to go to, not a worktree to remove, whatever directory it carries: the keys
+// that unmake things must not take it for one.
 func TestWsTableListsTheWorkspaceTabs(t *testing.T) {
 	dir := t.TempDir()
 	herdr := filepath.Join(dir, "herdr")
@@ -37,26 +39,26 @@ esac
 		t.Fatalf("wsTable = %q, want a header and two tabs", lines)
 	}
 	for i, want := range []struct{ prefix, has, hasNot string }{
+		{"  calm-baking-otter ", "Waiting on your review", "a split"}, // moved in front of ours: the first pane speaks for the tab
 		{"* 1 ", "ccwt", "unknown"},                                   // ours, a bare shell: no agent to speak of
-		{"  calm-baking-otter ", "Waiting on your review", "a split"}, // the first pane speaks for the tab
 	} {
 		l := lines[i+1]
 		if !strings.HasPrefix(l, want.prefix) || !strings.Contains(l, want.has) || strings.Contains(l, want.hasNot) {
 			t.Errorf("line %d = %q, want %q… with %q and without %q", i+1, l, want.prefix, want.has, want.hasNot)
 		}
 	}
-	if !strings.Contains(lines[2], "idle") {
-		t.Errorf("line 2 = %q, want the agent's status on it", lines[2])
+	if !strings.Contains(lines[1], "idle") {
+		t.Errorf("line 1 = %q, want the agent's status on it", lines[1])
 	}
-	want := []listRow{{path: "/src/ccwt", tab: "w1:t1"}, {path: "/src/ccwt/.claude/worktrees/calm-baking-otter", tab: "w1:t3"}}
+	want := []listRow{{path: "/src/ccwt/.claude/worktrees/calm-baking-otter", tab: "w1:t3"}, {path: "/src/ccwt", tab: "w1:t1"}}
 	if !slices.Equal(rows, want) {
 		t.Errorf("rows = %v, want %v", rows, want)
 	}
-	if rows[1].worktree() || rows[1].section() || rows[1].pending() || rows[1].process() {
-		t.Errorf("a tab row %v reads as something else", rows[1])
+	if rows[0].worktree() || rows[0].section() || rows[0].pending() || rows[0].process() {
+		t.Errorf("a tab row %v reads as something else", rows[0])
 	}
 
-	bar := keyBar(200, "", "", wsActions(rows[1], false))
+	bar := keyBar(200, "", "", wsActions(rows[0], false))
 	for _, key := range []string{"n:agent", "space:go", "g:git"} {
 		if !strings.Contains(bar, key) {
 			t.Errorf("bar on a tab = %q, want %s on it", bar, key)

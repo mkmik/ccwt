@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -40,13 +39,15 @@ func (c *WsCmd) Run() error {
 // for an agent is the agent's own one-line account of what it is doing.
 type wsTab struct {
 	ID, Label, Status string
-	Number            int
 	Cwd, Title        string
 }
 
-// herdrTabs is the workspace's tabs in the order herdr numbers them. The two
-// lists are asked for separately because that is how herdr keeps them: a tab
-// has a label and an agent status, a pane has a cwd and a title.
+// herdrTabs is the workspace's tabs in the order herdr lists them, which is
+// the order they sit in along the tab bar: tabs can be dragged about, and a
+// tab's `number` is the one it was born with rather than the place it now
+// holds, so the list's own order is the only thing that says where a tab is.
+// The two lists are asked for separately because that is how herdr keeps them:
+// a tab has a label and an agent status, a pane has a cwd and a title.
 func herdrTabs() ([]wsTab, error) {
 	ws := os.Getenv("HERDR_WORKSPACE_ID")
 	out, err := exec.Command(herdrBin(), "tab", "list", "--workspace", ws).Output()
@@ -58,7 +59,6 @@ func herdrTabs() ([]wsTab, error) {
 			Tabs []struct {
 				ID     string `json:"tab_id"`
 				Label  string `json:"label"`
-				Number int    `json:"number"`
 				Status string `json:"agent_status"`
 			} `json:"tabs"`
 		} `json:"result"`
@@ -92,13 +92,12 @@ func herdrTabs() ([]wsTab, error) {
 	}
 	var ts []wsTab
 	for _, t := range tabs.Result.Tabs {
-		wt := wsTab{ID: t.ID, Label: t.Label, Status: t.Status, Number: t.Number}
+		wt := wsTab{ID: t.ID, Label: t.Label, Status: t.Status}
 		if i, ok := first[t.ID]; ok {
 			wt.Cwd, wt.Title = panes.Result.Panes[i].Cwd, panes.Result.Panes[i].Title
 		}
 		ts = append(ts, wt)
 	}
-	slices.SortFunc(ts, func(a, b wsTab) int { return a.Number - b.Number })
 	return ts, nil
 }
 

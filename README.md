@@ -609,7 +609,8 @@ whatever workspace each is open in. `ccwt ws` is a workspace's. Run in the first
 it lists that workspace's tabs — the tab's label, whether Herdr sees an agent working in it,
 the directory it sits in, and what its terminal calls itself, which for an agent is its own
 one-line account of what it is doing — and `space` (or `↵`, or a double-click) goes to the
-selected tab. A `*` leads the tab the tui itself is in.
+selected tab. A `*` leads the tab the tui itself is in. The rows come in the order the tabs
+sit along the tab bar, so dragging one about in Herdr moves its row with it.
 
 ```
   TAB                     AGENT    DIR                     TITLE
