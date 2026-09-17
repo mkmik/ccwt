@@ -342,3 +342,37 @@ func TestMrTableIsMarkdownOffATerminal(t *testing.T) {
 		t.Errorf("markdown mrTable = %q, want no escapes in it", got)
 	}
 }
+
+// The token comes out of glab's config rather than out of `glab config get`,
+// so the shape of that file is ours to get right: the token belongs to the
+// host it is indented under, and a host the file doesn't hold one for has to
+// come back empty — sending another gitlab's token is worse than asking glab.
+func TestGlabConfigToken(t *testing.T) {
+	const config = `# What protocol to use when performing Git operations.
+git_protocol: ssh
+host: gitlab.com
+hosts:
+    gitlab.com:
+        api_host: gitlab.com
+        # Your GitLab access token.
+        token:
+    code.example.com:
+        token: glpat-thetokenitself
+        user: someone
+last_seen_version: v1.118.0
+`
+	for _, tc := range []struct{ host, want string }{
+		{"code.example.com", "glpat-thetokenitself"},
+		{"gitlab.com", ""},        // known, but has no token under it
+		{"other.example", ""},     // not in the file at all
+		{"user", ""},              // a setting under a host is not a host
+		{"last_seen_version", ""}, // nor is a key outside the hosts block
+	} {
+		if got := configToken(config, tc.host); got != tc.want {
+			t.Errorf("configToken(%q) = %q, want %q", tc.host, got, tc.want)
+		}
+	}
+	if got := configToken("", "code.example.com"); got != "" {
+		t.Errorf("configToken of no config = %q, want nothing", got)
+	}
+}

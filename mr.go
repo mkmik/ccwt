@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -24,9 +27,10 @@ import (
 // find out. It takes either the merge request itself or the ticket it belongs
 // to, and the ticket gets a row per merge request that names it.
 //
-// It asks `glab` rather than the api directly, for the reason the tui's `m`
-// does (see forges): the cli already knows which host is which and which token
-// to ask it with, and neither is worth reimplementing here.
+// It asks the api itself, with glab's token and glab's idea of which host
+// (see glabAPI): signing in is still `glab auth login`, but a `glab api` per
+// question was a process and a tls handshake per question, and those were
+// most of the several seconds this used to take.
 //
 // ponytail: the ticket half leans on the same cli too — gitlab's own search
 // for the issue key — rather than on Jira's "mentioned on" list, which would
@@ -159,16 +163,41 @@ func lookThing(thing string, askEnvs bool) ([]mrRow, error) {
 	return nil, fmt.Errorf("%q is neither a merge request url nor a jira issue", thing)
 }
 
-// branchMR is the merge request of the branch checked out here, as the tui's
-// `m` key finds it (see forges): glab already knows the branch, the host and
-// the project, and the url it answers with goes back through lookThing like
-// any other argument.
+// branchMR is the merge request of the branch checked out here — the one
+// whose source branch it is, most recently touched first — and the url it
+// answers with goes back through lookThing like any other argument.
+//
+// The tui's `m` key asks `glab mr view` for the same thing (see forges) and
+// this used to as well, but that is a process and two round trips of its own
+// to answer what one query answers, and with no argument it is the first
+// thing the table waits on. git already knows the branch and the remote.
+//
+// ponytail: the merge request in the project origin points at. One pushed
+// from a fork belongs to the project it targets rather than the one it came
+// from, so it isn't found here and the workspace reads as having none. Follow
+// source_project_id when someone works that way.
 func branchMR() (string, error) {
-	out, err := exec.Command("glab", forges["glab"].argv...).Output()
-	if err != nil {
-		return "", fmt.Errorf("no merge request for this branch: %s", glabError(out, err))
+	origin := gitLine(".", "remote", "get-url", "origin")
+	branch := gitLine(".", "rev-parse", "--abbrev-ref", "HEAD")
+	project := urlPath(origin)
+	if project == "" || branch == "" {
+		return "", errors.New("no merge request for this branch: no origin remote or no branch here")
 	}
-	return strings.TrimSpace(string(out)), nil
+	query := url.Values{
+		"source_branch": {branch},
+		"order_by":      {"updated_at"},
+		"sort":          {"desc"},
+		"per_page":      {"1"},
+	}
+	var hits []mr
+	path := "projects/" + url.PathEscape(project) + "/merge_requests?" + query.Encode()
+	if err := glabAPI(urlHost(origin), path, &hits); err != nil {
+		return "", fmt.Errorf("no merge request for this branch: %w", err)
+	}
+	if len(hits) == 0 {
+		return "", errors.New("no merge request for this branch")
+	}
+	return hits[0].WebURL, nil
 }
 
 // mrRow is one merge request as the table shows it. One merge request is a
@@ -663,11 +692,143 @@ func hyperlink(url, text string) string {
 	return "\x1b]8;;" + url + "\x1b\\" + text + "\x1b]8;;\x1b\\"
 }
 
+// gitlab is the client every api call shares, so that they share its
+// connections: a merge request is a handful of round trips and a ticket is a
+// handful per merge request, and a tls handshake for each of them — which is
+// what a `glab api` per call, a process each, was paying — was most of the
+// wait. The timeout is the one a process didn't need: a request that never
+// answers would otherwise leave the spinner turning for good.
+var gitlab = &http.Client{Timeout: 30 * time.Second}
+
 // glabAPI asks one gitlab api path and decodes the answer into v. The host is
-// named only when the url said which gitlab it is: left out, glab uses the
-// remote of the repo we are standing in, or its own default host — which is
-// the right guess for a ticket, since a ticket doesn't say.
+// named only when the url said which gitlab it is: left out, it's the one
+// gitlabHost guesses, which is the right guess for a ticket, since a ticket
+// doesn't say.
+//
+// The token is glab's own, borrowed from where glab keeps it (see glabToken),
+// so signing in is still `glab auth login`. What can't be asked that way goes
+// out as `glab api` instead, the way all of it used to: no token of glab's to
+// borrow, or a host that doesn't answer at the api url below — a gitlab
+// configured with its own api_host, a proxy only glab was told about — and
+// glab's own config is what knows better.
 func glabAPI(host, path string, v any) error {
+	host = cmp.Or(host, gitlabHost())
+	token := glabToken(host)
+	if token == "" {
+		return glabRun(host, path, v)
+	}
+	req, err := http.NewRequest("GET", "https://"+host+"/api/v4/"+path, nil)
+	if err != nil {
+		return glabRun(host, path, v)
+	}
+	req.Header.Set("PRIVATE-TOKEN", token)
+	resp, err := gitlab.Do(req)
+	if err != nil {
+		return glabRun(host, path, v)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("gitlab api %s: %w", path, err)
+	}
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("gitlab api %s: %s", path, apiError(body, resp.Status))
+	}
+	return json.Unmarshal(body, v)
+}
+
+// gitlabHost is which gitlab a call that didn't name one goes to, guessed in
+// the order glab guesses it: what GITLAB_HOST says, the host of the repo we
+// are standing in, and then the host glab is configured to default to. Read
+// as a host however it was written, since the config holds a whole url where
+// the remote holds a host.
+var gitlabHost = sync.OnceValue(func() string {
+	if host := cmp.Or(os.Getenv("GITLAB_HOST"), remoteHost(".")); host != "" {
+		return urlHost(host)
+	}
+	// glab's default host, the one setting in its config that isn't a host's
+	// own — so it's the line that starts the file's left margin with "host:".
+	for line := range strings.SplitSeq(glabConfig(), "\n") {
+		if host, ok := strings.CutPrefix(line, "host:"); ok {
+			return urlHost(strings.TrimSpace(host))
+		}
+	}
+	return ""
+})
+
+// glabConfig is glab's config file, which is where the token for each host it
+// knows is kept. Read once, and "" when there is none to read — which is a
+// config with nothing in it, and every lookup falls through to the command.
+//
+// glab looks for it the same three places: where GLAB_CONFIG_DIR says, under
+// XDG_CONFIG_HOME, or in ~/.config.
+var glabConfig = sync.OnceValue(func() string {
+	home, _ := os.UserHomeDir()
+	dir := cmp.Or(os.Getenv("XDG_CONFIG_HOME"), filepath.Join(home, ".config"))
+	dir = cmp.Or(os.Getenv("GLAB_CONFIG_DIR"), filepath.Join(dir, "glab-cli"))
+	out, _ := os.ReadFile(filepath.Join(dir, "config.yml"))
+	return string(out)
+})
+
+// glabToken is the token glab sends to host, looked for where glab looks: the
+// environment first, then its config — the "hosts:" block, the host under it,
+// and the "token:" under the host.
+//
+// Per host, since a token is: one meant for another gitlab is a token handed
+// to a host that has no business seeing it. The environment's doesn't say
+// which host it is for, so it is taken to be for the host the environment
+// otherwise names, or failing that the one we are standing in — that being
+// the host an unqualified `glab` command would have spent it on anyway.
+//
+// Read rather than asked for. `glab config get` answers the same question and
+// would save us knowing the shape of someone else's file, but every glab
+// command checks for a new glab on its way out, and that check is most of a
+// second — several times what the lookups it would be serving cost.
+//
+// ponytail: this file and these three levels of it, rather than yaml and the
+// rest of where glab will look. A token kept somewhere else — a per-repo
+// config, a keyring — reads as no token here, and the call goes out as `glab
+// api`, which knows all of those places. That is the slow way round, but it
+// is the right answer.
+func glabToken(host string) string {
+	if token := os.Getenv("GITLAB_TOKEN"); token != "" && host == gitlabHost() {
+		return token
+	}
+	return configToken(glabConfig(), host)
+}
+
+// configToken is host's token in the text of that config: under "hosts:", the
+// host, and "token:" under it. Whether a line is a host or one of a host's
+// settings is how far it is indented, which is all the yaml this needs to
+// know — and a file it can't find its way around is no token at all, which
+// the caller has an answer for.
+func configToken(config, host string) string {
+	var entry int // how far the host names under "hosts:" are indented
+	var inHosts, inHost bool
+	for line := range strings.SplitSeq(config, "\n") {
+		text := strings.TrimSpace(line)
+		if text == "" || strings.HasPrefix(text, "#") {
+			continue
+		}
+		key, value, _ := strings.Cut(text, ":")
+		switch indent := len(line) - len(strings.TrimLeft(line, " \t")); {
+		case indent == 0:
+			inHosts, inHost, entry = key == "hosts", false, 0
+		case !inHosts: // a setting under some other top-level key
+		case entry == 0 || indent == entry:
+			entry, inHost = indent, key == host
+		case inHost && key == "token":
+			return strings.Trim(strings.TrimSpace(value), `"'`)
+		}
+	}
+	return ""
+}
+
+// glabRun asks the same path through the `glab api` command, which is where a
+// call goes that can't be made from here. It is the process and the handshake
+// that the client above exists to stop paying, so it is the fallback rather
+// than the road.
+func glabRun(host, path string, v any) error {
 	args := []string{"api"}
 	if host != "" {
 		args = append(args, "--hostname", host)
@@ -677,6 +838,18 @@ func glabAPI(host, path string, v any) error {
 		return fmt.Errorf("glab api %s: %s", path, glabError(out, err))
 	}
 	return json.Unmarshal(out, v)
+}
+
+// apiError is what gitlab said was wrong with the request: "message" is where
+// it says it, "error" is where the parts of it that speak oauth say it, and
+// the status line is what's left when the body says neither.
+func apiError(body []byte, status string) string {
+	var said struct {
+		Message string `json:"message"`
+		Error   string `json:"error"`
+	}
+	_ = json.Unmarshal(body, &said) // a body we can't read has nothing to quote
+	return cmp.Or(said.Message, said.Error, status)
 }
 
 // glabError is what went wrong, as glab said it. It says it twice: once on

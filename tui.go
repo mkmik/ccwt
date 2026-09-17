@@ -2680,6 +2680,22 @@ func urlHost(url string) string {
 	return host
 }
 
+// urlPath is the project out of a git remote, out of the same shapes urlHost
+// takes the host out of — and without the ".git" a clone url ends in, since
+// what this addresses is the project rather than the repository. A remote
+// that names no project (a local path, or nothing) is "".
+func urlPath(url string) string {
+	if _, rest, ok := strings.Cut(url, "://"); ok {
+		_, path, _ := strings.Cut(rest, "/") // the host, then where it starts
+		return strings.TrimSuffix(path, ".git")
+	}
+	if _, rest, ok := strings.Cut(url, "@"); ok {
+		url = rest // the userinfo, which the path below can't be mistaken for
+	}
+	_, path, _ := strings.Cut(url, ":") // the scp form's colon is the path's
+	return strings.TrimSuffix(path, ".git")
+}
+
 // underHerdr reports whether the tui is running inside a herdr pane — herdr
 // exports HERDR_ENV into every pane it spawns. Outside one there is no session
 // for `herdr worktree open` to put a workspace in, so the actions that call it
