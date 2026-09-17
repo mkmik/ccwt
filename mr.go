@@ -217,6 +217,7 @@ type mr struct {
 	State      string `json:"state"`
 	Merge      string `json:"merge_status"`
 	Detailed   string `json:"detailed_merge_status"`
+	AutoMerge  string `json:"auto_merge_strategy"`
 	Title      string `json:"title"`
 	WebURL     string `json:"web_url"`
 	SquashSHA  string `json:"squash_commit_sha"`
@@ -448,6 +449,11 @@ func carries(host, project, head, commit string) bool {
 // the mergeability checks in order and names the first one that failed — so
 // this only puts the ones we have a word for into that word, and spells the
 // rest out as they come ("need rebase", "ci still running").
+//
+// A merge request queued on a merge train is the one case where gitlab's
+// answer is worse than useless: it says "ci still running", which reads as
+// something to go and wait on, when the pipeline running is the train's own
+// and the merge request is already on its way in.
 func mrStatus(m mr) string {
 	switch m.State {
 	case "merged", "closed", "locked":
@@ -462,6 +468,11 @@ func mrStatus(m mr) string {
 		return "needs approval"
 	case "discussions_not_resolved":
 		return "open comments"
+	}
+	// On the train, or waiting on a pipeline to join it — either way the
+	// train is what it is waiting on and there is nothing to do about it.
+	if strings.Contains(m.AutoMerge, "merge_train") {
+		return "merge train"
 	}
 	// A gitlab too old for detailed_merge_status still has the coarse version
 	// of the same question, and "unknown" is what's left when it has neither.

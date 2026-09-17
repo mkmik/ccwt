@@ -201,6 +201,12 @@ func TestMrStatusSaysWhatBlocksTheMerge(t *testing.T) {
 		{mr{State: "opened", Detailed: "not_approved"}, "needs approval"},
 		{mr{State: "opened", Detailed: "discussions_not_resolved"}, "open comments"},
 		{mr{State: "opened", Detailed: "need_rebase"}, "need rebase"},
+		{mr{State: "opened", Detailed: "ci_still_running"}, "ci still running"},
+		// On a merge train the pipeline being waited on is the train's own,
+		// so the train is what to say rather than gitlab's "ci still running".
+		{mr{State: "opened", Detailed: "ci_still_running", AutoMerge: "merge_train"}, "merge train"},
+		{mr{State: "opened", Detailed: "ci_still_running", AutoMerge: "add_to_merge_train_when_checks_pass"}, "merge train"},
+		{mr{State: "opened", Detailed: "ci_still_running", AutoMerge: "merge_when_checks_pass"}, "ci still running"},
 		{mr{State: "opened", Merge: "cannot_be_merged"}, "cannot be merged"}, // a gitlab too old to be detailed
 		{mr{State: "opened"}, "unknown"},
 	} {
