@@ -507,18 +507,27 @@ func mrTable(subject string, rows []mrRow, width int) []string {
 	}
 	fitTable(table, width, cols)
 	lines := tabbed(table)
+	linkRefs(lines, table, rows)
+	return lines
+}
 
-	// The MR column is the link to the merge request, so the table you read
-	// the answer off is also the way to go and look at it. The sequence goes
-	// on last, once the columns are padded: it takes no room on screen, but
-	// both fitTable and the tabwriter measure cells in characters and would
-	// lay the table out around it.
+// linkRefs makes the MR column of each row the link to the merge request, so
+// the table you read the answer off is also the way to go and look at it. The
+// sequence goes on last, once the columns are padded: it takes no room on
+// screen, but both fitTable and the tabwriter measure cells in characters and
+// would lay the table out around it.
+//
+// The ws view's section is these same cells indented into its gutter (see
+// mrSection), so the leading spaces are left outside the link: what underlines
+// is the ref, there as here.
+func linkRefs(lines []string, table [][]string, rows []mrRow) {
 	for i, r := range rows {
-		if rest, ok := strings.CutPrefix(lines[i+1], table[i+1][0]); ok {
-			lines[i+1] = hyperlink(r.url, table[i+1][0]) + rest
+		cell := table[i+1][0]
+		ref := strings.TrimLeft(cell, " ")
+		if rest, ok := strings.CutPrefix(lines[i+1], cell); ok {
+			lines[i+1] = cell[:len(cell)-len(ref)] + hyperlink(r.url, ref) + rest
 		}
 	}
-	return lines
 }
 
 // mrCells is the merge requests as a table: the header and a row each, and

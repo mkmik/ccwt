@@ -217,9 +217,11 @@ func branchLook() *mrLook {
 // starts and most of one's life is spent, so it gets a quiet line saying so
 // rather than a row of column names with nothing under them.
 //
-// ponytail: no OSC 8 link on the ref, unlike the terminal table `ccwt mr`
-// prints. The escape is no width on screen but plenty of runes in the string,
-// and the frame cuts its lines to the terminal by counting them.
+// The ref carries the same OSC 8 link the table `ccwt mr` prints does — one
+// merge request said one way, wherever you read it. The escape is no width on
+// screen but plenty of runes in the string, which is fine here: these lines
+// are pinned rather than trimmed, and they arrive already cut to the width
+// below.
 func mrSection(look *mrLook, width int) []string {
 	msg := ""
 	switch {
@@ -246,7 +248,9 @@ func mrSection(look *mrLook, width int) []string {
 		row[0] = "  " + row[0]
 	}
 	fitTable(table, width, cols)
-	return tabbed(table)
+	lines := tabbed(table)
+	linkRefs(lines, table, look.rows)
+	return lines
 }
 
 // wsDot is the AGENT column's mark for a tab's agent status, the way herdr

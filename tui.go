@@ -1034,8 +1034,10 @@ func (u *ui) find(d int) bool {
 	}
 	for i := 1; i <= len(u.rows); i++ {
 		j := ((start+d*i)%len(u.rows) + len(u.rows)) % len(u.rows)
-		// Line 0 of the cached table is the header, so row j is line j+1.
-		if j+1 < len(u.body) && re.MatchString(u.body[j+1]) {
+		// The pinned lines come first, so row j is line j+u.head — one on the
+		// list, more in the ws view, whose merge request sits above the header
+		// and is something to read rather than a row to land on.
+		if j+u.head < len(u.body) && re.MatchString(u.body[j+u.head]) {
 			u.sel = u.rows[j]
 			return true
 		}
@@ -2166,8 +2168,11 @@ func (u *ui) selection(lines []string) (string, []string) {
 }
 
 // escapes is what a frame line carries besides its text: the colours draw() put
-// on it, and whatever a session's own output brought along with it.
-var escapes = regexp.MustCompile("\x1b\\[[0-9;?]*[ -/]*[@-~]")
+// on it, the OSC 8 link on the ws view's merge request, and whatever a session's
+// own output brought along with it. The link's url is one of them rather than
+// text on the line, so a drag across the ref copies the ref and not the address
+// behind it.
+var escapes = regexp.MustCompile("\x1b\\[[0-9;?]*[ -/]*[@-~]|\x1b\\]8;;[^\x07\x1b]*(\x07|\x1b\\\\)")
 
 // plain is line with those taken out — what a selection copies, and what its
 // columns are counted along.
