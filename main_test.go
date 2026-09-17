@@ -1017,6 +1017,31 @@ func TestUpgradeNoticeNeedsTwoReadableStamps(t *testing.T) {
 	}
 }
 
+// The upgrade restarts the tui by itself, but not out from under anyone: the
+// keys have to have been quiet for restartIdle, with nothing being typed and
+// nothing open over the list that the restart would take with it.
+func TestRestartWaitsForIdle(t *testing.T) {
+	quiet := time.Now().Add(-restartIdle)
+	for _, tc := range []struct {
+		name string
+		u    ui
+		want bool
+	}{
+		{"keys quiet", ui{nav: quiet}, true},
+		{"never touched", ui{}, true},
+		{"mid-walk", ui{nav: time.Now()}, false},
+		{"typing a pattern", ui{nav: quiet, typing: true}, false},
+		{"prompt open", ui{nav: quiet, entry: entry{open: true}}, false},
+		{"reading a page", ui{nav: quiet, page: &page{}}, false},
+		{"details open", ui{nav: quiet, detail: []string{"x"}}, false},
+		{"menu open", ui{nav: quiet, menu: []action{{"q", "quit"}}}, false},
+	} {
+		if got := tc.u.idle(); got != tc.want {
+			t.Errorf("%s: idle() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 // The notice is no use if nothing shows it. It outlives the transient messages
 // — which the next tick wipes — but steps aside while one is on screen.
 func TestFrameShowsTheRestartNotice(t *testing.T) {

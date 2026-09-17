@@ -2171,5 +2171,12 @@ func main() {
 			"version": getVersion(),
 		},
 	)
-	ctx.FatalIfErrorf(ctx.Run())
+	err := ctx.Run()
+	// The tui saying the binary underneath it has changed and the screen is
+	// its own again: this is the moment to become the new one. reexec only
+	// returns when it couldn't, and the tui only asks where there is one.
+	if errors.Is(err, errRestart) {
+		err = reexec()
+	}
+	ctx.FatalIfErrorf(err)
 }

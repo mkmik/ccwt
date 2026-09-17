@@ -218,6 +218,13 @@ func (c *TuiCmd) Run() error {
 			u.msg = ""
 			u.refresh() // the tick is what re-reads the list
 			u.checkUpgrade()
+			// The upgrade's own restart, once the keys have been quiet long
+			// enough that nobody is mid-anything: Run returns, its defers give
+			// the terminal back, and main execs the new binary in this
+			// process's place.
+			if u.restart != "" && reexec != nil && u.idle() {
+				return errRestart
+			}
 		case k := <-keys:
 			u.nav = time.Now() // hold the list still while it's being walked
 			k, copied := u.key(k)
@@ -614,9 +621,15 @@ type ui struct {
 // long enough for several ticks, and rows sliding about behind the box you're
 // typing into is nothing but distraction.
 func (u *ui) stale() {
-	if u.detail == nil && !u.entry.open && !u.logOpen && u.menu == nil && u.page == nil {
+	if u.quiet() {
 		u.body = nil
 	}
+}
+
+// quiet reports that the list is all there is on screen: no pane, box or menu
+// over it. What stale may refresh behind, and what a restart may take down.
+func (u *ui) quiet() bool {
+	return u.detail == nil && !u.entry.open && !u.logOpen && u.menu == nil && u.page == nil
 }
 
 // psView is the switch between the two lists: what's in the window is a
@@ -1896,10 +1909,32 @@ func (u *ui) checkUpgrade() {
 	if s := selfStamp(); s == "" || s == u.stamp {
 		return
 	}
-	u.restart = "upgraded — restart ccwt"
-	if v := selfVersion(); v != "" {
-		u.restart = "upgraded to " + v + " — restart ccwt"
+	hint := " — restart ccwt"
+	if reexec != nil { // the process does that itself — see idle
+		hint = " — restarting when idle"
 	}
+	u.restart = "upgraded" + hint
+	if v := selfVersion(); v != "" {
+		u.restart = "upgraded to " + v + hint
+	}
+}
+
+// errRestart is how Run says it is done with this binary: an upgrade has landed
+// and the keys have been quiet, so it returns — its defers give the terminal
+// back — and main execs the new one in this process's place.
+var errRestart = errors.New("restart")
+
+// restartIdle is how long the keys have to have been quiet before an upgrade
+// restarts the tui by itself: long enough that nobody is mid-walk, short enough
+// that a tui parked in a pane picks the new binary up within the minute.
+const restartIdle = 4 * time.Second
+
+// idle reports that a restart now would cost nobody anything: no key for
+// restartIdle, and nothing on screen but the list — no pane someone is reading,
+// no box with half a prompt typed into it. The selection and the pattern in
+// force do go with it; those are a keystroke to get back.
+func (u *ui) idle() bool {
+	return time.Since(u.nav) >= restartIdle && u.quiet() && !u.typing
 }
 
 // selfStamp identifies the file behind os.Executable(): its size and mtime,
