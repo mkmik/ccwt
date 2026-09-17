@@ -1830,7 +1830,7 @@ func wrap(s string, width int) []string {
 	var lines []string
 	var line []rune
 	flush := func() { lines, line = append(lines, string(line)), nil }
-	for _, word := range strings.Fields(s) {
+	for word := range strings.FieldsSeq(s) {
 		w := []rune(word)
 		if len(line) > 0 && len(line)+1+len(w) > width {
 			flush()

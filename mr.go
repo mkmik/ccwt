@@ -82,11 +82,9 @@ func (c *MrCmd) look() ([]mrRow, string, error) {
 	errs := make([]error, len(things))
 	var wg sync.WaitGroup
 	for i, thing := range things {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			found[i], errs[i] = lookThing(thing)
-		}()
+		})
 	}
 	wg.Wait()
 	rows := slices.Concat(found...)
@@ -142,11 +140,9 @@ func lookThing(thing string) ([]mrRow, error) {
 		// is any use without the other.
 		var envs []env
 		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			envs = environments(host, project)
-		}()
+		})
 		got, err := fetchMR(host, project, iid)
 		wg.Wait()
 		if err != nil {
@@ -286,25 +282,21 @@ func ticketMRs(key string) ([]mrRow, error) {
 	errs := make([]error, len(hits))
 	var wg sync.WaitGroup
 	for i, p := range projects {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			envs[i] = environments("", strconv.Itoa(p))
-		}()
+		})
 	}
 	for i, h := range hits {
 		if settled(h) {
 			continue
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if got, err := fetchMR("", strconv.Itoa(h.ProjectID), h.IID); err == nil {
 				full[i] = got
 			} else {
 				errs[i] = err
 			}
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -313,12 +305,10 @@ func ticketMRs(key string) ([]mrRow, error) {
 	// environments are running what this one landed as.
 	rows := make([]mrRow, len(hits))
 	for i, m := range full {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			project := strconv.Itoa(hits[i].ProjectID)
 			rows[i] = m.row(pipelineNote("", m), deployedTo("", project, m, envs[slices.Index(projects, hits[i].ProjectID)]))
-		}()
+		})
 	}
 	wg.Wait()
 	return rows, errors.Join(errs...)
@@ -383,13 +373,11 @@ func deployedTo(host, project string, m mr, envs []env) string {
 	on := make([]string, len(envs))
 	var wg sync.WaitGroup
 	for i, e := range envs {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if carries(host, project, e.sha, sha) {
 				on[i] = e.name
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	return strings.Join(slices.DeleteFunc(on, func(name string) bool { return name == "" }), ", ")
@@ -684,9 +672,8 @@ func glabError(out []byte, err error) string {
 		first, _, _ := strings.Cut(said.Error.Message, "\n") // the rest is advice
 		return first
 	}
-	var ee *exec.ExitError
-	if errors.As(err, &ee) {
-		for _, line := range strings.Split(string(ee.Stderr), "\n") {
+	if ee, ok := errors.AsType[*exec.ExitError](err); ok {
+		for line := range strings.SplitSeq(string(ee.Stderr), "\n") {
 			if l := strings.TrimSpace(line); l != "" && l != "ERROR" {
 				return l
 			}

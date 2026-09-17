@@ -283,7 +283,7 @@ esac
 
 	u := ui{ws: true, entry: newEntry(listRow{}, "fix Bob's bug", 0)}
 	u.model = newEntry(listRow{}, u.modelName, 0)
-	for _, k := range strings.Split("claude-opus-5", "") {
+	for k := range strings.SplitSeq("claude-opus-5", "") {
 		u.askModel(k)
 	}
 	u.askModel("\r")
