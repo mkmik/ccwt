@@ -482,11 +482,12 @@ func TestNewWorkspaceRunsWs(t *testing.T) {
 	herdr := filepath.Join(dir, "herdr")
 	// Logs its arguments, and answers `pane list` with a pane sitting in the
 	// worktree the open before it named with --path — which is the pane the
-	// tui is to be started in.
+	// tui is to be started in — and `pane get` with the tab that pane is in.
 	script := fmt.Sprintf("#!/bin/sh\necho \"$@\" >> %[1]q\n"+
 		"[ \"$1 $2\" = \"worktree open\" ] && echo \"$6\" > %[2]q\n"+
 		"[ \"$1 $2\" = \"pane list\" ] && printf '{\"result\":{\"panes\":"+
 		"[{\"pane_id\":\"p1\",\"cwd\":\"%%s\"}]}}' \"$(cat %[2]q)\"\n"+
+		"[ \"$1 $2\" = \"pane get\" ] && printf '{\"result\":{\"pane\":{\"tab_id\":\"t1\"}}}'\n"+
 		"exit 0\n", log, filepath.Join(dir, "opened"))
 	if err := os.WriteFile(herdr, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -501,8 +502,12 @@ func TestNewWorkspaceRunsWs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := os.ReadFile(log); !strings.Contains(string(got), "pane run p1 "+exe+" ws") {
+	got, _ := os.ReadFile(log)
+	if !strings.Contains(string(got), "pane run p1 "+exe+" ws") {
 		t.Errorf("herdr calls = %q, want `ccwt ws` run in the new pane", got)
+	}
+	if !strings.Contains(string(got), "tab rename t1 ws") {
+		t.Errorf("herdr calls = %q, want the tui's tab named ws", got)
 	}
 }
 
