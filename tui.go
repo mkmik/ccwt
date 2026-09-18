@@ -2813,7 +2813,11 @@ func (u *ui) startPending() string {
 	if pane == "" {
 		return msg // no pane to run in: whatever herdrOpen said went wrong
 	}
-	if out, err := exec.Command(herdrBin(), append([]string{"pane", "run", pane}, append(argv, shellQuote(prompt))...)...).CombinedOutput(); err != nil {
+	arg, err := promptArg(prompt)
+	if err != nil {
+		return "start failed: " + err.Error()
+	}
+	if out, err := exec.Command(herdrBin(), append([]string{"pane", "run", pane}, append(argv, arg)...)...).CombinedOutput(); err != nil {
 		return "start failed: " + lastLine(out, err)
 	}
 	// Last, once the prompt is actually running: a promote is a delete, and
@@ -2830,17 +2834,52 @@ func (u *ui) startPending() string {
 
 // shellQuote wraps s in single quotes for `herdr pane run`, which joins its
 // COMMAND words with spaces and types the line at the pane's shell prompt.
-// Unquoted, a multi-word prompt arrives at `claude` as several argv entries and
-// only the first of them is taken as the prompt. ponytail: single quotes and
-// the '\” trick, the one escape that needs no table of shell metacharacters.
+// Unquoted, a value with a space in it arrives at the cli as several argv
+// entries and only the first of them is read. ponytail: single quotes and the
+// '\” trick, the one escape that needs no table of shell metacharacters.
 //
 // A line break goes as $'\n' rather than as itself: typed at a prompt it would
 // leave the shell waiting on a continuation line mid-command, and nobody is
 // watching that pane — the whole point of a queued prompt is that it starts
 // without you. ponytail: bash, zsh and ksh all read $'…', which is every shell
-// a Claude Code pane is opened in; a prompt run under dash would want a heredoc.
+// a Claude Code pane is opened in; a value run under dash would want a heredoc.
 func shellQuote(s string) string {
 	return "'" + strings.NewReplacer("'", `'\''`, "\n", `'$'\n''`).Replace(s) + "'"
+}
+
+// promptArg is how a prompt reaches the agent: written to a file of its own,
+// and handed to `herdr pane run` as a `"$(cat …)"` of that file rather than as
+// the text itself.
+//
+// `pane run` types its command at the pane's shell prompt, and a tty holds
+// about a kilobyte of a line before it drops what is typed next — a pty here
+// takes 1023 bytes and discards the line entire at 1024. A paragraph of a
+// prompt went to the agent cut off mid-word, with the closing quote among the
+// parts that never arrived. A path is a hundred characters however long the
+// prompt is.
+//
+// It settles the quoting with it. Whatever was typed — quotes, newlines,
+// backslashes, a bare `!` for the shells that expand one — is bytes in a file
+// that `cat` hands over as they are, and the line the shell reads names the
+// file and nothing else.
+//
+// The substitution deletes the file as it reads it: nothing to tidy up later,
+// and no prompt left sitting in /tmp for whoever looks. ponytail: `$(…)` is
+// read by every shell that read the `$'…'` this replaces, and by dash besides.
+func promptArg(prompt string) (string, error) {
+	f, err := os.CreateTemp("", "ccwt-prompt-*.txt")
+	if err != nil {
+		return "", fmt.Errorf("the prompt needs a file to reach the agent in: %w", err)
+	}
+	if _, err := f.WriteString(prompt); err != nil {
+		f.Close()
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		return "", err
+	}
+	name := shellQuote(f.Name())
+	return `"$(cat ` + name + `; rm -f ` + name + `)"`, nil
 }
 
 // herdrPane is the pane sitting in the worktree at path, which after a

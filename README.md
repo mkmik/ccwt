@@ -440,6 +440,13 @@ running in it — `claude "<the prompt>"`, or whatever `task_command` in the con
 task_command = "claude --permission-mode plan"
 ```
 
+The prompt itself travels in a file — the pane is handed `claude "$(cat …)"`, and the file
+deletes itself as it is read. That command is typed at the pane's shell prompt, and a
+terminal takes about a kilobyte of a typed line before it drops the rest, which a prompt
+worth queueing is easily longer than; a filename is the same hundred characters however long
+the prompt is, and the shell never has to be taught to read back the quotes, newlines and
+backslashes in it.
+
 The row is then a worktree like any other, and the rest of the chain hangs off it, waiting
 on the work that has just started rather than on the prompt that started it.
 

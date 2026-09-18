@@ -460,6 +460,7 @@ esac
 	t.Setenv("HERDR_ENV", "1")
 	t.Setenv("HERDR_BIN_PATH", herdr)
 	t.Setenv("HERDR_WORKSPACE_ID", "w1")
+	t.Setenv("TMPDIR", dir) // the file the prompt travels in, somewhere it is swept up
 
 	u := ui{ws: true, entry: newEntry(listRow{}, "fix Bob's bug", 0)}
 	if msg := u.startSeed(); msg != "started" {
@@ -482,8 +483,11 @@ esac
 	if want := "tab create --workspace w1 --cwd " + cwd + " --no-focus"; !strings.Contains(string(calls), want) {
 		t.Errorf("herdr calls = %q, want %q — a tab of w1 here, unlabelled", calls, want)
 	}
-	if !strings.Contains(string(calls), `pane run w1:p2 claude 'fix Bob'\''s bug'`) {
-		t.Errorf("herdr calls = %q, want the cli run in the pane the create named, the prompt quoted as one argument", calls)
+	if !strings.Contains(string(calls), `pane run w1:p2 claude "$(cat `) {
+		t.Errorf("herdr calls = %q, want the cli run in the pane the create named, on the file the prompt went into", calls)
+	}
+	if got := seededPrompt(t, string(calls)); got != "fix Bob's bug" {
+		t.Errorf("the agent would be started on %q, want the whole prompt, apostrophe and all", got)
 	}
 
 	if err := os.WriteFile(refuse, nil, 0o644); err != nil {
@@ -516,6 +520,7 @@ esac
 	t.Setenv("HERDR_ENV", "1")
 	t.Setenv("HERDR_BIN_PATH", herdr)
 	t.Setenv("HERDR_WORKSPACE_ID", "w1")
+	t.Setenv("TMPDIR", dir) // the file the prompt travels in, somewhere it is swept up
 
 	u := ui{ws: true, entry: newEntry(listRow{}, "fix Bob's bug", 0)}
 	u.model = newEntry(listRow{}, u.modelName, 0)
@@ -545,7 +550,7 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `pane run w1:p2 claude --model 'claude-opus-5' 'fix Bob'\''s bug'`; !strings.Contains(string(calls), want) {
+	if want := `pane run w1:p2 claude --model 'claude-opus-5' "$(cat `; !strings.Contains(string(calls), want) {
 		t.Errorf("herdr calls = %q, want %q — the model as a flag, the prompt still the last word", calls, want)
 	}
 
@@ -561,8 +566,11 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(calls), "pane run w1:p2 claude 'and the docs'") {
+	if !strings.Contains(string(calls), `pane run w1:p2 claude "$(cat `) {
 		t.Errorf("herdr calls = %q, want no --model once the box was emptied", calls)
+	}
+	if got := seededPrompt(t, string(calls)); got != "and the docs" {
+		t.Errorf("the agent would be started on %q, want the prompt the box was left holding", got)
 	}
 }
 

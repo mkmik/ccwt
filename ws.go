@@ -575,7 +575,11 @@ func (u *ui) seed(prompt string) error {
 	if pane == "" {
 		return errors.New("no pane in the new tab to run the agent in")
 	}
-	if out, err := exec.Command(herdrBin(), append([]string{"pane", "run", pane}, append(argv, shellQuote(prompt))...)...).CombinedOutput(); err != nil {
+	arg, err := promptArg(prompt)
+	if err != nil {
+		return err
+	}
+	if out, err := exec.Command(herdrBin(), append([]string{"pane", "run", pane}, append(argv, arg)...)...).CombinedOutput(); err != nil {
 		return fmt.Errorf("herdr pane run: %s", lastLine(out, err))
 	}
 	return nil

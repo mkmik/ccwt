@@ -2260,6 +2260,54 @@ func TestQueueingWithNothingSelectedMakesANewRow(t *testing.T) {
 	}
 }
 
+// seededPrompt is what the agent would be started on: the prompt file the last
+// `pane run` line in s cats, read back. Nothing here runs that line, so the
+// file it would have deleted is still on disk to be checked.
+func seededPrompt(t *testing.T, s string) string {
+	t.Helper()
+	const cat = `"$(cat '`
+	at := strings.LastIndex(s, cat)
+	if at < 0 {
+		t.Fatalf("no prompt file in %q", s)
+	}
+	path, _, _ := strings.Cut(s[at+len(cat):], `'`)
+	prompt, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(prompt)
+}
+
+// What the prompt travels in is a line for a shell to read, so a shell reads
+// it here: a paragraph longer than the kilobyte a tty would have taken of a
+// typed line, with every character that usually wants escaping in it, arrives
+// at the command as one argument and unchanged — and the file it came in is
+// gone by the time it does.
+func TestAPromptReachesTheCommandWholeThroughAShell(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	prompt := "an 'apostrophe', a \"quote\", a $VAR, a `tick`, a !bang, a \\backslash,\na line break, and then " + strings.Repeat("a long paragraph ", 100)
+	arg, err := promptArg(prompt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prompt) < 1024 {
+		t.Fatalf("the prompt is %d bytes; the point of it is to be longer than a tty line", len(prompt))
+	}
+	// printf rather than echo: what the command is handed has to come back as
+	// it was, and the prompt ends in a space.
+	out, err := exec.Command("sh", "-c", "printf %s "+arg).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != prompt {
+		t.Errorf("the command was handed %q, want %q", out, prompt)
+	}
+	path, _, _ := strings.Cut(strings.TrimPrefix(arg, `"$(cat '`), `'`)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("%s is still there after the prompt was read out of it (%v)", path, err)
+	}
+}
+
 // Opening a "<new>" row is what finally makes its worktree: a fresh one, a
 // workspace on it, the prompt running there, and the rest of the chain now
 // waiting on that worktree rather than on a prompt that has started.
@@ -2288,6 +2336,8 @@ esac
 	}
 	t.Setenv("HERDR_ENV", "1")
 	t.Setenv("HERDR_BIN_PATH", herdr)
+
+	t.Setenv("TMPDIR", dir) // the file the prompt travels in, somewhere it is swept up
 
 	var u ui
 	rows, _ := renderRows(t)
@@ -2319,8 +2369,11 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(calls), `pane run w1:p1 claude 'then update Bob'\''s docs'`) {
-		t.Errorf("herdr calls = %q, want the whole prompt quoted as one argument", calls)
+	if !strings.Contains(string(calls), `pane run w1:p1 claude "$(cat `) {
+		t.Errorf("herdr calls = %q, want the cli run in the pane on the file the prompt went into", calls)
+	}
+	if got := seededPrompt(t, string(calls)); got != "then update Bob's docs" {
+		t.Errorf("the agent would be started on %q, want the whole prompt, apostrophe and all", got)
 	}
 
 	rows, body := renderRows(t)
@@ -2338,8 +2391,8 @@ esac
 // Shift-↵ puts a line break in the prompt and enter still records it, breaks
 // and all. A prompt is a paragraph often enough — the box keeps it as one and
 // draws it as one, the table folds it back to the single line a row can hold,
-// and the shell it is eventually typed at is handed it as $'\n' rather than as
-// a newline it would read as a half-finished command.
+// and the shell it is eventually typed at is handed the name of a file holding
+// it rather than the paragraph itself.
 func TestAPromptCanHoldLineBreaks(t *testing.T) {
 	initRepo(t)
 	capture(t, &NewWorktreeBranchCmd{Name: "alpha", Path: true})
@@ -2377,8 +2430,15 @@ func TestAPromptCanHoldLineBreaks(t *testing.T) {
 	if !strings.Contains(body, "port the widget then write the docs") {
 		t.Errorf("the table should fold the break to a space:\n%s", body)
 	}
-	if got, want := shellQuote(want), `'port the widget'$'\n''then write the docs'`; got != want {
-		t.Errorf("shellQuote = %s, want %s", got, want)
+	// And the break is a break where the agent reads it: the prompt travels in
+	// a file, so nothing has to spell a newline in a way a shell reads back.
+	t.Setenv("TMPDIR", t.TempDir())
+	arg, err := promptArg(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := seededPrompt(t, arg); got != want {
+		t.Errorf("the prompt file holds %q, want %q", got, want)
 	}
 }
 
