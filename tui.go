@@ -2044,9 +2044,10 @@ func paintDots(line, bg string) string {
 // every position in an invisible pair of them.
 func draw(line string, cols int, re *regexp.Regexp, bar string) string {
 	r := []rune(line)
-	if len(r) > cols {
-		r = r[:max(cols, 0)]
+	if over := screenWidth(line) - cols; over > 0 {
+		r = r[:max(len(r)-over, 0)]
 	}
+	w := screenWidth(string(r))
 	on, off := "\x1b[7m", "\x1b[0m"
 	if bar != "" {
 		on, off = off, bar
@@ -2058,8 +2059,18 @@ func draw(line string, cols int, re *regexp.Regexp, bar string) string {
 	if bar == "" {
 		return line
 	}
-	return bar + line + strings.Repeat(" ", max(cols-len(r), 0)) + "\x1b[0m"
+	return bar + line + strings.Repeat(" ", max(cols-w, 0)) + "\x1b[0m"
 }
+
+// screenWidth is how many columns s takes on screen: one per rune, and two for
+// the hamburger, which is the one double-width glyph the tui draws. Measuring a
+// line in runes makes a full-width one a column too long, and with wrapping off
+// the terminal writes that column back over the one before it — which is how
+// the bar's far corner lost the last digit of its version.
+//
+// ponytail: counts the one wide glyph we draw; a rune-width table the day we
+// draw a second.
+func screenWidth(s string) int { return len([]rune(s)) + strings.Count(s, "☰") }
 
 // highlight is draw for the lines that are a bar in their own right — the
 // status line, which has no rows and no matches on it. It stays reverse video:
@@ -2332,7 +2343,7 @@ func keyBar(cols int, msg, div string, as []action) string {
 	}
 	line := keys + " │ " + msg + " "
 	v := getVersion() + " "
-	if gap := cols - len([]rune(line)) - len([]rune(v)); gap >= 0 {
+	if gap := cols - screenWidth(line) - screenWidth(v); gap >= 0 {
 		line += strings.Repeat(" ", gap) + v
 	}
 	return highlight(line, cols)
