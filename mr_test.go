@@ -304,7 +304,7 @@ func TestMrTableLinksTheMergeRequest(t *testing.T) {
 	if want := "\x1b]8;;" + rows[0].url + "\x1b\\api!2596\x1b]8;;\x1b\\"; !strings.HasPrefix(linked[1], want) {
 		t.Errorf("line 1 = %q, want it to start with the link %q", linked[1], want)
 	}
-	if strings.Contains(linked[2], "\x1b") {
+	if strings.Contains(linked[2], "\x1b]8;;") {
 		t.Errorf("line 2 = %q, want no link on a row with no url", linked[2])
 	}
 	// Taking the sequences back out gives exactly the table of the same rows
@@ -317,6 +317,33 @@ func TestMrTableLinksTheMergeRequest(t *testing.T) {
 		if got := strip.Replace(linked[i]); got != plain[i] {
 			t.Errorf("line %d = %q with links, %q without: the link took up room", i, got, plain[i])
 		}
+	}
+}
+
+// The table spends colour on one word, so that the word shows: a merge
+// request that is in is green, and everything still asking something of you is
+// the terminal's own foreground.
+func TestMrTablePaintsMergedGreen(t *testing.T) {
+	defer func(orig func() bool) { stdoutIsTTY = orig }(stdoutIsTTY)
+	stdoutIsTTY = func() bool { return true }
+	rows := []mrRow{
+		{ref: "api!1", title: "a widget", status: "merged"},
+		{ref: "api!2", title: "unmerged branches are not merged", status: "needs approval", pipeline: "green"},
+	}
+	lines := mrTable("PROJ-9", rows, 0)
+	if want := "\x1b[92mmerged\x1b[0m"; !strings.Contains(lines[1], want) {
+		t.Errorf("line 1 = %q, want %q on it", lines[1], want)
+	}
+	// The word in a title is a word in a title: the paint follows the status,
+	// not the text, so nothing else on the screen goes green.
+	if strings.Contains(lines[2], "\x1b") {
+		t.Errorf("line 2 = %q, want nothing painted on a row that is not in yet", lines[2])
+	}
+	// And it costs the columns nothing — an escape is no width on screen but
+	// plenty of characters to the tabwriter, so a table painted before it was
+	// laid out is one whose painted rows have shifted right of the rest.
+	if got, want := strings.Index(plain(lines[1]), "a widget"), strings.Index(lines[2], "unmerged"); got != want {
+		t.Errorf("TITLE starts at %d on the painted row, %d on the plain one: the colour took up room", got, want)
 	}
 }
 

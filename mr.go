@@ -561,8 +561,39 @@ func mrTable(subject string, rows []mrRow, width int) []string {
 	}
 	fitTable(table, width, cols)
 	lines := tabbed(table)
+	paintMerged(lines, table, rows)
 	linkRefs(lines, table, rows)
 	return lines
+}
+
+// paintMerged puts the one colour these tables use on the one word worth
+// spending it on: a merge request that is in, and so has nothing left to ask
+// of you. Everything else — the pipeline still running, the approval that
+// isn't there — stays the terminal's own foreground, which is what keeps the
+// green meaning something when it does turn up.
+//
+// It goes on where linkRefs's escape does and for the same reason: an escape
+// is no width on screen but plenty of characters to a tabwriter, so it waits
+// until the columns are padded. The cell is the first "merged" past the ref —
+// STATUS is the column after MR, and the rows that aren't merged aren't
+// touched at all, so a title with the word in it stays plain. It runs before
+// linkRefs, whose own escape would move the offsets out from under it.
+//
+// The green is the done dot's green, asked for by number: herdr paints its
+// theme over the ansi sixteen, so the word and the dot stay the one colour.
+func paintMerged(lines []string, table [][]string, rows []mrRow) {
+	for i, r := range rows {
+		if r.status != "merged" {
+			continue
+		}
+		ref := table[i+1][0]
+		j := strings.Index(lines[i+1][len(ref):], r.status)
+		if j < 0 {
+			continue // the column was cut away
+		}
+		j += len(ref)
+		lines[i+1] = lines[i+1][:j] + "\x1b[92m" + r.status + "\x1b[0m" + lines[i+1][j+len(r.status):]
+	}
 }
 
 // linkRefs makes the MR column of each row the link to the merge request, so
