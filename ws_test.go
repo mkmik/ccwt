@@ -565,3 +565,44 @@ esac
 		t.Errorf("herdr calls = %q, want no --model once the box was emptied", calls)
 	}
 }
+
+// The workspace wears the list's own two marks: a "✓" once the merge request
+// is in, the "☐" of work pushed and waiting on a reviewer until then, and
+// nothing at all where there is nothing to wait on — a merge request nobody
+// opened yet, or one that was closed without landing. The badge always goes
+// with a ttl, because nothing tells herdr when this tui stops; a lookup that
+// failed says nothing rather than taking the last answer down with it.
+func TestWsBadgeSaysWhereTheMergeRequestStands(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "calls")
+	herdr := filepath.Join(dir, "herdr")
+	if err := os.WriteFile(herdr, []byte(fmt.Sprintf("#!/bin/sh\necho \"$@\" >> %q\n", log)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_BIN_PATH", herdr)
+	t.Setenv("HERDR_WORKSPACE_ID", "w1")
+
+	const call = "workspace report-metadata w1 --source ccwt "
+	ttl := " --ttl-ms " + fmt.Sprint(wsBadgeTTL.Milliseconds())
+	var want []string
+	for _, tc := range []struct{ status, token string }{
+		{"merged", "--token mr=✓" + ttl},
+		{"needs approval", "--token mr=☐" + ttl},
+		{"can be merged", "--token mr=☐" + ttl},
+		{"closed", "--clear-token mr"},
+	} {
+		wsBadge(&mrLook{rows: []mrRow{{status: tc.status}}})
+		want = append(want, call+tc.token)
+	}
+	wsBadge(&mrLook{}) // never pushed: the workspace every one of these starts as
+	want = append(want, call+"--clear-token mr")
+	wsBadge(&mrLook{err: errors.New("glab is not installed")})
+
+	calls, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Split(strings.TrimSuffix(string(calls), "\n"), "\n"); !slices.Equal(got, want) {
+		t.Errorf("herdr calls =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}

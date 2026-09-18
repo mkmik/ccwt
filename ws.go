@@ -277,6 +277,7 @@ func wsMR(width int) []string {
 		wsMRLook.stamp, wsMRLook.running = stamp, true
 		go func() {
 			look := branchLook()
+			wsBadge(look)
 			wsMRLook.Lock()
 			defer wsMRLook.Unlock()
 			wsMRLook.look, wsMRLook.running = look, false
@@ -299,6 +300,56 @@ func branchLook() *mrLook {
 	}
 	rows, err := lookThing(u, true)
 	return &mrLook{rows, err}
+}
+
+// wsBadgeTTL is how long herdr goes on showing the badge without hearing from
+// us again: a handful of lookups, so a round that didn't come back doesn't
+// blink it off the sidebar, and short enough that a workspace whose ws tui has
+// gone stops claiming anything about its merge request.
+const wsBadgeTTL = 5 * mrWindow
+
+// wsBadge puts where the merge request stands on the workspace itself, in the
+// two marks the worktree list already leads a name with: the "✓" of a branch
+// that is in, and until then the "☐" of work pushed and waiting on a reviewer.
+// The same two states said the same way, whether you are reading the list or
+// the sidebar down the side of it.
+//
+// herdr has no icon for a client to set, so it goes as display-only workspace
+// metadata under an `mr` token, which the spaces panel draws for whoever has
+// asked for it in their config:
+//
+//	[ui.sidebar.spaces]
+//	rows = [["state_icon", "workspace", "$mr"], ["branch", "git_status"]]
+//
+// Nothing tells herdr when this tui stops, so the badge always carries a ttl
+// and expires on its own rather than leaving a "✓" on a workspace that has long
+// since moved on. A lookup that failed reports nothing at all: glab being down
+// is no news about the merge request, and the badge standing another few
+// minutes says less than a wrong one would.
+func wsBadge(look *mrLook) {
+	ws := os.Getenv("HERDR_WORKSPACE_ID")
+	if ws == "" || look == nil || look.err != nil {
+		return
+	}
+	glyph := ""
+	if len(look.rows) > 0 {
+		switch look.rows[0].status {
+		case "merged":
+			glyph = "✓"
+		case "closed", "locked": // nothing left to wait on, and nothing landed: no badge beats either mark
+		default:
+			glyph = reviewGlyph
+		}
+	}
+	// A workspace with nothing to say loses the token rather than keeping the
+	// last thing it said until the ttl runs out.
+	token := []string{"--clear-token", "mr"}
+	if glyph != "" {
+		token = []string{"--token", "mr=" + glyph, "--ttl-ms", fmt.Sprint(wsBadgeTTL.Milliseconds())}
+	}
+	// The workspace id goes ahead of the flags: herdr's parser takes a trailing
+	// one for the value of whatever option came last and refuses the lot.
+	_ = exec.Command(herdrBin(), append([]string{"workspace", "report-metadata", ws, "--source", "ccwt"}, token...)...).Run()
 }
 
 // mrSection is that answer as lines, laid out in the same columns `ccwt mr`
