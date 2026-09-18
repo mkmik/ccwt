@@ -923,7 +923,7 @@ func TestStatusBarIsExactlyOneLineWide(t *testing.T) {
 			for _, searching := range []bool{false, true} {
 				bar := statusBar(40, msg, sel, "main  in sync", searching, false)
 				bar = strings.TrimSuffix(strings.TrimPrefix(bar, "\x1b[7m"), "\x1b[0m")
-				if got := len([]rune(bar)); got != 40 {
+				if got := screenWidth(bar); got != 40 {
 					t.Errorf("statusBar(40, %.10q, %v) is %d cols wide, want 40", msg, sel, got)
 				}
 			}
