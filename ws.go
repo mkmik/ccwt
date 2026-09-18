@@ -341,6 +341,7 @@ func mrSection(look *mrLook, width int) []string {
 	}
 	fitTable(table, width, cols)
 	lines := tabbed(table)
+	paintMerged(lines, table, look.rows)
 	linkRefs(lines, table, look.rows)
 	return lines
 }
