@@ -27,6 +27,7 @@ func TestWsTableListsTheWorkspaceTabs(t *testing.T) {
 case "$1 $2" in
 "tab list") printf '%s' '{"result":{"tabs":[{"tab_id":"w1:t3","label":"calm-baking-otter","number":3,"agent_status":"idle"},{"tab_id":"w1:t1","label":"1","number":1,"agent_status":"unknown"}]}}' ;;
 "pane list") printf '%s' '{"result":{"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1","cwd":"/src/ccwt","terminal_title_stripped":"zsh"},{"pane_id":"w1:p3","tab_id":"w1:t3","cwd":"/src/ccwt/.claude/worktrees/calm-baking-otter","terminal_title_stripped":"Waiting on your review"},{"pane_id":"w1:p4","tab_id":"w1:t3","cwd":"/elsewhere","terminal_title_stripped":"a split"}]}}' ;;
+"agent list") printf '%s' '{"result":{"agents":[]}}' ;;
 esac
 `
 	if err := os.WriteFile(herdr, []byte(script), 0o755); err != nil {
@@ -112,7 +113,8 @@ func TestWsTabDotIsTheAgentThatMostWantsYou(t *testing.T) {
 	script := `#!/bin/sh
 case "$1 $2" in
 "tab list") printf '%s' '{"result":{"tabs":[{"tab_id":"w1:t1","label":"1","agent_status":"unknown"},{"tab_id":"w1:t2","label":"2","agent_status":"working"}]}}' ;;
-"pane list") printf '%s' '{"result":{"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1","cwd":"/src/ccwt","terminal_title_stripped":"zsh"},{"pane_id":"w1:p2","tab_id":"w1:t2","cwd":"/src/ccwt","terminal_title_stripped":"Writing the tests","agent":"claude","agent_status":"working"},{"pane_id":"w1:p3","tab_id":"w1:t2","cwd":"/src/ccwt","terminal_title_stripped":"May I?","agent":"codex","agent_status":"blocked"}]}}' ;;
+"pane list") printf '%s' '{"result":{"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1","cwd":"/src/ccwt","terminal_title_stripped":"zsh"},{"pane_id":"w1:p2","tab_id":"w1:t2","cwd":"/src/ccwt","terminal_title_stripped":"Writing the tests"},{"pane_id":"w1:p3","tab_id":"w1:t2","cwd":"/src/ccwt","terminal_title_stripped":"May I?"}]}}' ;;
+"agent list") printf '%s' '{"result":{"agents":[{"tab_id":"w1:t2","pane_id":"w1:p2","agent":"claude","agent_status":"working","state_change_seq":7},{"tab_id":"w1:t2","pane_id":"w1:p3","agent":"codex","agent_status":"blocked","state_change_seq":9}]}}' ;;
 esac
 `
 	if err := os.WriteFile(herdr, []byte(script), 0o755); err != nil {
@@ -135,22 +137,23 @@ esac
 	}
 }
 
-// The green dot is a turn that ended while nobody was looking, and it is the ws
-// view's own bookkeeping rather than herdr's `done`: that one is the server's
-// seen state, which anyone's focus spends, so a conductor that took herdr's
-// word for it would hardly ever show one. What it watches instead is an agent
-// settling, and what puts the dot out is herdr saying that tab is the one being
-// looked at — or `space`, which is this tui going there itself.
-func TestWsGreenUntilTheTabIsLookedAt(t *testing.T) {
+// wsRounds is a herdr that can be told what one tab of a workspace looks like,
+// round by round: the agent's status and the counter herdr bumps every time it
+// changes, and whether the tab is the one being looked at. It answers what
+// herdrTabs asks and returns the dot the table would draw.
+func wsRounds(t *testing.T) func(status string, seq int, focused string) string {
+	t.Helper()
 	dir := t.TempDir()
 	herdr := filepath.Join(dir, "herdr")
 	tabs := filepath.Join(dir, "tabs.json")
+	agents := filepath.Join(dir, "agents.json")
 	script := fmt.Sprintf(`#!/bin/sh
 case "$1 $2" in
 "tab list") cat %s ;;
 "pane list") printf '%%s' '{"result":{"panes":[]}}' ;;
+"agent list") cat %s ;;
 esac
-`, tabs)
+`, tabs, agents)
 	if err := os.WriteFile(herdr, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -159,10 +162,14 @@ esac
 	t.Setenv("HERDR_WORKSPACE_ID", "w1")
 	wsWatched = map[string]wsWatch{}
 
-	round := func(status, focused string) string {
+	return func(status string, seq int, focused string) string {
 		t.Helper()
-		body := fmt.Sprintf(`{"result":{"tabs":[{"tab_id":"w1:t2","label":"2","agent_status":%q,"focused":%s}]}}`, status, focused)
-		if err := os.WriteFile(tabs, []byte(body), 0o644); err != nil {
+		tab := fmt.Sprintf(`{"result":{"tabs":[{"tab_id":"w1:t2","label":"2","focused":%s}]}}`, focused)
+		agent := fmt.Sprintf(`{"result":{"agents":[{"tab_id":"w1:t2","agent":"claude","agent_status":%q,"state_change_seq":%d}]}}`, status, seq)
+		if err := os.WriteFile(tabs, []byte(tab), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(agents, []byte(agent), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		ts, err := herdrTabs()
@@ -171,26 +178,69 @@ esac
 		}
 		return wsDot(ts[0].Status)
 	}
-	for _, step := range []struct{ status, focused, want string }{
-		{"working", "false", "◐"}, // off working: nothing said yet
-		{"idle", "false", "✓"},    // the turn ended with nobody there to read it
-		{"idle", "false", "✓"},    // and it stays unread until someone is
-		{"done", "false", "✓"},    // herdr's own, while the server still has it
-		{"idle", "false", "✓"},    // spent over there, still unread over here
-		{"idle", "true", "○"},     // read
-		{"idle", "false", "○"},    // and read it stays
-		{"working", "false", "◐"}, // off again, so there will be something new
-		{"idle", "false", "✓"},    // and here it is
+}
+
+// The green dot is a turn that ended with nobody there to read it, and it is
+// the ws view's own bookkeeping rather than herdr's `done`: that one is the
+// server's seen state, and one look spends it for good — the next turn ends
+// plain `idle`, because you were in the tab when the last one did. What this
+// one goes on is `state_change_seq`, herdr's counter for when the agent last
+// moved: anything past the count the tab last had while you were looking at it
+// is something nobody has read. `space` puts it out too, which is this tui
+// going there itself.
+func TestWsGreenUntilTheTabIsLookedAt(t *testing.T) {
+	round := wsRounds(t)
+	for _, step := range []struct {
+		status      string
+		seq         int
+		focused     string
+		want, whyfy string
+	}{
+		{"working", 1, "false", "◐", "off working: nothing said yet"},
+		{"idle", 2, "false", "✓", "the turn ended with nobody there to read it"},
+		{"idle", 2, "false", "✓", "and it stays unread until someone is"},
+		{"done", 2, "false", "✓", "herdr's own, while the server still has it"},
+		{"idle", 2, "false", "✓", "spent over there, still unread over here"},
+		{"idle", 2, "true", "○", "read"},
+		{"idle", 2, "false", "○", "and read it stays"},
+		{"working", 3, "false", "◐", "off again, so there will be something new"},
+		{"idle", 4, "false", "✓", "and here it is"},
+		{"idle", 4, "true", "○", "read again"},
+		{"working", 5, "true", "◐", "you stay in the tab while it works"},
+		{"idle", 6, "true", "○", "and are there when it ends: nothing to say"},
+		{"idle", 6, "false", "○", "leaving doesn't make it unread"},
+		{"working", 7, "false", "◐", "but the next turn is a new answer"},
+		{"idle", 8, "false", "✓", "and this one you weren't there for"},
 	} {
-		if got := round(step.status, step.focused); got != step.want {
-			t.Errorf("%s (focused=%s) = %q, want %q", step.status, step.focused, got, step.want)
+		if got := round(step.status, step.seq, step.focused); got != step.want {
+			t.Errorf("%s/%d (focused=%s) = %q, want %q — %s", step.status, step.seq, step.focused, got, step.want, step.whyfy)
 		}
 	}
 	if msg := herdrFocusTab("w1:t2"); msg != "" {
 		t.Fatalf("herdr tab focus = %q", msg)
 	}
-	if got := round("idle", "false"); got != "○" { // going there is reading it
+	if got := round("idle", 8, "false"); got != "○" { // going there is reading it
 		t.Errorf("after space = %q, want a read tab", got)
+	}
+}
+
+// A conductor that only colours the turns it was running for hardly colours
+// anything: `ccwt ws` re-execs itself on every ccwt upgrade, and a tab that had
+// finished by then stayed grey for the rest of its life — herdr knew there was
+// something waiting in it, and the table said nothing. Off herdr's counter a
+// tui that has just come up says so, because it doesn't need to have watched
+// the turn end to know it has.
+func TestWsGreenSurvivesARestart(t *testing.T) {
+	round := wsRounds(t)
+	if got := round("working", 5, "false"); got != "◐" {
+		t.Fatalf("working = %q", got)
+	}
+	if got := round("idle", 6, "true"); got != "○" { // read, so this tui is quiet about it
+		t.Fatalf("read = %q", got)
+	}
+	wsWatched = map[string]wsWatch{} // the upgrade's re-exec, and everything it remembered
+	if got := round("idle", 6, "false"); got != "✓" {
+		t.Errorf("after a restart = %q, want the tab to say it has something in it", got)
 	}
 }
 
@@ -261,6 +311,7 @@ func TestWsFramePinsTheMergeRequestAboveTheTabs(t *testing.T) {
 case "$1 $2" in
 "tab list") printf '%s' '{"result":{"tabs":[{"tab_id":"w1:t1","label":"one"},{"tab_id":"w1:t2","label":"two"},{"tab_id":"w1:t3","label":"three"}]}}' ;;
 "pane list") printf '%s' '{"result":{"panes":[{"tab_id":"w1:t1","cwd":"/src/a"},{"tab_id":"w1:t2","cwd":"/src/b"},{"tab_id":"w1:t3","cwd":"/src/c"}]}}' ;;
+"agent list") printf '%s' '{"result":{"agents":[]}}' ;;
 esac
 `
 	if err := os.WriteFile(herdr, []byte(script), 0o755); err != nil {
