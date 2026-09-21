@@ -664,11 +664,19 @@ table below it — in the same colours, too: the dots are asked for by palette n
 Herdr's theme is what answers.
 
 Green is the one mark the table keeps itself. Herdr's `done` is the server's seen state, and
-the first focus anywhere spends it, so a conductor that took Herdr's word for it would hardly
-ever show one — Herdr's own tui doesn't either, it keeps the badge per client, each tracking
-what it has been shown. This one goes on when a turn ends with nobody there to read it — an
-agent working, or blocked, and then settled — and comes off when you go: `space`, or Herdr
-saying that tab is the one you are looking at.
+one look spends it for good: sit in a tab until its agent finishes, and every turn it ends
+after that is plain `idle`, however far away you were for it. Herdr's own tui doesn't take
+that answer either — it keeps the badge per client, each tracking what it has been shown. So
+this one goes on when an agent has settled and has moved since the last time anyone was
+looking at its tab, and comes off when you go: `space`, or Herdr saying that tab is the one
+you are looking at.
+
+What it reads that off is `state_change_seq`, Herdr's own counter for when an agent last
+changed state, rather than off watching for the change itself — which means a `ccwt ws` that
+has only just come up still says which tabs have something waiting in them. A conductor that
+has to witness the turn end to colour it says nothing about the ones that ended first, and
+`ccwt ws` restarts itself on every ccwt upgrade. The cost is a third round trip to Herdr per
+round, next to the tab and pane lists the table is built from.
 
 `n` opens the same box the [queue](#queued-prompts) types into, and what goes in it is a seed
 prompt: `↵` opens a tab of the workspace in the workspace's own worktree — the one the tui is
