@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode"
@@ -2548,7 +2549,9 @@ func fetchMain(ctx context.Context, every time.Duration, dirs []string) {
 		for _, dir := range dirs {
 			cmd := exec.CommandContext(ctx, "git", "fetch", "--quiet", "origin", "main")
 			cmd.Dir = dir
+			fetchLock.Lock()
 			_ = cmd.Run()
+			fetchLock.Unlock()
 		}
 		select {
 		case <-ctx.Done():
@@ -2557,6 +2560,17 @@ func fetchMain(ctx context.Context, every time.Duration, dirs []string) {
 		}
 	}
 }
+
+// fetchLock keeps fetchMain out of gitPull's way. Both move
+// refs/remotes/origin/main, and git only moves a ref that still holds the value
+// the move started from — so a background fetch landing mid-pull takes the ref,
+// and the pull merges nothing at all: "unable to update local ref", and a
+// branch exactly where it was.
+//
+// ponytail: this process only. A second ccwt on the same repo, or a git in a
+// terminal, can still take the ref mid-pull; there the answer is to press `p`
+// again.
+var fetchLock sync.Mutex
 
 // gitPull runs a pull in dir and boils its chatter down to the one line the bar
 // has room for: on success the first line says what happened ("Already up to
@@ -2567,7 +2581,11 @@ func gitPull(dir string) string {
 	}
 	cmd := exec.Command("git", "pull")
 	cmd.Dir = dir
+	// Wait a background fetch out rather than race it: the pull is what was
+	// asked for, and the fetch comes round again a minute later anyway.
+	fetchLock.Lock()
 	out, err := cmd.CombinedOutput()
+	fetchLock.Unlock()
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	if err != nil {
 		return "pull failed: " + strings.TrimSpace(lines[len(lines)-1])
