@@ -93,8 +93,14 @@ func (c *TuiCmd) Run() error {
 		// held — the last of which is the drag a text selection is made with.
 		// 1006: report them in SGR form, which unlike the original encoding
 		// keeps working past column 223.
-		fmt.Print("\x1b[?1002h\x1b[?1006h")
-		defer fmt.Print("\x1b[?1006l\x1b[?1002l")
+		// >4;1: xterm's modifyOtherKeys, at the level that spells out a modifier
+		// only on the keys that have no spelling of their own with one. Without
+		// it shift-↵ is ↵ — herdr hears shift from the terminal and drops it on
+		// the way to any pane that didn't ask — and it started the agent the
+		// line break was meant for. Every other key we bind arrives as before;
+		// level 2 would re-spell alt-↵ and shift-tab too.
+		fmt.Print("\x1b[?1002h\x1b[?1006h\x1b[>4;1m")
+		defer fmt.Print("\x1b[>4m\x1b[?1006l\x1b[?1002l")
 	}
 
 	// Alternate screen, hidden cursor, no auto-wrap (a wrapped long line would
@@ -191,11 +197,11 @@ func (c *TuiCmd) Run() error {
 	// hasn't been acknowledged yet, so readKeys is parked. Only a key can get
 	// here, and there are no keys without a terminal, so raw is set.
 	external := func() {
-		fmt.Print("\x1b[?1006l\x1b[?1002l\x1b[?7h\x1b[?25h\x1b[?1049l")
+		fmt.Print("\x1b[>4m\x1b[?1006l\x1b[?1002l\x1b[?7h\x1b[?25h\x1b[?1049l")
 		term.Restore(int(os.Stdin.Fd()), raw)
 		text, err := externalEdit(u.entry.text)
 		term.MakeRaw(int(os.Stdin.Fd()))
-		fmt.Print("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1002h\x1b[?1006h")
+		fmt.Print("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1002h\x1b[?1006h\x1b[>4;1m")
 
 		last = "" // the editor drew over the frame, so redraw all of it
 		u.entry.text, u.entry.cur = text, len(text)
@@ -746,7 +752,7 @@ func (u *ui) prompt(d int) {
 // text re-runs the search as it goes.
 func (u *ui) edit(k string) {
 	switch k {
-	case "\r", "\n":
+	case "\r", "\n", "\x1b[27;2;13~": // shift-↵ too: a search is one line
 		u.typing = false
 		u.report(u.preview())
 	case "\x1b", "\x03":
@@ -908,7 +914,8 @@ func lineEdit(s string, cur int, k string) (string, int) {
 	// Shift-↵ — and Alt-↵, and Ctrl-J — is a line break rather than the end of
 	// the prompt, the way it is in Claude Code's own box. Terminals disagree on
 	// what to send for it: ESC CR is what Claude Code's terminal setup binds it
-	// to, the two CSIs are what one reporting modifiers sends unasked.
+	// to, CSI 27 is modifyOtherKeys' — which the tui asks for, and herdr sends —
+	// and CSI u is what a terminal reporting modifiers unasked sends.
 	case "\n", "\x1b\r", "\x1b\n", "\x1b[13;2u", "\x1b[27;2;13~":
 		return s[:cur] + "\n" + s[cur:], cur + 1
 	case "\x7f", "\b": // backspace: the rune before the caret
@@ -2305,11 +2312,19 @@ func readKeys() (<-chan string, chan<- struct{}) {
 // didn't move at all while a key was held. -g made it worse rather than caused
 // it: four repos of worktrees take longer to re-read, so the window in which
 // keystrokes pile up is wider.
+//
+// Ctrl-↵ comes out as ↵. It arrives spelled apart once the terminal is asked
+// for modifyOtherKeys, and it was ↵ here before that — as it sends in Claude
+// Code's box, where shift-↵ is the line break.
 func splitKeys(s string) []string {
 	var keys []string
 	for len(s) > 0 {
 		n := keyLen(s)
-		keys = append(keys, s[:n])
+		k := s[:n]
+		if k == "\x1b[27;5;13~" {
+			k = "\r"
+		}
+		keys = append(keys, k)
 		s = s[n:]
 	}
 	return keys
