@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
@@ -547,6 +549,110 @@ esac
 	u.entry = newEntry(listRow{}, "and then the docs", 0)
 	if msg := u.startSeed(); msg != "start failed: herdr tab create: no more tabs" || !u.entry.open || u.entry.text != "and then the docs" {
 		t.Errorf("after a refusal: %q, box open %v, text %q; want herdr's reason and the prompt kept", msg, u.entry.open, u.entry.text)
+	}
+}
+
+// A workspace whose agents are Claude Code, in a repository Claude Code hasn't
+// been told to trust, opens on that question — over the seed prompt, which is
+// still there under it once the question is answered. Yes is filed where
+// Claude Code's own dialog files it: the repository's main checkout, which
+// every worktree of it shares, with the rest of Claude Code's config as it
+// was. After that, and for an agent that isn't Claude Code, there's no
+// question to ask.
+func TestWsAsksWhetherClaudeCodeMayTrustTheRepoFirst(t *testing.T) {
+	initRepo(t)
+	root, err := gitutil.RepoRoot("", true) // git's own idea of it: the temp dir is a symlink on a mac
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(capture(t, &NewWorktreeBranchCmd{Name: "seeded", Path: true}))
+
+	dir := t.TempDir()
+	herdr := filepath.Join(dir, "herdr")
+	script := `#!/bin/sh
+case "$1 $2" in
+"tab list") printf '%s' '{"result":{"tabs":[{"tab_id":"w1:t1","label":"ws"}]}}' ;;
+"pane list") printf '%s' '{"result":{"panes":[]}}' ;;
+"agent list") printf '%s' '{"result":{"agents":[]}}' ;;
+esac
+`
+	if err := os.WriteFile(herdr, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_BIN_PATH", herdr)
+	t.Setenv("HERDR_WORKSPACE_ID", "w1")
+	noMR(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	config := filepath.Join(dir, ".claude.json")
+	before := `{"numStartups": 12345678901234567890, "oauthAccount": {"emailAddress": "me@example.com"},
+		"projects": {"/elsewhere": {"allowedTools": ["Bash"], "hasTrustDialogAccepted": true}}}`
+	if err := os.WriteFile(config, []byte(before), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	u := ui{ws: true}
+	u.askTrust()
+	u.askSeed()
+	if u.trust != root || !u.entry.open {
+		t.Fatalf("opened on trust %q and the seed prompt %v, want %q with the prompt under it", u.trust, u.entry.open, root)
+	}
+	defer func(old func() (int, int)) { termSize = old }(termSize)
+	termSize = func() (int, int) { return 100, 24 }
+	lines, err := u.frame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if screen := strings.Join(lines, "\n"); !strings.Contains(screen, "─ trust ") || strings.Contains(screen, "new agent") {
+		t.Errorf("frame = %q, want the trust question over the seed prompt", lines)
+	}
+
+	u.answerTrust("y")
+	if u.trust != "" || !u.entry.open {
+		t.Errorf("after y: trust %q, seed prompt %v; want the question gone and the prompt still up", u.trust, u.entry.open)
+	}
+	b, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var after struct {
+		Starts   jsontext.Value `json:"numStartups"`
+		Account  jsontext.Value `json:"oauthAccount"`
+		Projects map[string]struct {
+			Trusted bool     `json:"hasTrustDialogAccepted"`
+			Tools   []string `json:"allowedTools"`
+		} `json:"projects"`
+	}
+	if err := json.Unmarshal(b, &after); err != nil {
+		t.Fatalf("%s: %v", b, err)
+	}
+	if p := after.Projects[root]; !p.Trusted || p.Tools == nil {
+		t.Errorf("projects[%s] = %+v, want trusted, and Claude Code's defaults for a project it never met", root, p)
+	}
+	if string(after.Starts) != "12345678901234567890" || !strings.Contains(string(after.Account), "me@example.com") ||
+		!slices.Equal(after.Projects["/elsewhere"].Tools, []string{"Bash"}) {
+		t.Errorf("the rest of the config came back as %s", b)
+	}
+	if _, err := os.Stat(config + ".lock"); !os.IsNotExist(err) {
+		t.Errorf("Claude Code's lock was left behind (%v)", err)
+	}
+
+	u = ui{ws: true}
+	if u.askTrust(); u.trust != "" {
+		t.Errorf("asked about %q again once it was trusted", u.trust)
+	}
+	if err := os.WriteFile(config, []byte(before), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "ccwt", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(cfg), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg, []byte(`task_command = "codex"`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if u.askTrust(); u.trust != "" {
+		t.Errorf("asked about %q for agents that aren't Claude Code", u.trust)
 	}
 }
 

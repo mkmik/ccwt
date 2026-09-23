@@ -41,3 +41,8 @@ stages; tick things off as they land.
   same every time, and herdr names a tab by what runs in it.
 - The seed isn't recorded in `tasks.db`: it runs at once, and the tab is the
   record. Stage 4's follow-ups would be.
+- Claude Code's trust question is asked by the ws view itself, first, when the
+  agent is `claude`: an unfocused tab would otherwise sit at the dialog with the
+  seed prompt behind it. Yes goes on the repository's main checkout in
+  `~/.claude.json`, which is Claude Code's own key for it, so one answer covers
+  every worktree; no leaves Claude Code to ask.
