@@ -29,6 +29,8 @@ stages; tick things off as they land.
   - [x] `r`: `ccwt done` for the workspace the tui is in, on the bar only when the removal would go through without -D — `removeBlocked` is the one test `remove`, `done` and the ws view all ask
   - [ ] close a tab from the table (`r` is the workspace's — worktree and all; closing one tab would be a key of its own)
   - [x] a way to open a workspace with `ccwt ws` already in its first tab — the tui's `c`, which runs it there instead of the agent (`TestNewWorkspaceRunsWs`); the herdr plugin's own action still opens a bare worktree
+  - [x] the list names, in a box in its corner, the workspaces whose `ws` tab has no ccwt running in it (`herdrWsDown`, `TestListWatchesTheWsTabsForTheirCcwt`): a look when herdr's events say a tab or workspace was made, renamed or closed, and every 10s besides
+  - [ ] start `ccwt ws` again in those tabs, rather than only saying so
 
 ## Decisions
 
@@ -46,6 +48,9 @@ stages; tick things off as they land.
   seed prompt behind it. Yes goes on the repository's main checkout in
   `~/.claude.json`, which is Claude Code's own key for it, so one answer covers
   every worktree; no leaves Claude Code to ask.
+- A tab named `ws` is ccwt's wherever it is, so the corner warning is
+  herdr-wide rather than the repo's. Only the list looks: a ws view in every
+  workspace, each watching all of them, is the traffic the socket plan cuts.
 
 # Talking to herdr over its socket — task list
 
@@ -64,6 +69,7 @@ to, in `HERDR_SOCKET_PATH`.
 - [ ] 2. Hear from herdr instead of asking every 2s
   - [ ] `events.subscribe` on a connection held open: `tab.*`, `pane.updated`/`created`/`closed`, `pane.agent_status_changed`, `workspace.renamed` — each one re-reads and redraws, as a tick does now
   - [ ] reconnect when herdr goes away and comes back (a restart, `herdr update --handoff`)
+  - `herdrListen` is that connection, redialled every couple of seconds while herdr is away; the list's corner warning listens on it, the ws view's round doesn't yet
   - [ ] the tick goes slow, as the fallback for a missed event, rather than away
 - [ ] 3. Later, if it earns its keep
   - [ ] the one-off reads (`nav ws`, `pane get`, `worktree list`, …): a process per keypress rather than per round
@@ -81,3 +87,7 @@ to, in `HERDR_SOCKET_PATH`.
   an error line, which `herdrAsk` returns as an error.
 - `encoding/json/v2` for the request, which writes a nil map as `{}`: herdr
   refuses `"params": null`.
+- Herdr has no event for what is in a pane's foreground: a program exiting
+  back to its shell says nothing at all (a probe session, herdr 0.9.1). So
+  whatever watches for a process — the list's corner — keeps a slow look going
+  alongside its events.
