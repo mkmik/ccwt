@@ -550,7 +550,7 @@ func (u *ui) startSeed() string {
 // and a ccwt that kept a list of them would be wrong by the next release.
 func (u *ui) askModel(k string) {
 	switch k {
-	case "\r":
+	case "\r", "\x1b[27;2;13~": // shift-↵ too: a model name is one line
 		u.modelName, u.model = strings.TrimSpace(u.model.text), entry{}
 	case "\x1b", "\x03":
 		u.model = entry{}

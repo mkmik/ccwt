@@ -1410,6 +1410,9 @@ func TestSplitKeys(t *testing.T) {
 		"\x1b\r":     {"\x1b\r"},     // shift-↵, as Claude Code binds it
 		"\x1bbj":     {"\x1bb", "j"}, // alt-B, and the key after it
 		"\x1b\x1b":   {"\x1b\x1b"},
+		// With modifyOtherKeys on, shift-↵ stays itself — a line break in a
+		// prompt — and ctrl-↵ is ↵, as it was before the terminal told them apart.
+		"a\x1b[27;2;13~b\x1b[27;5;13~": {"a", "\x1b[27;2;13~", "b", "\r"},
 	} {
 		if got := splitKeys(in); !slices.Equal(got, want) {
 			t.Errorf("splitKeys(%q) = %q, want %q", in, got, want)
