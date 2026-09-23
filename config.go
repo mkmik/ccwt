@@ -33,16 +33,17 @@ type Config struct {
 	// Sort is the order `list` and `tui` put the worktrees in; see sortOrders.
 	Sort string `toml:"sort"`
 	// Forges maps the host of a remote to the cli that knows about its reviews
-	// — "gh" or "glab" — for the tui's `g` key. Only a host whose name doesn't
-	// say which it is needs a line here, a self-hosted GitLab most of all:
+	// — "gh" or "glab" — for the tui's `m` key and for which forge `mr` asks.
+	// Only a host whose name doesn't say which it is needs a line here, a
+	// self-hosted GitLab most of all:
 	//
 	//	[forges]
 	//	"code.example.com" = "glab"
 	Forges map[string]string `toml:"forges"`
 	// Environments renames an environment in the ENV column of `mr`: the name
-	// gitlab knows it by on the left, what to call it on the right. The names
-	// a deployment pipeline uses are written to be unambiguous in a settings
-	// page, which is longer than a column that gets glanced at wants:
+	// gitlab or github knows it by on the left, what to call it on the right.
+	// The names a deployment pipeline uses are written to be unambiguous in a
+	// settings page, which is longer than a column that gets glanced at wants:
 	//
 	//	[environments]
 	//	production = "prod"
