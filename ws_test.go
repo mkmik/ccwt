@@ -861,9 +861,11 @@ func TestWsBadgeSaysWhereTheMergeRequestStands(t *testing.T) {
 // name is what says a ccwt belongs there, and herdr's word for what is in the
 // foreground of any of the tab's panes is what says whether one is. A pane
 // herdr can't say that about is left out: a warning that isn't sure is one not
-// to give. The list looks when its subscription to herdr's events starts, and
-// again whenever an event comes — which is how a `ws` tab that has its ccwt
-// back drops out, long before the slow look that catches one quitting.
+// to give. Only the workspaces of the list's own worktrees count: another
+// repo's `ws` tab is for that repo's list to name. The list looks when its
+// subscription to herdr's events starts, and again whenever an event comes —
+// which is how a `ws` tab that has its ccwt back drops out, long before the
+// slow look that catches one quitting.
 func TestListWatchesTheWsTabsForTheirCcwt(t *testing.T) {
 	t.Chdir(t.TempDir()) // a unix socket's path has to be short
 	l, err := net.Listen("unix", "herdr.sock")
@@ -872,11 +874,11 @@ func TestListWatchesTheWsTabsForTheirCcwt(t *testing.T) {
 	}
 	t.Cleanup(func() { l.Close() })
 	const snapshot = `{"result":{"snapshot":{` +
-		`"workspaces":[{"workspace_id":"w1","label":"alpha"},{"workspace_id":"w2","label":"beta"},{"workspace_id":"w3","label":"gamma"},{"workspace_id":"w4","label":"delta"},{"workspace_id":"w5","label":"epsilon"}],` +
-		`"tabs":[{"tab_id":"w1:t1","workspace_id":"w1","label":"ws"},{"tab_id":"w2:t1","workspace_id":"w2","label":"ws"},{"tab_id":"w2:t2","workspace_id":"w2","label":"2"},{"tab_id":"w3:t1","workspace_id":"w3","label":"1"},{"tab_id":"w4:t1","workspace_id":"w4","label":"ws"},{"tab_id":"w5:t1","workspace_id":"w5","label":"ws"}],` +
-		`"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1"},{"pane_id":"w2:p1","tab_id":"w2:t1"},{"pane_id":"w2:p2","tab_id":"w2:t2"},{"pane_id":"w3:p1","tab_id":"w3:t1"},{"pane_id":"w4:p1","tab_id":"w4:t1"},{"pane_id":"w5:p1","tab_id":"w5:t1"},{"pane_id":"w5:p2","tab_id":"w5:t1"}]}}}`
+		`"workspaces":[{"workspace_id":"w1","label":"alpha","worktree":{"checkout_path":"/src/app/.claude/worktrees/alpha"}},{"workspace_id":"w2","label":"beta","worktree":{"checkout_path":"/src/app/.claude/worktrees/beta"}},{"workspace_id":"w3","label":"gamma","worktree":{"checkout_path":"/src/app/.claude/worktrees/gamma"}},{"workspace_id":"w4","label":"delta","worktree":{"checkout_path":"/src/app/.claude/worktrees/delta"}},{"workspace_id":"w5","label":"epsilon","worktree":{"checkout_path":"/src/app/.claude/worktrees/epsilon"}},{"workspace_id":"w6","label":"zeta","worktree":{"checkout_path":"/src/other/.claude/worktrees/zeta"}}],` +
+		`"tabs":[{"tab_id":"w1:t1","workspace_id":"w1","label":"ws"},{"tab_id":"w2:t1","workspace_id":"w2","label":"ws"},{"tab_id":"w2:t2","workspace_id":"w2","label":"2"},{"tab_id":"w3:t1","workspace_id":"w3","label":"1"},{"tab_id":"w4:t1","workspace_id":"w4","label":"ws"},{"tab_id":"w5:t1","workspace_id":"w5","label":"ws"},{"tab_id":"w6:t1","workspace_id":"w6","label":"ws"}],` +
+		`"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1"},{"pane_id":"w2:p1","tab_id":"w2:t1"},{"pane_id":"w2:p2","tab_id":"w2:t2"},{"pane_id":"w3:p1","tab_id":"w3:t1"},{"pane_id":"w4:p1","tab_id":"w4:t1"},{"pane_id":"w5:p1","tab_id":"w5:t1"},{"pane_id":"w5:p2","tab_id":"w5:t1"},{"pane_id":"w6:p1","tab_id":"w6:t1"}]}}}`
 	var mu sync.Mutex
-	foreground := map[string]string{"w1:p1": "ccwt", "w2:p1": "zsh", "w2:p2": "zsh", "w3:p1": "zsh", "w5:p1": "zsh", "w5:p2": "ccwt"} // w4:p1: herdr can't say
+	foreground := map[string]string{"w1:p1": "ccwt", "w2:p1": "zsh", "w2:p2": "zsh", "w3:p1": "zsh", "w5:p1": "zsh", "w5:p2": "ccwt", "w6:p1": "zsh"} // w4:p1: herdr can't say
 	events := make(chan string)
 	go func() {
 		for {
@@ -920,7 +922,7 @@ func TestListWatchesTheWsTabsForTheirCcwt(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { watchWsDown(ctx); close(done) }()
+	go func() { watchWsDown(ctx, []string{"/src/app"}); close(done) }()
 	t.Cleanup(func() { cancel(); <-done; close(events); wsDown.names, wsSettle = nil, settle })
 
 	// Well inside wsDownEvery, so that only the subscription can have asked.
