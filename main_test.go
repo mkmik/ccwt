@@ -2261,8 +2261,7 @@ func TestQueueingWithNothingSelectedMakesANewRow(t *testing.T) {
 }
 
 // seededPrompt is what the agent would be started on: the prompt file the last
-// `pane run` line in s cats, read back. Nothing here runs that line, so the
-// file it would have deleted is still on disk to be checked.
+// `pane run` line in s cats, read back.
 func seededPrompt(t *testing.T, s string) string {
 	t.Helper()
 	const cat = `"$(cat '`
@@ -2281,8 +2280,9 @@ func seededPrompt(t *testing.T, s string) string {
 // What the prompt travels in is a line for a shell to read, so a shell reads
 // it here: a paragraph longer than the kilobyte a tty would have taken of a
 // typed line, with every character that usually wants escaping in it, arrives
-// at the command as one argument and unchanged — and the file it came in is
-// gone by the time it does.
+// at the command as one argument and unchanged — and does again when the line
+// is run a second time, the way it is from the pane's history after an agent
+// that failed to start.
 func TestAPromptReachesTheCommandWholeThroughAShell(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
 	prompt := "an 'apostrophe', a \"quote\", a $VAR, a `tick`, a !bang, a \\backslash,\na line break, and then " + strings.Repeat("a long paragraph ", 100)
@@ -2295,16 +2295,14 @@ func TestAPromptReachesTheCommandWholeThroughAShell(t *testing.T) {
 	}
 	// printf rather than echo: what the command is handed has to come back as
 	// it was, and the prompt ends in a space.
-	out, err := exec.Command("sh", "-c", "printf %s "+arg).Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(out) != prompt {
-		t.Errorf("the command was handed %q, want %q", out, prompt)
-	}
-	path, _, _ := strings.Cut(strings.TrimPrefix(arg, `"$(cat '`), `'`)
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Errorf("%s is still there after the prompt was read out of it (%v)", path, err)
+	for range 2 {
+		out, err := exec.Command("sh", "-c", "printf %s "+arg).Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(out) != prompt {
+			t.Errorf("the command was handed %q, want %q", out, prompt)
+		}
 	}
 }
 

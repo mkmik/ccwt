@@ -2881,9 +2881,13 @@ func shellQuote(s string) string {
 // that `cat` hands over as they are, and the line the shell reads names the
 // file and nothing else.
 //
-// The substitution deletes the file as it reads it: nothing to tidy up later,
-// and no prompt left sitting in /tmp for whoever looks. ponytail: `$(…)` is
-// read by every shell that read the `$'…'` this replaces, and by dash besides.
+// The file is left where it is once read. The agent can fail to start with the
+// prompt already handed to it — a directory whose trust dialog nobody has
+// accepted yet, say — and the line in the pane's history is then the way to try
+// again, which it only is while the file it names is still there. ponytail: one
+// file per start left in $TMPDIR for the OS to sweep; remove it after a clean
+// exit if they ever pile up. `$(…)` is read by every shell that read the `$'…'`
+// this replaces, and by dash besides.
 func promptArg(prompt string) (string, error) {
 	f, err := os.CreateTemp("", "ccwt-prompt-*.txt")
 	if err != nil {
@@ -2896,8 +2900,7 @@ func promptArg(prompt string) (string, error) {
 	if err := f.Close(); err != nil {
 		return "", err
 	}
-	name := shellQuote(f.Name())
-	return `"$(cat ` + name + `; rm -f ` + name + `)"`, nil
+	return `"$(cat ` + shellQuote(f.Name()) + `)"`, nil
 }
 
 // herdrPane is the pane sitting in the worktree at path, which after a
