@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"cmp"
+	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -12,7 +13,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/mkmik/ccwt/internal/gitutil"
 )
@@ -850,5 +853,129 @@ func TestWsBadgeSaysWhereTheMergeRequestStands(t *testing.T) {
 	}
 	if got := strings.Split(strings.TrimSuffix(string(calls), "\n"), "\n"); !slices.Equal(got, want) {
 		t.Errorf("herdr calls =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// A workspace whose `ws` tab has no ccwt running in it — the conductor quit, or
+// herdr came back without it — is one the list names in its corner. The tab's
+// name is what says a ccwt belongs there, and herdr's word for what is in the
+// foreground of any of the tab's panes is what says whether one is. A pane
+// herdr can't say that about is left out: a warning that isn't sure is one not
+// to give. The list looks when its subscription to herdr's events starts, and
+// again whenever an event comes — which is how a `ws` tab that has its ccwt
+// back drops out, long before the slow look that catches one quitting.
+func TestListWatchesTheWsTabsForTheirCcwt(t *testing.T) {
+	t.Chdir(t.TempDir()) // a unix socket's path has to be short
+	l, err := net.Listen("unix", "herdr.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	const snapshot = `{"result":{"snapshot":{` +
+		`"workspaces":[{"workspace_id":"w1","label":"alpha"},{"workspace_id":"w2","label":"beta"},{"workspace_id":"w3","label":"gamma"},{"workspace_id":"w4","label":"delta"},{"workspace_id":"w5","label":"epsilon"}],` +
+		`"tabs":[{"tab_id":"w1:t1","workspace_id":"w1","label":"ws"},{"tab_id":"w2:t1","workspace_id":"w2","label":"ws"},{"tab_id":"w2:t2","workspace_id":"w2","label":"2"},{"tab_id":"w3:t1","workspace_id":"w3","label":"1"},{"tab_id":"w4:t1","workspace_id":"w4","label":"ws"},{"tab_id":"w5:t1","workspace_id":"w5","label":"ws"}],` +
+		`"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1"},{"pane_id":"w2:p1","tab_id":"w2:t1"},{"pane_id":"w2:p2","tab_id":"w2:t2"},{"pane_id":"w3:p1","tab_id":"w3:t1"},{"pane_id":"w4:p1","tab_id":"w4:t1"},{"pane_id":"w5:p1","tab_id":"w5:t1"},{"pane_id":"w5:p2","tab_id":"w5:t1"}]}}}`
+	var mu sync.Mutex
+	foreground := map[string]string{"w1:p1": "ccwt", "w2:p1": "zsh", "w2:p2": "zsh", "w3:p1": "zsh", "w5:p1": "zsh", "w5:p2": "ccwt"} // w4:p1: herdr can't say
+	events := make(chan string)
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				var req struct {
+					Method string         `json:"method"`
+					Params map[string]any `json:"params"`
+				}
+				line, _ := bufio.NewReader(c).ReadBytes('\n')
+				_ = json.Unmarshal(line, &req)
+				if req.Method == "events.subscribe" {
+					fmt.Fprintln(c, `{"id":"ccwt","result":{"type":"subscription_started"}}`)
+					for e := range events {
+						fmt.Fprintln(c, e)
+					}
+					return
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				name, ok := foreground[fmt.Sprint(req.Params["pane_id"])]
+				switch {
+				case req.Method == "session.snapshot":
+					fmt.Fprintln(c, snapshot)
+				case req.Method == "pane.process_info" && ok:
+					fmt.Fprintf(c, `{"result":{"process_info":{"foreground_processes":[{"name":%q}]}}}`+"\n", name)
+				default:
+					fmt.Fprintln(c, `{"error":{"code":"pane_not_found","message":"pane not found"}}`)
+				}
+			}()
+		}
+	}()
+	t.Setenv("HERDR_SOCKET_PATH", "herdr.sock")
+	t.Setenv("HERDR_BIN_PATH", "/nowhere/herdr") // a question put to the cli goes unanswered
+	settle := wsSettle
+	wsSettle = time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { watchWsDown(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done; close(events); wsDown.names, wsSettle = nil, settle })
+
+	// Well inside wsDownEvery, so that only the subscription can have asked.
+	waitFor := func(want []string) {
+		t.Helper()
+		for deadline := time.Now().Add(wsDownEvery / 2); !slices.Equal(wsDownNames(), want); time.Sleep(10 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("the corner names %q, want %q", wsDownNames(), want)
+			}
+		}
+	}
+	waitFor([]string{"beta"})
+
+	mu.Lock()
+	foreground["w2:p1"] = "ccwt" // beta's conductor, started again
+	mu.Unlock()
+	events <- `{"event":"tab_renamed","data":{"type":"tab_renamed","tab_id":"w2:t1","workspace_id":"w2","label":"ws"}}`
+	waitFor(nil)
+}
+
+// The corner is a box over the end of the lines at the bottom of the list,
+// sitting on the bar across from the menu: the workspaces it names, in yellow,
+// and the list still there to the left of it — the selection band included, on
+// a row it covers the end of. It stops a column short of the edge, which is the
+// one the erase at the end of a painted line takes with it.
+func TestListCornerNamesTheWorkspacesWithNoCcwt(t *testing.T) {
+	initRepo(t)
+	capture(t, &NewWorktreeBranchCmd{Name: "corner-case", Path: true})
+	defer func(old func() (int, int)) { termSize = old }(termSize)
+	termSize = func() (int, int) { return 60, 5 }
+	wsDown.names = []string{"audit restore"}
+	t.Cleanup(func() { wsDown.names = nil })
+
+	var u ui
+	if _, err := u.frame(); err != nil { // the first frame is what fills in the rows
+		t.Fatal(err)
+	}
+	u.move(1)
+	lines, err := u.frame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 5 {
+		t.Fatalf("frame is %d lines, want the 5 the terminal has", len(lines))
+	}
+	for i, want := range []string{"┌─ ccwt ws not running ─┐", "│ audit restore         │", "└───────────────────────┘"} {
+		l := lines[i+1]
+		if !strings.HasSuffix(l, "\x1b[33m"+want+"\x1b[0m") || screenWidth(plain(l)) != 59 {
+			t.Errorf("line %d = %q, want 59 columns ending in %q", i+1, l, want)
+		}
+	}
+	if !strings.HasPrefix(lines[1], rowBar) || !strings.Contains(plain(lines[1]), "corner-case") {
+		t.Errorf("line 1 = %q, want the selected row, band and all, left of the box", lines[1])
+	}
+	if !strings.Contains(lines[0], "NAME") || !strings.Contains(lines[4], "q:quit") {
+		t.Errorf("frame = %q, want the header above the box and the bar under it", lines)
 	}
 }

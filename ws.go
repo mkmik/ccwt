@@ -2,6 +2,7 @@ package main
 
 import (
 	"cmp"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -627,4 +628,167 @@ func herdrFocusTab(id string) string {
 	w.seen = w.seq
 	wsWatched[id] = w
 	return ""
+}
+
+// wsDown is what the list warns of in its corner: the workspaces whose `ws` tab
+// has no ccwt running in it, by name, as watchWsDown last found them.
+var wsDown struct {
+	sync.Mutex
+	names []string
+}
+
+func wsDownNames() []string {
+	wsDown.Lock()
+	defer wsDown.Unlock()
+	return wsDown.names
+}
+
+// wsDownEvents are what herdr says when the `ws` tabs, or the names of the
+// workspaces they are in, may have changed.
+var wsDownEvents = []string{"tab.created", "tab.renamed", "tab.closed", "workspace.renamed", "workspace.closed"}
+
+// wsDownEvery is how often the list looks anyway. A ccwt that quits hands its
+// pane back to the shell, and herdr says nothing when a pane's foreground
+// changes hands — nothing at all, in a probe session on herdr 0.9.1 — so this
+// is what sees a conductor go.
+const wsDownEvery = 10 * time.Second
+
+// wsSettle is how long a look waits after an event: a burst of them is one
+// change, and a tab `c` has just named `ws` has had its ccwt typed at a shell
+// that may not have finished starting yet. ponytail: package var so tests can
+// shorten it.
+var wsSettle = 2 * time.Second
+
+// watchWsDown keeps wsDown up to date for as long as ctx lasts: a look when
+// herdr says the tabs have moved, and every wsDownEvery besides.
+func watchWsDown(ctx context.Context) {
+	poke := make(chan struct{}, 1)
+	go herdrListen(ctx, poke, wsDownEvents...)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-poke:
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wsSettle):
+			}
+		case <-time.After(wsDownEvery):
+		}
+		names := herdrWsDown()
+		wsDown.Lock()
+		wsDown.names = names
+		wsDown.Unlock()
+	}
+}
+
+// herdrWsDown is the workspaces with a `ws` tab that has no ccwt running in
+// it, by name, in the order herdr's sidebar lists them: a conductor that quit,
+// or never came back after herdr did — herdr restores a tab's name but not what
+// was running in it. The name is what says a ccwt belongs there, since it is
+// the one `c` gives the tab it starts `ccwt ws` in. What is running is what
+// herdr says is in the foreground of the tab's panes.
+//
+// Every workspace herdr has, not just this repo's: a tab named `ws` is ccwt's
+// wherever it is.
+//
+// A pane herdr can't say that about counts as having one, and a herdr that
+// won't answer at all as having no such tabs: this is a warning, and one that
+// isn't sure is one to leave out.
+func herdrWsDown() []string {
+	var snap struct {
+		Result struct {
+			Snapshot struct {
+				Workspaces []struct {
+					ID    string `json:"workspace_id"`
+					Label string `json:"label"`
+				} `json:"workspaces"`
+				Tabs []struct {
+					ID        string `json:"tab_id"`
+					Workspace string `json:"workspace_id"`
+					Label     string `json:"label"`
+				} `json:"tabs"`
+				Panes []struct {
+					ID  string `json:"pane_id"`
+					Tab string `json:"tab_id"`
+				} `json:"panes"`
+			} `json:"snapshot"`
+		} `json:"result"`
+	}
+	out, err := herdrAsk("session.snapshot", nil, "api", "snapshot")
+	if err != nil || json.Unmarshal(out, &snap) != nil {
+		return nil
+	}
+	s := snap.Result.Snapshot
+	up := map[string]bool{} // a `ws` tab -> a ccwt is running in it
+	for _, t := range s.Tabs {
+		if t.Label == "ws" {
+			up[t.ID] = false
+		}
+	}
+	for _, p := range s.Panes {
+		if running, ok := up[p.Tab]; ok && !running {
+			up[p.Tab] = herdrRunsCcwt(p.ID)
+		}
+	}
+	down := map[string]bool{}
+	for _, t := range s.Tabs {
+		if running, ok := up[t.ID]; ok && !running {
+			down[t.Workspace] = true
+		}
+	}
+	var names []string
+	for _, w := range s.Workspaces {
+		if down[w.ID] {
+			names = append(names, w.Label)
+		}
+	}
+	return names
+}
+
+// herdrRunsCcwt reports whether a ccwt is in the foreground of a pane, or
+// herdr can't say.
+func herdrRunsCcwt(pane string) bool {
+	out, err := herdrAsk("pane.process_info", map[string]any{"pane_id": pane}, "pane", "process-info", "--pane", pane)
+	var resp struct {
+		Result struct {
+			Info struct {
+				Foreground []struct {
+					Name string `json:"name"`
+				} `json:"foreground_processes"`
+			} `json:"process_info"`
+		} `json:"result"`
+	}
+	if err != nil || json.Unmarshal(out, &resp) != nil {
+		return true
+	}
+	for _, p := range resp.Result.Info.Foreground {
+		if p.Name == "ccwt" {
+			return true
+		}
+	}
+	return false
+}
+
+// wsDownPane is the corner's box: the workspaces herdrWsDown named, one a line,
+// under a rule that says what they are missing. As wide as its widest line, as
+// the menu is, and as tall as rows leaves room for; nil when there is nothing
+// to say, or nowhere to say it.
+func wsDownPane(names []string, cols, rows int) []string {
+	const title = "ccwt ws not running"
+	if len(names) == 0 || rows < 3 {
+		return nil
+	}
+	inner := len(title) + 4 // the rule either side of it
+	for _, n := range names {
+		inner = max(inner, len([]rune(n))+2)
+	}
+	inner = min(inner, max(cols-2, 1))
+	row := paneRow("", inner)
+	var body []string
+	for _, n := range names[:min(len(names), rows-2)] {
+		body = append(body, row(" "+n))
+	}
+	return paneBox("", inner, title, body)
 }

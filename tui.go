@@ -74,6 +74,12 @@ func (c *TuiCmd) Run() error {
 	}
 
 	go fetchMain(ctx, c.Fetch, projects)
+	// The list keeps an eye on every workspace's conductor, over herdr's
+	// socket. The ws view doesn't: there is one in every workspace, and each
+	// watching all of them is the herdr traffic the socket was meant to cut.
+	if !c.ws && os.Getenv("HERDR_SOCKET_PATH") != "" {
+		go watchWsDown(ctx)
+	}
 
 	// Raw mode so single keypresses arrive without waiting for a newline. If
 	// stdin isn't a terminal we just run without keys: the list still
@@ -1494,6 +1500,18 @@ func (u *ui) frame() ([]string, error) {
 		}
 		bar = highlight(p+u.query, cols)
 	}
+	// The workspaces whose `ws` tab has lost its ccwt, in a box in the corner
+	// across from the menu's. It goes over the end of the lines it sits on
+	// rather than in place of them: it is a warning, not a modal, and the list
+	// goes on working around it. Yellow, as a warning is. A column in from the
+	// edge, as the bar's version is: the erase paint ends a line with takes the
+	// last column with it when the line reaches it, and that is the border.
+	if box := wsDownPane(wsDownNames(), cols-1, body); box != nil {
+		top := body - len(box)
+		for i, l := range box {
+			lines[top+i] = cutTo(lines[top+i], cols-1-screenWidth(l)) + "\x1b[33m" + l + "\x1b[0m"
+		}
+	}
 	return append(lines[:body], bar), nil
 }
 
@@ -2090,6 +2108,33 @@ func draw(line string, cols int, re *regexp.Regexp, bar string) string {
 		return line
 	}
 	return bar + line + strings.Repeat(" ", max(cols-w, 0)) + "\x1b[0m"
+}
+
+// cutTo is a line as draw left it, cut to n columns — or padded out to them —
+// for something else to go after it on the same line. The escapes it meets on
+// the way are kept, so that what still shows of a row keeps its selection band
+// and its matches, and switched off at the end, so that none of them runs on
+// into what comes next.
+func cutTo(line string, n int) string {
+	var b strings.Builder
+	w := 0
+	for line != "" {
+		if line[0] == '\x1b' {
+			if loc := escapes.FindStringIndex(line); loc != nil && loc[0] == 0 {
+				b.WriteString(line[:loc[1]])
+				line = line[loc[1]:]
+				continue
+			}
+		}
+		r, size := utf8.DecodeRuneInString(line)
+		rw := screenWidth(string(r))
+		if w+rw > n {
+			break
+		}
+		b.WriteString(line[:size])
+		line, w = line[size:], w+rw
+	}
+	return b.String() + strings.Repeat(" ", max(n-w, 0)) + "\x1b[0m"
 }
 
 // screenWidth is how many columns s takes on screen: one per rune, and two for
@@ -3054,6 +3099,45 @@ func herdrAsk(method string, params map[string]any, args ...string) ([]byte, err
 		return nil, errors.New(resp.Error.Message)
 	}
 	return out, nil
+}
+
+// herdrListen holds a subscription to herdr's events of these types open over
+// the socket for as long as ctx lasts, and pokes each time a line comes down
+// it: the answer that says the subscription has started — whatever happened
+// before it went unheard, so that is worth a look too — and then one per
+// event. A poke already waiting stands for the ones after it: whoever is
+// listening looks again, and one look sees all of them.
+//
+// Herdr going away — a restart, `herdr update --handoff` — ends the
+// connection, and it is made again every couple of seconds until herdr is back.
+func herdrListen(ctx context.Context, poke chan<- struct{}, types ...string) {
+	subs := make([]map[string]any, len(types))
+	for i, t := range types {
+		subs[i] = map[string]any{"type": t}
+	}
+	req, _ := jsonv2.Marshal(map[string]any{"id": "ccwt", "method": "events.subscribe", "params": map[string]any{"subscriptions": subs}})
+	for ctx.Err() == nil {
+		if c, err := (&net.Dialer{}).DialContext(ctx, "unix", os.Getenv("HERDR_SOCKET_PATH")); err == nil {
+			stop := context.AfterFunc(ctx, func() { c.Close() })
+			if _, err := c.Write(append(req, '\n')); err == nil {
+				for r := bufio.NewReader(c); ; {
+					if _, err := r.ReadBytes('\n'); err != nil {
+						break
+					}
+					select {
+					case poke <- struct{}{}:
+					default:
+					}
+				}
+			}
+			stop()
+			c.Close()
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(2 * time.Second):
+		}
+	}
 }
 
 // herdrBusy is the set of cwds herdr has an agent mid-task in: "working", or
