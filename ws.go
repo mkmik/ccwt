@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -659,9 +660,10 @@ const wsDownEvery = 10 * time.Second
 // shorten it.
 var wsSettle = 2 * time.Second
 
-// watchWsDown keeps wsDown up to date for as long as ctx lasts: a look when
-// herdr says the tabs have moved, and every wsDownEvery besides.
-func watchWsDown(ctx context.Context) {
+// watchWsDown keeps wsDown up to date for as long as ctx lasts, for the
+// worktrees of the repos at roots: a look when herdr says the tabs have moved,
+// and every wsDownEvery besides.
+func watchWsDown(ctx context.Context, roots []string) {
 	poke := make(chan struct{}, 1)
 	go herdrListen(ctx, poke, wsDownEvents...)
 	for {
@@ -676,7 +678,7 @@ func watchWsDown(ctx context.Context) {
 			}
 		case <-time.After(wsDownEvery):
 		}
-		names := herdrWsDown()
+		names := herdrWsDown(roots)
 		wsDown.Lock()
 		wsDown.names = names
 		wsDown.Unlock()
@@ -690,19 +692,23 @@ func watchWsDown(ctx context.Context) {
 // the one `c` gives the tab it starts `ccwt ws` in. What is running is what
 // herdr says is in the foreground of the tab's panes.
 //
-// Every workspace herdr has, not just this repo's: a tab named `ws` is ccwt's
-// wherever it is.
+// Only the workspaces open on a worktree of the repos at roots: the list's own,
+// the ones herdr's sidebar shows under the repo. Another repo's are for its own
+// list to name, and their panes go unasked.
 //
 // A pane herdr can't say that about counts as having one, and a herdr that
 // won't answer at all as having no such tabs: this is a warning, and one that
 // isn't sure is one to leave out.
-func herdrWsDown() []string {
+func herdrWsDown(roots []string) []string {
 	var snap struct {
 		Result struct {
 			Snapshot struct {
 				Workspaces []struct {
-					ID    string `json:"workspace_id"`
-					Label string `json:"label"`
+					ID       string `json:"workspace_id"`
+					Label    string `json:"label"`
+					Worktree struct {
+						Path string `json:"checkout_path"`
+					} `json:"worktree"`
 				} `json:"workspaces"`
 				Tabs []struct {
 					ID        string `json:"tab_id"`
@@ -721,9 +727,14 @@ func herdrWsDown() []string {
 		return nil
 	}
 	s := snap.Result.Snapshot
+	ours := map[string]bool{} // a workspace -> it is open on one of our worktrees
+	for _, w := range s.Workspaces {
+		root, ok := gitutil.ClaudeWorktreeRepoRoot(w.Worktree.Path)
+		ours[w.ID] = ok && slices.Contains(roots, root)
+	}
 	up := map[string]bool{} // a `ws` tab -> a ccwt is running in it
 	for _, t := range s.Tabs {
-		if t.Label == "ws" {
+		if t.Label == "ws" && ours[t.Workspace] {
 			up[t.ID] = false
 		}
 	}

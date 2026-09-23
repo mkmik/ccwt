@@ -30,6 +30,7 @@ stages; tick things off as they land.
   - [ ] close a tab from the table (`r` is the workspace's — worktree and all; closing one tab would be a key of its own)
   - [x] a way to open a workspace with `ccwt ws` already in its first tab — the tui's `c`, which runs it there instead of the agent (`TestNewWorkspaceRunsWs`); the herdr plugin's own action still opens a bare worktree
   - [x] the list names, in a box in its corner, the workspaces whose `ws` tab has no ccwt running in it (`herdrWsDown`, `TestListWatchesTheWsTabsForTheirCcwt`): a look when herdr's events say a tab or workspace was made, renamed or closed, and every 10s besides
+  - [x] only its own worktrees' workspaces: another repo's are that repo's list's to name, and their panes go unasked
   - [ ] start `ccwt ws` again in those tabs, rather than only saying so
 
 ## Decisions
@@ -48,9 +49,11 @@ stages; tick things off as they land.
   seed prompt behind it. Yes goes on the repository's main checkout in
   `~/.claude.json`, which is Claude Code's own key for it, so one answer covers
   every worktree; no leaves Claude Code to ask.
-- A tab named `ws` is ccwt's wherever it is, so the corner warning is
-  herdr-wide rather than the repo's. Only the list looks: a ws view in every
-  workspace, each watching all of them, is the traffic the socket plan cuts.
+- The corner warning names only the list's own worktrees' workspaces, the ones
+  herdr's sidebar shows under the repo (the configured projects' under -g).
+  Herdr-wide, every repo's list named every other repo's too. Only the list
+  looks: a ws view in every workspace, each watching all of them, is the
+  traffic the socket plan cuts.
 
 # Talking to herdr over its socket — task list
 

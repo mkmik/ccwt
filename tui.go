@@ -74,11 +74,14 @@ func (c *TuiCmd) Run() error {
 	}
 
 	go fetchMain(ctx, c.Fetch, projects)
-	// The list keeps an eye on every workspace's conductor, over herdr's
-	// socket. The ws view doesn't: there is one in every workspace, and each
-	// watching all of them is the herdr traffic the socket was meant to cut.
+	// The list keeps an eye on the conductors of its own worktrees'
+	// workspaces, over herdr's socket. The ws view doesn't: there is one in
+	// every workspace, and each watching all of them is the herdr traffic the
+	// socket was meant to cut. A repo git can't name has no worktrees to list.
 	if !c.ws && os.Getenv("HERDR_SOCKET_PATH") != "" {
-		go watchWsDown(ctx)
+		if roots, err := worklogProjects(projects); err == nil {
+			go watchWsDown(ctx, roots)
+		}
 	}
 
 	// Raw mode so single keypresses arrive without waiting for a newline. If
