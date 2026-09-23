@@ -1087,6 +1087,7 @@ func TestRestartWaitsForIdle(t *testing.T) {
 		{"reading a page", ui{nav: quiet, page: &page{}}, false},
 		{"details open", ui{nav: quiet, detail: []string{"x"}}, false},
 		{"menu open", ui{nav: quiet, menu: []action{{"q", "quit"}}}, false},
+		{"asking about trust", ui{nav: quiet, trust: "/src/ccwt"}, false},
 	} {
 		if got := tc.u.idle(); got != tc.want {
 			t.Errorf("%s: idle() = %v, want %v", tc.name, got, tc.want)

@@ -108,7 +108,8 @@ func (c *TuiCmd) Run() error {
 
 	u := ui{projects: projects, sort: c.Sort, stamp: selfStamp(), ws: c.ws}
 	if c.ws {
-		u.askSeed() // a fresh workspace opens on the question of what it is for
+		u.askTrust() // whether Claude Code may run its agents here, asked over all else
+		u.askSeed()  // a fresh workspace opens on the question of what it is for
 	}
 	var last string
 	redraw := func() error {
@@ -235,6 +236,10 @@ func (c *TuiCmd) Run() error {
 			}
 			switch {
 			case k == "": // the menu dealt with it itself
+			// The trust question sits over everything, the seed prompt included,
+			// so it takes the keys before anything else does.
+			case u.trust != "":
+				u.answerTrust(k)
 			// While either prompt is up every keystroke is text, so these come
 			// first: `q` there is a letter, not the quit key.
 			// The model box sits over the seed prompt, so it takes the keys
@@ -551,6 +556,10 @@ type ui struct {
 	model     entry
 	modelName string
 
+	// The directory the ws view is asking whether Claude Code may trust, while
+	// that question is up — see askTrust.
+	trust string
+
 	// What the binary on disk looked like when this tui started, and the notice
 	// that goes in the bar once it stops looking like that — see checkUpgrade.
 	stamp   string
@@ -630,7 +639,7 @@ func (u *ui) stale() {
 // quiet reports that the list is all there is on screen: no pane, box or menu
 // over it. What stale may refresh behind, and what a restart may take down.
 func (u *ui) quiet() bool {
-	return u.detail == nil && !u.entry.open && !u.logOpen && u.menu == nil && u.page == nil
+	return u.detail == nil && !u.entry.open && !u.logOpen && u.menu == nil && u.page == nil && u.trust == ""
 }
 
 // psView is the switch between the two lists: what's in the window is a
@@ -1347,6 +1356,17 @@ func (u *ui) frame() ([]string, error) {
 
 	for len(lines) < body {
 		lines = append(lines, "")
+	}
+
+	// The trust question goes over every other modal, since it is the one to
+	// answer first — the seed prompt the ws view opens on is waiting under it.
+	if u.trust != "" {
+		for i, l := range trustPane(u.trust, cols, body) {
+			if l != "" && i < body {
+				lines[i] = l
+			}
+		}
+		return append(lines[:body], highlight(" y:trust  n:no "+u.msg, cols)), nil
 	}
 
 	// The details pane is a modal: it lands on top of the list, which goes on
