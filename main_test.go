@@ -19,6 +19,21 @@ import (
 	"github.com/mkmik/ccwt/internal/gitutil"
 )
 
+// TestMain keeps out the herdr the suite happens to be run under. A test fakes
+// herdr with a script on HERDR_BIN_PATH, and a HERDR_SOCKET_PATH inherited from
+// the pane `go test` was typed in would go past the fake to the live herdr —
+// answering in its place, and taking its orders. The rest of herdr's
+// environment goes with it, so that a test starts out where CI does, outside
+// herdr, and is under one only when it says so.
+func TestMain(m *testing.M) {
+	for _, kv := range os.Environ() {
+		if k, _, _ := strings.Cut(kv, "="); strings.HasPrefix(k, "HERDR_") {
+			os.Unsetenv(k)
+		}
+	}
+	m.Run()
+}
+
 // TestNewPath covers `ccwt new --path`: the printed path must be absolute and
 // must describe the same worktree the nameful form prints — including the
 // enclosing-worktree case, where no worktree is created.
