@@ -38,9 +38,12 @@ import (
 // requests. A merge request naming the ticket only in a commit message or a
 // comment is the difference, and it is missed. Ask Jira for its remote links
 // when that starts costing something.
+//
+// A review on github is a pull request, and pr.go is the same questions asked
+// of github; `ccwt pr` is this command under that name.
 type MrCmd struct {
-	Thing              string `arg:"" optional:"" help:"A merge request url, a Jira issue url, or a Jira key (PROJ-1234). \"-\" reads a list of those from stdin, one per line; left out, it's the merge request of the branch you're on."`
-	GitlabEnvironments bool   `default:"true" negatable:"" help:"Ask GitLab what its environments are running, for the ENV column. Off (--no-gitlab-environments), ENV says \"??\" and the deployment lookups — a handful of round trips per merge request — don't go out."`
+	Thing        string `arg:"" optional:"" help:"A merge request or pull request url, a Jira issue url, or a Jira key (PROJ-1234). \"-\" reads a list of those from stdin, one per line; left out, it's the review of the branch you're on."`
+	Environments bool   `default:"true" negatable:"" help:"Ask what the environments are running — GitLab's environments, GitHub's deployments — for the ENV column. Off (--no-environments), ENV says \"??\" and those lookups — a handful of round trips per review — don't go out."`
 }
 
 // mrURL is a merge request url: host, project path, iid. Gitlab's "/-/" is
@@ -86,7 +89,7 @@ func (c *MrCmd) look() ([]mrRow, string, error) {
 	var wg sync.WaitGroup
 	for i, thing := range things {
 		wg.Go(func() {
-			found[i], errs[i] = lookThing(thing, c.GitlabEnvironments)
+			found[i], errs[i] = lookThing(thing, c.Environments)
 		})
 	}
 	wg.Wait()
@@ -134,8 +137,11 @@ func (c *MrCmd) things() ([]string, error) {
 
 // lookThing is the merge requests one argument comes to: the single one its
 // url points at, or every one that mentions the ticket it is. askEnvs is
-// --gitlab-environments: false and the ENV column is "??" rather than an
-// answer, with nothing asked to fill it.
+// --environments: false and the ENV column is "??" rather than an answer,
+// with nothing asked to fill it.
+//
+// A url says which forge it is on; a ticket doesn't, so it is searched for on
+// the one origin points at.
 func lookThing(thing string, askEnvs bool) ([]mrRow, error) {
 	if m := mrURL.FindStringSubmatch(thing); m != nil {
 		iid, _ := strconv.Atoi(m[3])
@@ -157,10 +163,16 @@ func lookThing(thing string, askEnvs bool) ([]mrRow, error) {
 		// reports no pipeline, and one that hasn't is running nowhere.
 		return []mrRow{got.row(pipelineNote(host, got), deployedTo(host, project, got, envs, askEnvs))}, nil
 	}
+	if m := prURL.FindStringSubmatch(thing); m != nil {
+		return lookPR(m[1], m[2], m[0], askEnvs)
+	}
 	if key := ticketKey.FindString(thing); key != "" {
+		if origin := gitLine(".", "remote", "get-url", "origin"); onGitHub(urlHost(origin)) {
+			return ticketPRs(urlHost(origin), urlPath(origin), key, askEnvs)
+		}
 		return ticketMRs(key, askEnvs)
 	}
-	return nil, fmt.Errorf("%q is neither a merge request url nor a jira issue", thing)
+	return nil, fmt.Errorf("%q is not a merge request url, a pull request url or a jira issue", thing)
 }
 
 // branchMR is the merge request of the branch checked out here — the one
@@ -182,6 +194,9 @@ func branchMR() (string, error) {
 	project := urlPath(origin)
 	if project == "" || branch == "" {
 		return "", errors.New("no merge request for this branch: no origin remote or no branch here")
+	}
+	if onGitHub(urlHost(origin)) {
+		return branchPR(urlHost(origin), project, branch)
 	}
 	query := url.Values{
 		"source_branch": {branch},
@@ -356,16 +371,13 @@ type env struct{ name, sha string }
 // do — its list leaves out last_deployment, so it would be a call per
 // environment to find out what is on them.
 //
-// Names come out as the config's `[environments]` calls them, so two that it
-// gives the same name collapse into the one column entry, newest first.
-//
 // ponytail: one page of deployments, so an environment nothing has deployed
 // to in the last hundred goes unseen. Ask that environment directly when a
 // project deploys often enough for it to matter.
 //
 // A lookup that fails is an empty column rather than an error: nobody asked
 // about environments, they asked about a merge request. ask is false when
-// --gitlab-environments is off, and then nothing is asked at all.
+// --environments is off, and then nothing is asked at all.
 func environments(host, project string, ask bool) []env {
 	if !ask {
 		return nil
@@ -380,12 +392,24 @@ func environments(host, project string, ask bool) []env {
 	if err := glabAPI(host, path, &deployed); err != nil {
 		return nil
 	}
+	envs := make([]env, len(deployed))
+	for i, d := range deployed {
+		envs[i] = env{d.Environment.Name, d.SHA}
+	}
+	return currentEnvs(envs)
+}
+
+// currentEnvs is what each environment is running, out of successful
+// deployments newest first: the first to name an environment is what's on it.
+// Names come out as the config's `[environments]` calls them, so two that it
+// gives the same name collapse into the one column entry, newest first.
+func currentEnvs(deployed []env) []env {
 	cfg, _ := loadConfig() // a config we can't read renames nothing
 	var envs []env
 	for _, d := range deployed {
-		name := cmp.Or(cfg.Environments[d.Environment.Name], d.Environment.Name)
+		name := cmp.Or(cfg.Environments[d.name], d.name)
 		if !slices.ContainsFunc(envs, func(e env) bool { return e.name == name }) {
-			envs = append(envs, env{name, d.SHA})
+			envs = append(envs, env{name, d.sha})
 		}
 	}
 	return envs
@@ -401,22 +425,30 @@ func environments(host, project string, ask bool) []env {
 // squash-merging project puts on the target branch, and the merge commit
 // otherwise.
 //
-// With --gitlab-environments off the column is "??" rather than empty: an
-// empty cell says the merge request is running nowhere, and not having asked
-// is a different thing to say.
+// With --environments off the column is "??" rather than empty: an empty cell
+// says the merge request is running nowhere, and not having asked is a
+// different thing to say.
 func deployedTo(host, project string, m mr, envs []env, ask bool) string {
 	if !ask {
 		return "??"
 	}
 	sha := cmp.Or(m.SquashSHA, m.MergeSHA)
-	if m.State != "merged" || sha == "" || len(envs) == 0 {
+	if m.State != "merged" || sha == "" {
 		return ""
 	}
+	return runningOn(envs, func(head string) bool { return carries(host, project, head, sha) })
+}
+
+// runningOn is the ENV column out of an answer to one question per
+// environment — does the commit on it have, in its history, the one the
+// review landed as — which has asks the forge. They go out together, since
+// each is a round trip of its own.
+func runningOn(envs []env, has func(head string) bool) string {
 	on := make([]string, len(envs))
 	var wg sync.WaitGroup
 	for i, e := range envs {
 		wg.Go(func() {
-			if carries(host, project, e.sha, sha) {
+			if has(e.sha) {
 				on[i] = e.name
 			}
 		})
@@ -877,7 +909,7 @@ func glabRun(host, path string, v any) error {
 	}
 	out, err := exec.Command("glab", append(args, path)...).Output()
 	if err != nil {
-		return fmt.Errorf("glab api %s: %s", path, glabError(out, err))
+		return fmt.Errorf("glab api %s: %s", path, cliError(out, err))
 	}
 	return json.Unmarshal(out, v)
 }
@@ -894,13 +926,15 @@ func apiError(body []byte, status string) string {
 	return cmp.Or(said.Message, said.Error, status)
 }
 
-// glabError is what went wrong, as glab said it. It says it twice: once on
+// cliError is what went wrong, as glab said it. It says it twice: once on
 // stdout as json, and once on stderr as a wrapped block under an "ERROR"
 // banner. The json is the one to quote — it is a line rather than a paragraph,
 // and it is the message glab meant — and the block is what's left when there
 // is no json, minus the decoration, which says nothing an error message in an
 // error message needs to say.
-func glabError(out []byte, err error) string {
+//
+// gh says it once, on stderr, as a line: the block with nothing to take off.
+func cliError(out []byte, err error) string {
 	var said struct {
 		Error struct {
 			Message string `json:"message"`

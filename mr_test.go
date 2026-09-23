@@ -2,6 +2,7 @@ package main
 
 import (
 	"cmp"
+	"encoding/json"
 	"errors"
 	"net/url"
 	"os"
@@ -46,6 +47,17 @@ func TestMrTakesUrlsAndTickets(t *testing.T) {
 			t.Errorf("ticketKey(%q) = %q, want nothing", thing, got)
 		}
 	}
+
+	// A pull request's url says which github and which repo, and is its own
+	// url whichever of its pages the link went to. Neither kind of url passes
+	// for the other.
+	p := prURL.FindStringSubmatch("https://github.com/acme/api/pull/42/files#diff-1")
+	if p == nil || p[0] != "https://github.com/acme/api/pull/42" || p[1] != "github.com" || p[2] != "acme/api" {
+		t.Errorf("prURL = %q, want the pull request's url, github.com and acme/api", p)
+	}
+	if prURL.MatchString(mrLink) || mrURL.MatchString(p[0]) {
+		t.Errorf("a merge request url and a pull request url read as each other")
+	}
 }
 
 // "-" takes the list off stdin, a thing per line, so a list of tickets or
@@ -84,14 +96,20 @@ func TestMrQuotesGlabsOwnError(t *testing.T) {
 	stderr := []byte("\n   ERROR  \n\n  None of the git remotes match. Try adding one.\n")
 	failed := &exec.ExitError{Stderr: stderr, ProcessState: &os.ProcessState{}}
 
-	if got, want := glabError(stdout, failed), "none of the git remotes match"; got != want {
-		t.Errorf("glabError = %q, want %q", got, want)
+	if got, want := cliError(stdout, failed), "none of the git remotes match"; got != want {
+		t.Errorf("cliError = %q, want %q", got, want)
 	}
-	if got, want := glabError(nil, failed), "None of the git remotes match. Try adding one."; got != want {
-		t.Errorf("glabError with no json = %q, want %q", got, want)
+	if got, want := cliError(nil, failed), "None of the git remotes match. Try adding one."; got != want {
+		t.Errorf("cliError with no json = %q, want %q", got, want)
 	}
-	if got, want := glabError(nil, errors.New("exec: \"glab\": not found")), "exec: \"glab\": not found"; got != want {
-		t.Errorf("glabError with no glab at all = %q, want %q", got, want)
+	if got, want := cliError(nil, errors.New("exec: \"glab\": not found")), "exec: \"glab\": not found"; got != want {
+		t.Errorf("cliError with no glab at all = %q, want %q", got, want)
+	}
+	// gh says it once, on stderr. The json it prints is github's own error,
+	// which isn't glab's shape and mustn't be taken for it.
+	ghFailed := &exec.ExitError{Stderr: []byte("gh: Not Found (HTTP 404)\n"), ProcessState: &os.ProcessState{}}
+	if got, want := cliError([]byte(`{"message":"Not Found","status":"404"}`), ghFailed), "gh: Not Found (HTTP 404)"; got != want {
+		t.Errorf("cliError of gh = %q, want %q", got, want)
 	}
 }
 
@@ -117,6 +135,12 @@ func TestMrNotMergedIsOnNoEnvironment(t *testing.T) {
 			t.Errorf("deployedTo of one that %s = %q, want nothing", tc.why, got)
 		}
 	}
+	// A pull request the same, without asking github.
+	for _, p := range []pr{{State: "OPEN"}, {State: "CLOSED"}, {State: "MERGED"}} {
+		if got := prDeployedTo("", p, deployed, true); got != "" {
+			t.Errorf("prDeployedTo of one %s with no merge commit = %q, want nothing", p.State, got)
+		}
+	}
 }
 
 // --no-gitlab-environments doesn't leave the column empty: empty is "running
@@ -129,6 +153,14 @@ func TestMrEnvironmentsOffSaysUnknown(t *testing.T) {
 	}
 	if got := environments("", "1", false); got != nil {
 		t.Errorf("environments with them off = %v, want none asked for", got)
+	}
+	p := pr{State: "MERGED"}
+	p.MergeCommit.OID = "56cb2be"
+	if got := prDeployedTo("", p, []env{{"staging", "5ee7ab1"}}, false); got != "??" {
+		t.Errorf("prDeployedTo with environments off = %q, want %q", got, "??")
+	}
+	if got := prEnvironments("", "acme/api", false); got != nil {
+		t.Errorf("prEnvironments with them off = %v, want none asked for", got)
 	}
 }
 
@@ -241,6 +273,72 @@ func TestMrStatusSaysWhatBlocksTheMerge(t *testing.T) {
 	}
 	if got, want := "failed"+jobsNote(nil), "failed"; got != want {
 		t.Errorf("jobsNote(nil) = %q, want %q", got, want)
+	}
+}
+
+// A pull request's standing is said in the merge request's words. github's
+// "blocked" is every protection rule at once, so the missing review — the one
+// that is somebody else's to give — is picked out of it by name, and the rest
+// comes through as github spells it.
+func TestPrStatusSaysWhatBlocksTheMerge(t *testing.T) {
+	for _, tc := range []struct {
+		p    pr
+		want string
+	}{
+		{pr{State: "MERGED", MergeState: "UNKNOWN"}, "merged"},
+		{pr{State: "CLOSED", MergeState: "DIRTY"}, "closed"},
+		{pr{State: "OPEN", MergeState: "CLEAN"}, "can be merged"},
+		{pr{State: "OPEN", MergeState: "UNSTABLE"}, "can be merged"}, // failing checks nobody requires
+		{pr{State: "OPEN", MergeState: "DIRTY"}, "conflict"},
+		{pr{State: "OPEN", MergeState: "BLOCKED", Review: "REVIEW_REQUIRED"}, "needs approval"},
+		{pr{State: "OPEN", MergeState: "BLOCKED", Review: "CHANGES_REQUESTED"}, "changes requested"},
+		{pr{State: "OPEN", MergeState: "BLOCKED", Review: "APPROVED"}, "blocked"}, // its checks, which PIPELINE says
+		{pr{State: "OPEN", MergeState: "BEHIND"}, "behind"},
+		{pr{State: "OPEN", MergeState: "BLOCKED", Draft: true}, "draft"},
+		{pr{State: "OPEN", MergeState: "BLOCKED", InMergeQueue: true}, "merge queue"},
+		{pr{State: "OPEN"}, "unknown"},
+	} {
+		if got := prStatus(tc.p); got != tc.want {
+			t.Errorf("prStatus(%+v) = %q, want %q", tc.p, got, tc.want)
+		}
+	}
+}
+
+// A row is read off what the api answers, so the answer is what this starts
+// from: a check run and a commit status are both checks, the ones that failed
+// are named, and the ones that passed, were skipped or are still going aren't.
+// Once it's in, its checks are history and PIPELINE says nothing.
+func TestPrRowIsReadOffTheApi(t *testing.T) {
+	const answer = `{
+		"number": 42, "title": "a widget", "url": "https://github.com/acme/api/pull/42",
+		"state": "OPEN", "isDraft": false, "isInMergeQueue": false,
+		"mergeStateStatus": "BLOCKED", "reviewDecision": "REVIEW_REQUIRED",
+		"mergeCommit": null, "repository": {"nameWithOwner": "acme/api"},
+		"commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "FAILURE", "contexts": {"nodes": [
+			{"name": "lint", "conclusion": "FAILURE"},
+			{"name": "unit", "conclusion": "SUCCESS"},
+			{"name": "docs", "conclusion": "SKIPPED"},
+			{"name": "e2e", "conclusion": null},
+			{"name": "ci/jenkins", "state": "ERROR"}
+		]}}}}]}
+	}`
+	var p pr
+	if err := json.Unmarshal([]byte(answer), &p); err != nil {
+		t.Fatal(err)
+	}
+	want := mrRow{ref: "acme/api#42", url: "https://github.com/acme/api/pull/42", title: "a widget", status: "needs approval", pipeline: "failed: lint, ci/jenkins", env: "prod"}
+	if got := p.row("prod"); got != want {
+		t.Errorf("row = %+v, want %+v", got, want)
+	}
+
+	p.State = "MERGED"
+	if got := prChecks(p); got != "" {
+		t.Errorf("prChecks(merged) = %q, want nothing to say", got)
+	}
+	// Nothing ran is nothing to say either.
+	p.State, p.Commits.Nodes = "OPEN", nil
+	if got := prChecks(p); got != "" {
+		t.Errorf("prChecks with no checks = %q, want nothing to say", got)
 	}
 }
 
