@@ -615,7 +615,10 @@ they're dropped from the bar and do nothing.
 
 **Workspace naming.** A workspace opened on a *new* worktree is named after the worktree:
 Herdr would otherwise list it under its repo by branch, prefix and all. Reopening one leaves
-its name alone, so a workspace you've renamed yourself stays renamed.
+its name alone, so a workspace you've renamed yourself stays renamed. And the name is what
+`NAME` shows, in `ccwt list` and the tui alike, when they run in a Herdr pane: a worktree open
+as a workspace goes by the workspace's name, so the list reads like Herdr's sidebar. Piped
+output keeps the worktree's own name, which is the one `ccwt remove` takes.
 
 **A workspace's own tui: `ccwt ws`.** The tui above is the repo's view: its worktrees,
 whatever workspace each is open in. `ccwt ws` is a workspace's, in two sections: where the

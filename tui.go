@@ -3056,6 +3056,37 @@ var herdrWorkspaces = func(root, path string) ([]string, error) {
 	return ids, nil
 }
 
+// herdrLabels is what herdr calls the workspaces it has open on worktrees,
+// keyed by the worktree's path: the name in its sidebar, which starts out as
+// the worktree's own and is usually renamed to what the work is. No herdr, or
+// none running, is no names.
+//
+// ponytail: package var so tests can fake the herdr answer.
+var herdrLabels = func() map[string]string {
+	out, err := exec.Command(herdrBin(), "workspace", "list").Output()
+	if err != nil {
+		return nil
+	}
+	var resp struct {
+		Result struct {
+			Workspaces []struct {
+				Label    string `json:"label"`
+				Worktree struct {
+					Path string `json:"checkout_path"`
+				} `json:"worktree"`
+			} `json:"workspaces"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return nil
+	}
+	labels := map[string]string{}
+	for _, w := range resp.Result.Workspaces {
+		labels[w.Worktree.Path] = w.Label
+	}
+	return labels
+}
+
 // herdrCloseWS closes one workspace. Closing our own kills this process, so
 // callers leave that one for last.
 //

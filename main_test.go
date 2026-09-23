@@ -757,6 +757,41 @@ func TestAgentWorkingIsNotSafeToRemove(t *testing.T) {
 	}
 }
 
+// TestListNamesHerdrWorkspaces: under herdr, NAME is what the workspace a
+// worktree is open in is called, and the worktree's own name where none is.
+// Piped, or outside herdr, it's the worktree's name throughout — the one
+// `ccwt remove` takes.
+func TestListNamesHerdrWorkspaces(t *testing.T) {
+	initRepo(t)
+	open := capture(t, &NewWorktreeBranchCmd{Name: "open", Path: true})
+	capture(t, &NewWorktreeBranchCmd{Name: "closed"})
+
+	defer func(orig func() map[string]string) { herdrLabels = orig }(herdrLabels)
+	herdrLabels = func() map[string]string { return map[string]string{open: "mTLS subresource"} }
+	defer func(orig func() bool) { stdoutIsTTY = orig }(stdoutIsTTY)
+	for _, tc := range []struct {
+		env  string
+		tty  bool
+		want string
+	}{
+		{"1", true, "mTLS subresource"},
+		{"1", false, "open"},
+		{"", true, "open"},
+	} {
+		t.Setenv("HERDR_ENV", tc.env)
+		stdoutIsTTY = func() bool { return tc.tty }
+		var names []string
+		for line := range strings.SplitSeq(capture(t, &ListCmd{NoHeaders: true}), "\n") {
+			name, _, _ := strings.Cut(strings.TrimLeft(line, "✓ "), "  ")
+			names = append(names, name)
+		}
+		slices.Sort(names)
+		if want := []string{"closed", tc.want}; !slices.Equal(names, want) {
+			t.Errorf("HERDR_ENV=%q tty=%v: names = %q, want %q", tc.env, tc.tty, names, want)
+		}
+	}
+}
+
 // initRepo makes a git repo with one commit on main and chdirs into it.
 func initRepo(t *testing.T) string {
 	t.Helper()
