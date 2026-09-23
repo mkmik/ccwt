@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bufio"
+	"cmp"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -484,6 +487,84 @@ esac
 	t.Setenv("HERDR_TAB_ID", "")
 	if busy := herdrBusy(); busy["/src/sibling"] {
 		t.Error("with no tab in the environment, our own workspace is no longer exempt")
+	}
+}
+
+// Under herdr, what the tui asks every round goes over herdr's socket rather
+// than to a herdr process started for the question: a tui in each workspace,
+// every couple of seconds, is a lot of processes otherwise. The requests are
+// the ones the cli makes of the socket for the same words, and a refusal still
+// reads as one rather than as a workspace with no tabs in it.
+func TestHerdrIsAskedOverItsSocket(t *testing.T) {
+	// Relative, since a unix socket's path has to fit in about a hundred bytes
+	// and a test's temp directory on macOS is most of that on its own.
+	t.Chdir(t.TempDir())
+	l, err := net.Listen("unix", "herdr.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	answers := map[string]string{
+		`tab.list {"workspace_id":"w1"}`:  `{"result":{"tabs":[{"tab_id":"w1:t1","label":"1"}]}}`,
+		`pane.list {"workspace_id":"w1"}`: `{"result":{"panes":[{"tab_id":"w1:t1","cwd":"/src/ccwt","terminal_title_stripped":"zsh"}]}}`,
+		`agent.list {}`:                   `{"result":{"agents":[{"tab_id":"w1:t1","agent_status":"working","state_change_seq":3}]}}`,
+		`tab.list {"workspace_id":"w2"}`:  `{"error":{"code":"workspace_not_found","message":"workspace w2 not found"}}`,
+	}
+	asked := make(chan string, 16)
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			var req struct {
+				Method string         `json:"method"`
+				Params map[string]any `json:"params"`
+			}
+			line, _ := bufio.NewReader(c).ReadBytes('\n')
+			_ = json.Unmarshal(line, &req)
+			params, _ := json.Marshal(req.Params, json.Deterministic(true))
+			key := req.Method + " " + string(params)
+			asked <- key
+			fmt.Fprintln(c, cmp.Or(answers[key], `{"result":{}}`))
+			c.Close()
+		}
+	}()
+	t.Setenv("HERDR_SOCKET_PATH", "herdr.sock")
+	t.Setenv("HERDR_BIN_PATH", "/nowhere/herdr") // a question put to the cli goes unanswered
+	t.Setenv("HERDR_WORKSPACE_ID", "w1")
+	t.Setenv("HERDR_TAB_ID", "w1:t1")
+
+	ts, err := herdrTabs()
+	if want := []wsTab{{ID: "w1:t1", Label: "1", Status: "working", Cwd: "/src/ccwt", Title: "zsh", Seq: 3}}; err != nil || !slices.Equal(ts, want) {
+		t.Errorf("herdrTabs() = %v, %v, want %v", ts, err, want)
+	}
+	herdrBusy()
+	herdrLabels()
+	wsBadge(&mrLook{rows: []mrRow{{status: "merged"}}})
+	wsBadge(&mrLook{})
+	t.Setenv("HERDR_WORKSPACE_ID", "w2")
+	if _, err := herdrTabs(); err == nil || !strings.Contains(err.Error(), "workspace w2 not found") {
+		t.Errorf("herdrTabs() on a workspace herdr refuses = %v, want the refusal", err)
+	}
+
+	ttl := fmt.Sprint(wsBadgeTTL.Milliseconds())
+	want := []string{
+		`tab.list {"workspace_id":"w1"}`,
+		`pane.list {"workspace_id":"w1"}`,
+		`agent.list {}`,
+		`agent.list {}`,
+		`workspace.list {}`,
+		`workspace.report_metadata {"source":"ccwt","tokens":{"mr":"✓"},"ttl_ms":` + ttl + `,"workspace_id":"w1"}`,
+		`workspace.report_metadata {"source":"ccwt","tokens":{"mr":null},"workspace_id":"w1"}`,
+		`tab.list {"workspace_id":"w2"}`,
+	}
+	var got []string
+	for len(asked) > 0 {
+		got = append(got, <-asked)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("herdr was asked\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
 

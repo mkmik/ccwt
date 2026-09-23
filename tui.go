@@ -7,9 +7,11 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -2993,6 +2995,52 @@ func herdrBin() string {
 	return "herdr"
 }
 
+// herdrAsk puts one request to herdr and returns what `herdr <args>` would have
+// printed for it: the socket's own {"id":…,"result":…} line, since the cli is a
+// client of that socket that prints what it hears back. Under herdr the request
+// goes over the socket itself, which herdr names in HERDR_SOCKET_PATH for every
+// pane it starts: a tui in each workspace, re-reading its tabs every couple of
+// seconds, is otherwise a herdr process started for every one of those
+// questions, and a ping on the socket ahead of each. Anywhere else it is the
+// cli, which finds a running herdr without being told where.
+//
+// method and params are the socket's words for the request, args the cli's.
+func herdrAsk(method string, params map[string]any, args ...string) ([]byte, error) {
+	sock := os.Getenv("HERDR_SOCKET_PATH")
+	if sock == "" {
+		return exec.Command(herdrBin(), args...).Output()
+	}
+	c, err := net.Dial("unix", sock)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	// A request with nothing in it still sends an object, which herdr insists
+	// on: v2 writes a nil map as {} where v1 wrote null.
+	req, err := jsonv2.Marshal(map[string]any{"id": "ccwt", "method": method, "params": params})
+	if err != nil {
+		return nil, err
+	}
+	if _, err := c.Write(append(req, '\n')); err != nil {
+		return nil, err
+	}
+	out, err := bufio.NewReader(c).ReadBytes('\n')
+	if err != nil {
+		return nil, err
+	}
+	// A refusal comes back as a line too, which the cli turns into its exit
+	// status: this is where it stops passing for an answer.
+	var resp struct {
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if jsonv2.Unmarshal(out, &resp) == nil && resp.Error != nil {
+		return nil, errors.New(resp.Error.Message)
+	}
+	return out, nil
+}
+
 // herdrBusy is the set of cwds herdr has an agent mid-task in: "working", or
 // "blocked" on a question it is waiting for an answer to. Both mean live work
 // that no git check can see — a branch made a minute ago, nothing committed to
@@ -3012,7 +3060,7 @@ func herdrBin() string {
 // ponytail: package var so tests can fake the herdr answer.
 var herdrBusy = func() map[string]bool {
 	busy := map[string]bool{}
-	out, err := exec.Command(herdrBin(), "agent", "list").Output()
+	out, err := herdrAsk("agent.list", nil, "agent", "list")
 	if err != nil {
 		return busy
 	}
@@ -3086,7 +3134,7 @@ var herdrWorkspaces = func(root, path string) ([]string, error) {
 //
 // ponytail: package var so tests can fake the herdr answer.
 var herdrLabels = func() map[string]string {
-	out, err := exec.Command(herdrBin(), "workspace", "list").Output()
+	out, err := herdrAsk("workspace.list", nil, "workspace", "list")
 	if err != nil {
 		return nil
 	}

@@ -57,7 +57,8 @@ type wsTab struct {
 // changed.
 func herdrTabs() ([]wsTab, error) {
 	ws := os.Getenv("HERDR_WORKSPACE_ID")
-	out, err := exec.Command(herdrBin(), "tab", "list", "--workspace", ws).Output()
+	scope := map[string]any{"workspace_id": ws}
+	out, err := herdrAsk("tab.list", scope, "tab", "list", "--workspace", ws)
 	if err != nil {
 		return nil, fmt.Errorf("herdr tab list: %w", err)
 	}
@@ -74,7 +75,7 @@ func herdrTabs() ([]wsTab, error) {
 	if err := json.Unmarshal(out, &tabs); err != nil {
 		return nil, fmt.Errorf("herdr tab list: %w", err)
 	}
-	out, err = exec.Command(herdrBin(), "pane", "list", "--workspace", ws).Output()
+	out, err = herdrAsk("pane.list", scope, "pane", "list", "--workspace", ws)
 	if err != nil {
 		return nil, fmt.Errorf("herdr pane list: %w", err)
 	}
@@ -106,7 +107,7 @@ func herdrTabs() ([]wsTab, error) {
 			} `json:"agents"`
 		} `json:"result"`
 	}
-	if out, err := exec.Command(herdrBin(), "agent", "list").Output(); err == nil {
+	if out, err := herdrAsk("agent.list", nil, "agent", "list"); err == nil {
 		_ = json.Unmarshal(out, &agents)
 	}
 	// ponytail: the first pane herdr lists for the tab stands for it — a split
@@ -369,13 +370,15 @@ func wsBadge(look *mrLook) {
 	}
 	// A workspace with nothing to say loses the token rather than keeping the
 	// last thing it said until the ttl runs out.
+	params := map[string]any{"workspace_id": ws, "source": "ccwt", "tokens": map[string]any{"mr": nil}}
 	token := []string{"--clear-token", "mr"}
 	if glyph != "" {
+		params["tokens"], params["ttl_ms"] = map[string]any{"mr": glyph}, wsBadgeTTL.Milliseconds()
 		token = []string{"--token", "mr=" + glyph, "--ttl-ms", fmt.Sprint(wsBadgeTTL.Milliseconds())}
 	}
 	// The workspace id goes ahead of the flags: herdr's parser takes a trailing
 	// one for the value of whatever option came last and refuses the lot.
-	_ = exec.Command(herdrBin(), append([]string{"workspace", "report-metadata", ws, "--source", "ccwt"}, token...)...).Run()
+	_, _ = herdrAsk("workspace.report_metadata", params, append([]string{"workspace", "report-metadata", ws, "--source", "ccwt"}, token...)...)
 }
 
 // mrSection is that answer as lines, laid out in the same columns `ccwt mr`
