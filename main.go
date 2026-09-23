@@ -743,6 +743,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 
 	type row struct {
 		project, name, branch, age, claude, topic string
+		marks                                     string // the two glyphs NAME leads with, tty only
 		subject                                   string // the last commit, TOPIC's fallback
 		path                                      string // the row's identity, for the tui
 		sortTime                                  time.Time
@@ -777,8 +778,12 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	}
 	// Needed by the second round rather than after it, so it goes in the first.
 	var busy map[string]bool
+	var labels map[string]string
 	if tty {
 		wg.Go(func() { busy = herdrBusy() })
+		if underHerdr() {
+			wg.Go(func() { labels = herdrLabels() })
+		}
 	}
 	for i, dir := range projects {
 		wg.Go(func() {
@@ -837,7 +842,11 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 			r := &rows[i]
 			r.path = rf.wt.Path
 			r.project = rf.project
-			r.name = filepath.Base(rf.wt.Path)
+			// Under herdr a worktree goes by the name of the workspace it is open
+			// in: that is what the work gets renamed to ("mTLS subresource"), and
+			// the name you look for it by. Only for the tty — piped output keeps
+			// the worktree's own, the name `ccwt remove` and friends take.
+			r.name = cmp.Or(labels[rf.wt.Path], filepath.Base(rf.wt.Path))
 			r.branch = rf.wt.Branch
 			if r.branch == "" {
 				r.branch = "(detached)"
@@ -886,7 +895,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 				if activeIn(rf.wt.Path, busy) {
 					glyph, on = sessionGlyph, true
 				}
-				r.name = marker(rf.wt.Path == cur, "*") + marker(on, glyph) + r.name
+				r.marks = marker(rf.wt.Path == cur, "*") + marker(on, glyph)
 			}
 		})
 	}
@@ -970,15 +979,15 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	}
 	emit := func(r row) {
 		id := listRow{project: r.project, path: r.path}
-		cells := []string{r.name, r.branch, r.age, r.claude, r.topic}
+		cells := []string{r.marks + r.name, r.branch, r.age, r.claude, r.topic}
 		add(id, cells)
 		// The pane names the worktree rather than repeating the row: the two
 		// glyphs the name leads with say where you are and whether it's safe to
 		// remove, and neither is something to copy out of a details view.
-		cells[0] = filepath.Base(r.path)
+		cells[0] = r.name
 		details[id] = cells
 		for _, t := range queue.roots[r.path] {
-			emitTask(filepath.Base(r.path), t, 0)
+			emitTask(r.name, t, 0)
 		}
 	}
 	// emitPending draws what is left of a chain whose worktree has been removed:
