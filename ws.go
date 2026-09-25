@@ -338,10 +338,13 @@ func branchLook() *mrLook {
 const wsBadgeTTL = 5 * mrWindow
 
 // wsBadge puts where the merge request stands on the workspace itself, in the
-// two marks the worktree list already leads a name with: the "✓" of a branch
-// that is in, and until then the "☐" of work pushed and waiting on a reviewer.
-// The same two states said the same way, whether you are reading the list or
-// the sidebar down the side of it.
+// marks the worktree list already leads a name with: the "✓" of a branch that
+// is in, and until then the "☐" of work pushed and waiting on a reviewer. The
+// same states said the same way, whether you are reading the list or the
+// sidebar down the side of it — the "±" of a merged branch with uncommitted
+// changes too, which is why the checkout this tui stands in is asked about
+// once the merge request is in: a "✓" reads as "done with, remove it", and
+// removing it would lose them.
 //
 // herdr has no icon for a client to set, so it goes as display-only workspace
 // metadata under an `mr` token, which the spaces panel draws for whoever has
@@ -365,6 +368,9 @@ func wsBadge(look *mrLook) {
 		switch look.rows[0].status {
 		case "merged":
 			glyph = "✓"
+			if gitutil.Dirty("") {
+				glyph = mergedDirtyGlyph
+			}
 		case "closed", "locked": // nothing left to wait on, and nothing landed: no badge beats either mark
 		default:
 			glyph = reviewGlyph
