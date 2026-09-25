@@ -541,7 +541,7 @@ func (u *ui) startSeed() string {
 		u.entry = entry{}
 		return ""
 	}
-	if err := u.seed(u.entry.text); err != nil {
+	if err := u.seed(u.entry.expanded()); err != nil {
 		return "start failed: " + err.Error()
 	}
 	u.entry = entry{}
