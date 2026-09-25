@@ -108,8 +108,9 @@ func (c *TuiCmd) Run() error {
 		// the way to any pane that didn't ask — and it started the agent the
 		// line break was meant for. Every other key we bind arrives as before;
 		// level 2 would re-spell alt-↵ and shift-tab too.
-		fmt.Print("\x1b[?1002h\x1b[?1006h\x1b[>4;1m")
-		defer fmt.Print("\x1b[>4m\x1b[?1006l\x1b[?1002l")
+		// 2004: bracketed paste, so a paste comes as one — see pasteStart.
+		fmt.Print("\x1b[?1002h\x1b[?1006h\x1b[>4;1m\x1b[?2004h")
+		defer fmt.Print("\x1b[?2004l\x1b[>4m\x1b[?1006l\x1b[?1002l")
 	}
 
 	// Alternate screen, hidden cursor, no auto-wrap (a wrapped long line would
@@ -206,14 +207,14 @@ func (c *TuiCmd) Run() error {
 	// hasn't been acknowledged yet, so readKeys is parked. Only a key can get
 	// here, and there are no keys without a terminal, so raw is set.
 	external := func() {
-		fmt.Print("\x1b[>4m\x1b[?1006l\x1b[?1002l\x1b[?7h\x1b[?25h\x1b[?1049l")
+		fmt.Print("\x1b[?2004l\x1b[>4m\x1b[?1006l\x1b[?1002l\x1b[?7h\x1b[?25h\x1b[?1049l")
 		term.Restore(int(os.Stdin.Fd()), raw)
-		text, err := externalEdit(u.entry.text)
+		text, err := externalEdit(u.entry.expanded())
 		term.MakeRaw(int(os.Stdin.Fd()))
-		fmt.Print("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1002h\x1b[?1006h\x1b[>4;1m")
+		fmt.Print("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1002h\x1b[?1006h\x1b[>4;1m\x1b[?2004h")
 
 		last = "" // the editor drew over the frame, so redraw all of it
-		u.entry.text, u.entry.cur = text, len(text)
+		u.entry.edited(text)
 		if err != nil {
 			u.msg = "editor failed: " + err.Error()
 		}
@@ -784,7 +785,8 @@ type entry struct {
 	text   string
 	cur    int // the caret, as a byte offset into text
 	open   bool
-	id     int64 // the queued prompt being rewritten; 0 when this is a new one
+	id     int64    // the queued prompt being rewritten; 0 when this is a new one
+	pastes []string // what the markers in text stand for, #1 first — see queue
 }
 
 // newEntry opens the box on text — empty for a new prompt, the prompt itself
@@ -808,6 +810,12 @@ func newEntry(parent listRow, text string, id int64) entry {
 //
 // Emptying an existing prompt and pressing enter is not a delete: `r` on the
 // row is, and it says so. Here it's the same as escape.
+//
+// A long paste goes in as the marker Claude Code's own box puts in for one —
+// "[Pasted text #1 +40 lines]", once it's over 800 characters or 2 line breaks,
+// as there — since a log dropped in whole would push what's typed around it out
+// of the box. The paste itself waits in the entry, and goes back in place of its
+// marker once the prompt leaves the box: queued, started, or off to $EDITOR.
 func (u *ui) queue(k string) {
 	switch k {
 	case "\r":
@@ -817,9 +825,9 @@ func (u *ui) queue(k string) {
 		}
 		err, done := error(nil), "queued"
 		if u.entry.id != 0 {
-			err, done = updateTask(u.entry.id, u.entry.text), "saved"
+			err, done = updateTask(u.entry.id, u.entry.expanded()), "saved"
 		} else {
-			err = addTask(u.entry.parent, u.entry.text)
+			err = addTask(u.entry.parent, u.entry.expanded())
 		}
 		if err != nil {
 			u.msg = done + " failed: " + err.Error()
@@ -830,8 +838,42 @@ func (u *ui) queue(k string) {
 	case "\x1b", "\x03":
 		u.entry = entry{}
 	default:
+		if p, ok := pasted(k); ok && (utf8.RuneCountInString(p) > 800 || strings.Count(p, "\n") > 2) {
+			u.entry.pastes = append(u.entry.pastes, p)
+			k = pasteStart + pasteMarker(len(u.entry.pastes), p) // in at the caret, as pasting it would
+		}
 		u.entry.text, u.entry.cur = lineEdit(u.entry.text, u.entry.cur, k)
 	}
+}
+
+// pasteMarker is what stands in the box for the nth paste: Claude Code's words
+// for it, the line breaks it holds counted as Claude Code counts them.
+func pasteMarker(n int, paste string) string {
+	if lines := strings.Count(paste, "\n"); lines > 0 {
+		return fmt.Sprintf("[Pasted text #%d +%d lines]", n, lines)
+	}
+	return fmt.Sprintf("[Pasted text #%d]", n)
+}
+
+// expanded is the prompt the box holds, with every marker swapped back for its
+// paste — what the agent is handed. In one pass, so a paste that happens to
+// hold a marker's words is left as it was pasted.
+func (e entry) expanded() string {
+	var pairs []string
+	for i, p := range e.pastes {
+		pairs = append(pairs, pasteMarker(i+1, p), p)
+	}
+	return strings.NewReplacer(pairs...).Replace(e.text)
+}
+
+// edited takes back what $EDITOR saved — the pastes in full, since the editor
+// is where there is room for them — with the marker back over each paste that
+// came back untouched, as Claude Code's box does.
+func (e *entry) edited(text string) {
+	for i, p := range e.pastes {
+		text = strings.Replace(text, p, pasteMarker(i+1, p), 1)
+	}
+	e.text, e.cur = text, len(text)
 }
 
 // externalEdit round-trips text through $EDITOR: a temporary file with the
@@ -945,10 +987,31 @@ func lineEdit(s string, cur int, k string) (string, int) {
 		}
 		return s[:cur] + s[eol:], cur
 	}
+	if p, ok := pasted(k); ok {
+		return s[:cur] + p + s[cur:], cur + len(p)
+	}
 	if len(k) == 1 && k[0] >= ' ' {
 		return s[:cur] + k + s[cur:], cur + 1
 	}
 	return s, cur
+}
+
+// pasteStart and pasteEnd are what a terminal puts around a paste once asked
+// to (mode 2004, bracketed paste), which is how Claude Code tells a paste from
+// typing too. Without them a paste is keystrokes: the ↵ at the end of its first
+// line starts the agent on that line, and the list takes the rest for its keys.
+const pasteStart, pasteEnd = "\x1b[200~", "\x1b[201~"
+
+// pasted is the text of the paste k, if it is one: its line breaks the box's
+// own, and a tab the four spaces Claude Code makes of it — a tab is as wide as
+// wherever it lands, and the box has to know how wide what it draws is.
+func pasted(k string) (string, bool) {
+	s, ok := strings.CutPrefix(k, pasteStart)
+	if !ok {
+		return "", false
+	}
+	s = strings.TrimSuffix(s, pasteEnd)
+	return strings.NewReplacer("\r\n", "\n", "\r", "\n", "\t", "    ").Replace(s), true
 }
 
 // lineStart and lineEnd are the ends of the line the caret is on: what Ctrl-A,
@@ -2334,16 +2397,27 @@ func copyClip(s string) {
 // ponytail: the goroutine is left blocked at exit — on the Read, or on an
 // acknowledgement that never comes — and dies with the process, which is the
 // whole program, not a library.
+//
+// A paste is one keystroke however many reads it arrives in, so the part of
+// one read so far waits for the rest. ponytail: and is scanned again with each
+// read that adds to it, which a megabyte pasted would feel; keep how far the
+// scan got if pastes that big turn up.
 func readKeys() (<-chan string, chan<- struct{}) {
 	keys, next := make(chan string), make(chan struct{})
 	go func() {
 		buf := make([]byte, 256)
+		held := "" // a paste whose end hasn't been read yet
 		for {
 			n, err := os.Stdin.Read(buf)
 			if err != nil {
 				return
 			}
-			for _, k := range splitKeys(string(buf[:n])) {
+			s := held + string(buf[:n])
+			held = ""
+			if i := strings.LastIndex(s, pasteStart); i >= 0 && !strings.Contains(s[i:], pasteEnd) {
+				s, held = s[:i], s[i:]
+			}
+			for _, k := range splitKeys(s) {
 				keys <- k
 				<-next
 			}
@@ -2385,7 +2459,16 @@ func splitKeys(s string) []string {
 // the escape key, and the escape key closes the box a prompt is being typed
 // into. Cmd-← on a terminal that sends something unheard-of used to throw the
 // paragraph away rather than do nothing.
+//
+// A paste is one keystroke, to its end: text to put in, with nothing in it to
+// act on — a line break or a `q` in a paste is a character like the rest.
 func keyLen(s string) int {
+	if strings.HasPrefix(s, pasteStart) {
+		if i := strings.Index(s, pasteEnd); i >= 0 {
+			return i + len(pasteEnd)
+		}
+		return len(s)
+	}
 	if !strings.HasPrefix(s, "\x1b") || len(s) == 1 {
 		return 1 // an ordinary byte, or an escape that really is on its own
 	}

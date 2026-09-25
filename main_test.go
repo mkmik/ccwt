@@ -1421,6 +1421,8 @@ func TestSplitKeys(t *testing.T) {
 		// With modifyOtherKeys on, shift-↵ stays itself — a line break in a
 		// prompt — and ctrl-↵ is ↵, as it was before the terminal told them apart.
 		"a\x1b[27;2;13~b\x1b[27;5;13~": {"a", "\x1b[27;2;13~", "b", "\r"},
+		// A paste is one key, escapes and all: nothing in it is a key to act on.
+		"a\x1b[200~q\r\x1b[Bb\x1b[201~c": {"a", "\x1b[200~q\r\x1b[Bb\x1b[201~", "c"},
 	} {
 		if got := splitKeys(in); !slices.Equal(got, want) {
 			t.Errorf("splitKeys(%q) = %q, want %q", in, got, want)
@@ -2499,6 +2501,57 @@ func TestAPromptCanHoldLineBreaks(t *testing.T) {
 	}
 	if got := seededPrompt(t, arg); got != want {
 		t.Errorf("the prompt file holds %q, want %q", got, want)
+	}
+}
+
+// A paste goes in whole, and a long one — over two line breaks or 800
+// characters, as in Claude Code's box — as Claude Code's marker for it, so what
+// is typed around it stays in view. The prompt that leaves the box has the paste
+// back where the marker was, and so does $EDITOR, which hands the markers back.
+// A short paste is text like any other, its line breaks the box's own whichever
+// way the terminal sent them.
+func TestALongPasteGoesInAsAMarker(t *testing.T) {
+	initRepo(t)
+	capture(t, &NewWorktreeBranchCmd{Name: "alpha", Path: true})
+	ed := filepath.Join(t.TempDir(), "ed")
+	if err := os.WriteFile(ed, []byte("#!/bin/sh\nprintf ' please' >> \"$1\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", ed)
+
+	var u ui
+	rows, _ := renderRows(t)
+	u.entry = newEntry(rows[0], "", 0)
+	const log = "panic: boom\r\tat a.go:1\r\tat b.go:2\r\tat c.go:3"
+	long := strings.Repeat("x", 801)
+	for _, k := range splitKeys("fix " + pasteStart + log + pasteEnd + " in " + pasteStart + "a.go\r\nb.go" + pasteEnd +
+		", " + pasteStart + long + pasteEnd) {
+		u.queue(k)
+	}
+	if want := "fix [Pasted text #1 +3 lines] in a.go\nb.go, [Pasted text #2]"; u.entry.text != want {
+		t.Fatalf("the box holds %q, want %q", u.entry.text, want)
+	}
+
+	text, err := externalEdit(u.entry.expanded())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.entry.edited(text); u.entry.text != "fix [Pasted text #1 +3 lines] in a.go\nb.go, [Pasted text #2] please" {
+		t.Fatalf("back from the editor the box holds %q, want the markers back", u.entry.text)
+	}
+
+	u.queue("\r")
+	if u.msg != "queued" {
+		t.Fatalf("queueing: %s", u.msg)
+	}
+	rows, cells, err := renderList(io.Discard, false, 0, nil, nil, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "fix panic: boom\n    at a.go:1\n    at b.go:2\n    at c.go:3 in a.go\nb.go, " + long + " please"
+	if len(rows) != 2 || cells[rows[1]][4] != want {
+		t.Errorf("queued %q, want %q", cells[rows[len(rows)-1]][4], want)
 	}
 }
 

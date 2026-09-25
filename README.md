@@ -417,6 +417,13 @@ tui hands over the screen and the keyboard, opens `$VISUAL`, `$EDITOR` or `vi` o
 you've typed so far, and takes back whatever you save, with the list drawn again around it.
 An editor that quits without saving leaves the prompt as it was.
 
+A long paste — over 800 characters or two line breaks — goes in as `[Pasted text #1 +40
+lines]`, the marker Claude Code's own box puts in for one, so what you type around it stays
+in view. The paste goes back in its place when the prompt is queued or its agent started, and
+`$EDITOR` gets it in full, with the marker back over it if it comes back untouched. A paste
+is text however long it is: a line break in one is a line break, not the `↵` that records the
+prompt.
+
 `n` is also vim's next-match key, and while a search pattern is in force that's what it
 stays: `/`, then `n` and `N` to walk the matches, and `esc` to clear the pattern and get the
 queue key back. The bar says which one is live.
