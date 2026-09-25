@@ -815,12 +815,14 @@ esac
 	}
 }
 
-// The workspace wears the list's own two marks: a "✓" once the merge request
+// The workspace wears the list's own marks: a "✓" once the merge request
 // is in, the "☐" of work pushed and waiting on a reviewer until then, and
 // nothing at all where there is nothing to wait on — a merge request nobody
-// opened yet, or one that was closed without landing. The badge always goes
-// with a ttl, because nothing tells herdr when this tui stops; a lookup that
-// failed says nothing rather than taking the last answer down with it.
+// opened yet, or one that was closed without landing. A merge request that is
+// in over uncommitted changes gets the list's "±" for them instead of the "✓".
+// The badge always goes with a ttl, because nothing tells herdr when this tui
+// stops; a lookup that failed says nothing rather than taking the last answer
+// down with it.
 func TestWsBadgeSaysWhereTheMergeRequestStands(t *testing.T) {
 	dir := t.TempDir()
 	log := filepath.Join(dir, "calls")
@@ -830,6 +832,7 @@ func TestWsBadgeSaysWhereTheMergeRequestStands(t *testing.T) {
 	}
 	t.Setenv("HERDR_BIN_PATH", herdr)
 	t.Setenv("HERDR_WORKSPACE_ID", "w1")
+	initRepo(t) // the checkout the badge asks about: clean until the last round
 
 	const call = "workspace report-metadata w1 --source ccwt "
 	ttl := " --ttl-ms " + fmt.Sprint(wsBadgeTTL.Milliseconds())
@@ -846,6 +849,11 @@ func TestWsBadgeSaysWhereTheMergeRequestStands(t *testing.T) {
 	wsBadge(&mrLook{}) // never pushed: the workspace every one of these starts as
 	want = append(want, call+"--clear-token mr")
 	wsBadge(&mrLook{err: errors.New("glab is not installed")})
+	if err := os.WriteFile("untracked", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wsBadge(&mrLook{rows: []mrRow{{status: "merged"}}})
+	want = append(want, call+"--token mr="+mergedDirtyGlyph+ttl)
 
 	calls, err := os.ReadFile(log)
 	if err != nil {

@@ -548,9 +548,9 @@ func gcNames(root string) (names []string, kept string, err error) {
 
 // gcCandidates names the Claude Code worktrees of the repo at root that are
 // safe to reclaim: the "✓" of `ccwt list` (branch contained in main, which is
-// also what `remove` requires), no "*" (uncommitted changes, which `remove`
-// also refuses) and a "no" in its AGENT column. active is the set of cwds of
-// running Claude Code processes, as claudeCwds reports them.
+// also what `remove` requires), no "*" or "±" (uncommitted changes, which
+// `remove` also refuses) and a "no" in its AGENT column. active is the set of
+// cwds of running Claude Code processes, as claudeCwds reports them.
 //
 // A detached worktree is never a candidate: it has no branch to be merged.
 func gcCandidates(root string, active map[string]bool) ([]string, error) {
@@ -828,9 +828,11 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	// here is pushed, so the ball is in a reviewer's court and there is nothing
 	// to do but wait — or a "* " when the worktree has uncommitted changes,
 	// which beats both: whatever git says about the branch or the remote,
-	// there's unsaved work here and it isn't safe to delete. An agent
-	// working in it beats all three, with the "✳ " of a live session: git sees a
-	// fresh branch with nothing on it, which is precisely what an agent that
+	// there's unsaved work here and it isn't safe to delete. On a merged branch
+	// it is a "± " instead: the changes are the one thing in there that isn't on
+	// main yet, which a "*" wouldn't say and a "✓" would get wrong. An agent
+	// working in it beats all of them, with the "✳ " of a live session: git sees
+	// a fresh branch with nothing on it, which is precisely what an agent that
 	// has just started looks like. Both ride at the head of the row because
 	// "where am I?" and "can this go?" are the actionable things on the line,
 	// and reading down two left-hand strips answers them for the whole table.
@@ -879,9 +881,10 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 				r.sortTime = wrote
 			}
 			if tty {
-				glyph, on := "✓", rf.wt.Branch != "" && mergedCache.get(rf.wt.Path, window(gitScanWindow), func() bool {
+				merged := rf.wt.Branch != "" && mergedCache.get(rf.wt.Path, window(gitScanWindow), func() bool {
 					return gitutil.Merged(rf.project, rf.wt.Branch)
 				})
+				glyph, on := "✓", merged
 				if !on && pushedCache.get(rf.wt.Path, window(gitScanWindow), func() bool {
 					return gitutil.Pushed(rf.wt.Path)
 				}) {
@@ -891,6 +894,9 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 					return gitutil.Dirty(rf.wt.Path)
 				}) {
 					glyph, on = "*", true
+					if merged {
+						glyph = mergedDirtyGlyph
+					}
 				}
 				if activeIn(rf.wt.Path, busy) {
 					glyph, on = sessionGlyph, true
@@ -1077,11 +1083,18 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 // it sits in the same column as: sign-off pending rather than granted.
 // Single-width, like the rest: the leading gutter is two columns and emoji are
 // two on their own.
+//
+// mergedDirtyGlyph shares that column too: a merged branch in a worktree with
+// uncommitted changes. The "✓" would read as "safe to remove" and the "*"
+// would hide that the work has landed — which is what makes the changes easy
+// to lose, since they are all that's left in there. It is the sign shell
+// prompts give a repo with changes in it.
 const (
-	sessionGlyph = "✳"
-	commitGlyph  = "⎇"
-	taskGlyph    = "↳"
-	reviewGlyph  = "☐"
+	sessionGlyph     = "✳"
+	commitGlyph      = "⎇"
+	taskGlyph        = "↳"
+	reviewGlyph      = "☐"
+	mergedDirtyGlyph = "±"
 )
 
 // topic is what the worktree is about in one line: what the last Claude Code

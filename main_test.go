@@ -58,14 +58,15 @@ func TestNewPath(t *testing.T) {
 }
 
 // TestListMarksCurrent covers both "*" markers — the current worktree's name
-// and a dirty worktree's leading removal glyph, where the "*" also has to beat
-// the "✓" the merged branch would otherwise get. Each must appear on its row
-// only, and only when stdout is a tty.
+// and a dirty worktree's leading removal glyph, on a branch with work of its
+// own: a merged one gets the "±" instead (TestListMarksMerged). Each must
+// appear on its row only, and only when stdout is a tty.
 func TestListMarksCurrent(t *testing.T) {
 	initRepo(t)
 	here := capture(t, &NewWorktreeBranchCmd{})
 	other := capture(t, &NewWorktreeBranchCmd{})
 	t.Chdir(capture(t, &NewWorktreeBranchCmd{Name: here, Path: true}))
+	commitWork(t, ".", here)
 	if err := os.WriteFile("untracked", nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -199,21 +200,28 @@ func TestRemoveCurrent(t *testing.T) {
 }
 
 // TestListMarksMerged: a branch already contained in main gets the "✓" glyph,
-// one with commits of its own doesn't. Tty-only, like the other markers.
+// one with commits of its own doesn't, and a merged one with uncommitted
+// changes gets the "±" in its place. Tty-only, like the other markers.
 func TestListMarksMerged(t *testing.T) {
 	initRepo(t)
 	capture(t, &NewWorktreeBranchCmd{Name: "merged"})
 	ahead := capture(t, &NewWorktreeBranchCmd{Name: "ahead", Path: true})
 	commitWork(t, ahead, "ahead")
+	dirty := capture(t, &NewWorktreeBranchCmd{Name: "dirty", Path: true})
+	if err := os.WriteFile(filepath.Join(dirty, "untracked"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	defer func(orig func() bool) { stdoutIsTTY = orig }(stdoutIsTTY)
 	for _, tty := range []bool{true, false} {
 		stdoutIsTTY = func() bool { return tty }
 		for line := range strings.SplitSeq(capture(t, &ListCmd{}), "\n") {
-			name, _, _ := strings.Cut(strings.TrimLeft(line, "✓* "), " ")
-			want := tty && name == "merged"
-			if got := strings.HasPrefix(line, "  ✓ "); got != want {
-				t.Errorf("tty=%v: merged glyph = %v, want %v: %q", tty, got, want, line)
+			name, _, _ := strings.Cut(strings.TrimLeft(line, "✓*"+mergedDirtyGlyph+" "), " ")
+			for glyph, owner := range map[string]string{"✓": "merged", mergedDirtyGlyph: "dirty"} {
+				want := tty && name == owner
+				if got := strings.HasPrefix(line, "  "+glyph+" "); got != want {
+					t.Errorf("tty=%v: %s glyph = %v, want %v: %q", tty, glyph, got, want, line)
+				}
 			}
 		}
 	}
