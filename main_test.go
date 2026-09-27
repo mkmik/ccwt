@@ -742,9 +742,9 @@ func TestAgentWorkingIsNotSafeToRemove(t *testing.T) {
 	busy := capture(t, &NewWorktreeBranchCmd{Name: "busy", Path: true})
 	idle := capture(t, &NewWorktreeBranchCmd{Name: "idle", Path: true})
 
-	defer func(orig func() map[string]bool) { herdrBusy = orig }(herdrBusy)
+	defer func(orig func() []herdrAgent) { herdrAgents = orig }(herdrAgents)
 	// A subdirectory: where an agent that cd'd deeper into the worktree reports from.
-	herdrBusy = func() map[string]bool { return map[string]bool{filepath.Join(busy, "internal"): true} }
+	herdrAgents = func() []herdrAgent { return []herdrAgent{{Status: "working", Cwd: filepath.Join(busy, "internal")}} }
 
 	defer func(orig func() bool) { stdoutIsTTY = orig }(stdoutIsTTY)
 	stdoutIsTTY = func() bool { return true }
@@ -812,6 +812,78 @@ func TestListNamesHerdrWorkspaces(t *testing.T) {
 		if want := []string{"closed", tc.want}; !slices.Equal(names, want) {
 			t.Errorf("HERDR_ENV=%q tty=%v: names = %q, want %q", tc.env, tc.tty, names, want)
 		}
+	}
+}
+
+// Under herdr the tui leads each worktree's row with the dot the ws view gives a
+// tab, for the agents in the worktree: the one that most wants you, green for a
+// turn nobody has read since it ended, grey once somebody has, and `·` where
+// herdr has no agent at all. AGENT goes on saying what it said. The colour goes
+// on the dot alone — a merged worktree's name leads with the very ✓ that stands
+// in for done, and that one stays a ✓. `ccwt list` draws the table once, with
+// nothing to remember what has been read by, and has no dots.
+func TestTuiLeadsWithHerdrsDot(t *testing.T) {
+	repo := initRepo(t)
+	busy := capture(t, &NewWorktreeBranchCmd{Name: "busy", Path: true})
+	idle := capture(t, &NewWorktreeBranchCmd{Name: "idle", Path: true})
+	capture(t, &NewWorktreeBranchCmd{Name: "bare"})
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_BIN_PATH", "/nowhere/herdr") // what isn't faked below goes unanswered
+
+	looking := false
+	defer func(orig func() []herdrAgent) { herdrAgents = orig }(herdrAgents)
+	herdrAgents = func() []herdrAgent {
+		return []herdrAgent{
+			{Pane: "w1:p1", Tab: "w1:t1", Cwd: busy, Status: "working", Seq: 3},
+			{Pane: "w1:p2", Tab: "w1:t1", Cwd: busy, Status: "blocked", Seq: 4},
+			// Started at the repo root, and moved into the worktree since.
+			{Pane: "w2:p1", Tab: "w2:t1", Cwd: repo, Foreground: idle, Status: "idle", Seq: 5, Focused: looking},
+		}
+	}
+	wsWatched = map[string]wsWatch{}
+	defer func(old func() (int, int)) { termSize = old }(termSize)
+	termSize = func() (int, int) { return 200, 10 }
+
+	var u ui
+	row := func(name string) string {
+		t.Helper()
+		u.stale()
+		lines, err := u.frame()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, l := range lines {
+			if strings.Contains(l, " "+name+" ") {
+				return l
+			}
+		}
+		t.Fatalf("no %s row in %q", name, lines)
+		return ""
+	}
+	for _, step := range []struct {
+		name, want, why string
+		looking         bool
+	}{
+		{"busy", "\x1b[91m●\x1b[0m   ✳ busy", "the blocked agent's red over the working one's yellow", false},
+		{"bare", "\x1b[90m·\x1b[0m   ✓ bare", "the grey · of no agent", false},
+		{"idle", "\x1b[92m●\x1b[0m   ✓ idle", "green: a turn has ended, and nobody has looked since", false},
+		{"idle", "\x1b[37m○\x1b[0m   ✓ idle", "grey: looked at", true},
+		{"idle", "\x1b[37m○\x1b[0m   ✓ idle", "and read it stays", false},
+	} {
+		looking = step.looking
+		got := row(step.name)
+		if !strings.HasPrefix(got, step.want) {
+			t.Errorf("%s = %q, want it to start %q — %s", step.name, got, step.want, step.why)
+		}
+		if !strings.Contains(got, "  no  ") {
+			t.Errorf("%s = %q, want AGENT's own no: no Claude Code runs there", step.name, got)
+		}
+	}
+
+	defer func(orig func() bool) { stdoutIsTTY = orig }(stdoutIsTTY)
+	stdoutIsTTY = func() bool { return true }
+	if list := capture(t, &ListCmd{NoHeaders: true}); !strings.Contains(list, "\n  ✳ busy ") && !strings.HasPrefix(list, "  ✳ busy ") {
+		t.Errorf("ccwt list = %q, want the busy row led by its two glyphs and no dot", list)
 	}
 }
 
@@ -1690,7 +1762,7 @@ func TestListFitsTerminalWidth(t *testing.T) {
 
 	for _, width := range []int{20, 50, 60, 80, 100, 200} {
 		var buf bytes.Buffer
-		if _, _, err := renderList(&buf, true, width, nil, nil, true, ""); err != nil {
+		if _, _, err := renderList(&buf, true, width, nil, nil, true, "", false); err != nil {
 			t.Fatal(err)
 		}
 		// Every column bottoms out at minCol, so a terminal narrower than that
@@ -1822,7 +1894,7 @@ func TestConfigColumns(t *testing.T) {
 
 	writeConfig("columns = [\"topic\", \"name\"]\n")
 	var buf bytes.Buffer
-	if _, _, err := renderList(&buf, false, 0, nil, nil, true, ""); err != nil {
+	if _, _, err := renderList(&buf, false, 0, nil, nil, true, "", false); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -1840,7 +1912,7 @@ func TestConfigColumns(t *testing.T) {
 	// rename still names it that.
 	writeConfig("columns = [\"claude\"]\n")
 	buf.Reset()
-	if _, _, err := renderList(&buf, false, 0, nil, nil, true, ""); err != nil {
+	if _, _, err := renderList(&buf, false, 0, nil, nil, true, "", false); err != nil {
 		t.Fatalf("columns = [\"claude\"]: %v", err)
 	}
 	if head, _, _ := strings.Cut(buf.String(), "\n"); !strings.HasPrefix(head, "AGENT") {
@@ -1848,7 +1920,7 @@ func TestConfigColumns(t *testing.T) {
 	}
 
 	writeConfig("columns = [\"nmae\"]\n")
-	if _, _, err := renderList(&buf, false, 0, nil, nil, true, ""); err == nil || !strings.Contains(err.Error(), "nmae") {
+	if _, _, err := renderList(&buf, false, 0, nil, nil, true, "", false); err == nil || !strings.Contains(err.Error(), "nmae") {
 		t.Errorf("unknown column: err = %v, want one naming it", err)
 	}
 }
@@ -1944,7 +2016,7 @@ func TestGlobalListSpansProjects(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	got, _, err := renderList(&buf, false, 0, roots, nil, true, "")
+	got, _, err := renderList(&buf, false, 0, roots, nil, true, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1966,7 +2038,7 @@ func TestGlobalListSpansProjects(t *testing.T) {
 	// Folded shut, a project keeps its header — turned around, and still saying
 	// how much is underneath — and contributes no rows at all.
 	buf.Reset()
-	got, _, err = renderList(&buf, false, 0, roots, map[string]bool{gitRoots[0]: true}, true, "")
+	got, _, err = renderList(&buf, false, 0, roots, map[string]bool{gitRoots[0]: true}, true, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2021,7 +2093,7 @@ func TestGlobalListOutsideAnyRepo(t *testing.T) {
 	// tty: the markers are the only thing that ever looked at the current
 	// directory, so the complaint only shows up with them turned on.
 	var buf bytes.Buffer
-	_, _, err = renderList(&buf, true, 0, []string{root}, nil, true, "")
+	_, _, err = renderList(&buf, true, 0, []string{root}, nil, true, "", false)
 	w.Close()
 	if err != nil {
 		t.Fatal(err)
@@ -2168,7 +2240,7 @@ func TestDefaultCommandIsTui(t *testing.T) {
 func renderRows(t *testing.T) ([]listRow, string) {
 	t.Helper()
 	var buf bytes.Buffer
-	rows, _, err := renderList(&buf, false, 0, nil, nil, false, "")
+	rows, _, err := renderList(&buf, false, 0, nil, nil, false, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2416,7 +2488,7 @@ esac
 	}
 	// What the tui has when a key is pressed: the rows of the last frame and
 	// their cells, which is where startPending reads the prompt from.
-	rows, cells, err := renderList(io.Discard, false, 0, nil, nil, false, "")
+	rows, cells, err := renderList(io.Discard, false, 0, nil, nil, false, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2545,7 +2617,7 @@ func TestALongPasteGoesInAsAMarker(t *testing.T) {
 	if u.msg != "queued" {
 		t.Fatalf("queueing: %s", u.msg)
 	}
-	rows, cells, err := renderList(io.Discard, false, 0, nil, nil, false, "")
+	rows, cells, err := renderList(io.Discard, false, 0, nil, nil, false, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}

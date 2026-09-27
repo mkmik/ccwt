@@ -93,25 +93,13 @@ func herdrTabs() ([]wsTab, error) {
 	if err := json.Unmarshal(out, &panes); err != nil {
 		return nil, fmt.Errorf("herdr pane list: %w", err)
 	}
-	// Not scoped to the workspace: `agent list` takes no --workspace, and a tab
-	// id is herdr-wide, so the agents of other workspaces simply match no tab
-	// of ours.
+	// Not scoped to the workspace: a tab id is herdr-wide, so the agents of
+	// other workspaces simply match no tab of ours.
 	//
 	// An answer that doesn't come is no answer rather than an error: the tabs
 	// and their panes are what the table is, and a herdr that won't say what
 	// its agents are up to costs the dots their state, not the view.
-	var agents struct {
-		Result struct {
-			Agents []struct {
-				Tab    string `json:"tab_id"`
-				Status string `json:"agent_status"`
-				Seq    int64  `json:"state_change_seq"`
-			} `json:"agents"`
-		} `json:"result"`
-	}
-	if out, err := herdrAsk("agent.list", nil, "agent", "list"); err == nil {
-		_ = json.Unmarshal(out, &agents)
-	}
+	agents := herdrAgents()
 	// ponytail: the first pane herdr lists for the tab stands for it — a split
 	// tab is two panes, and the table has one row to say what the tab is.
 	first := map[string]int{}
@@ -125,7 +113,7 @@ func herdrTabs() ([]wsTab, error) {
 	// reason for the tab to go quiet about it. A tab split between several
 	// shows whichever most wants you, and carries that one's counter.
 	loudest := map[string]wsTab{}
-	for _, a := range agents.Result.Agents {
+	for _, a := range agents {
 		if wsRank(a.Status) > wsRank(loudest[a.Tab].Status) {
 			loudest[a.Tab] = wsTab{Status: a.Status, Seq: a.Seq}
 		}
@@ -172,13 +160,13 @@ type wsWatch struct {
 	seq, seen int64
 }
 
-// wsWatched is those, by tab — ccwt's own copy of the badge herdr's tui keeps
-// rather than a cache of herdr's answer. Herdr's `done` is the server's seen
-// state, and a single look spends it for good: an agent that finishes a second
-// turn while you are away is plain `idle`, because you were in its tab when it
-// finished the first. Herdr's own docs say as much — each tui client tracks
-// viewed completions independently — so this is a client doing what herdr
-// expects of one.
+// wsWatched is those, by tab (by agent, in the list: see agentDots) — ccwt's
+// own copy of the badge herdr's tui keeps rather than a cache of herdr's
+// answer. Herdr's `done` is the server's seen state, and a single look spends
+// it for good: an agent that finishes a second turn while you are away is
+// plain `idle`, because you were in its tab when it finished the first.
+// Herdr's own docs say as much — each tui client tracks viewed completions
+// independently — so this is a client doing what herdr expects of one.
 //
 // What it tracks it off is `state_change_seq`, herdr's own counter for when an
 // agent last changed state, rather than off watching for the change itself. A
@@ -221,6 +209,42 @@ func wsAttention(tabs []wsTab) {
 		}
 	}
 	wsWatched = next
+}
+
+// agentDots is what the list leads a worktree's row with under herdr: the dot
+// the ws view would give a tab, by the same rules — the agent that most wants
+// you when there are several, and green for a turn that has ended since anyone
+// last looked. A worktree with no agent herdr can place is `·`, as a tab of
+// shells is.
+//
+// An agent is in the worktree either of its cwds is in, as for the `✳`
+// herdrBusy puts on the row. Each goes through wsAttention on its own, under
+// its pane's id, so that two agents in one worktree are two turns to read; a
+// tab counts as looked at while one of its agents has the focus.
+//
+// ponytail: an agent's focus stands in for its tab's — the list asks herdr for
+// agents and nothing else — so a tab read from a shell pane beside its agent
+// stays green until the agent's pane has had the focus. A herdr-wide `tab list`
+// would settle it, at a second round trip a round.
+func agentDots(agents []herdrAgent) func(path string) string {
+	looked := map[string]bool{} // a tab -> one of its agents has the focus
+	for _, a := range agents {
+		looked[a.Tab] = looked[a.Tab] || a.Focused
+	}
+	dots := make([]wsTab, len(agents))
+	for i, a := range agents {
+		dots[i] = wsTab{ID: a.Pane, Status: a.Status, Seq: a.Seq, Focused: looked[a.Tab]}
+	}
+	wsAttention(dots)
+	return func(path string) string {
+		status := ""
+		for i, a := range agents {
+			if (under(a.Cwd, path) || under(a.Foreground, path)) && wsRank(dots[i].Status) > wsRank(status) {
+				status = dots[i].Status
+			}
+		}
+		return wsDot(status)
+	}
 }
 
 // wsTable is the ws view's screen, in two sections: where the workspace's

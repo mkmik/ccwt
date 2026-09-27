@@ -69,8 +69,10 @@ esac
 	}
 	// The dot is a stand-in until the frame paints it, and the colour has to
 	// hand the row back to whatever it was sitting on — the selection band here.
-	if got := paintDots("  a  ◐  b", rowBar); !strings.Contains(got, "●") || !strings.HasSuffix(got, rowBar+"  b") {
-		t.Errorf("paintDots = %q, want a coloured circle that restores the band", got)
+	// Only the one in the AGENT column: the same characters anywhere else on the
+	// line are text, like the ✓ in this title.
+	if got := paintDots("  a  ◐  b ✓", 5, rowBar); got != "  a  \x1b[33m●"+rowBar+"  b ✓" {
+		t.Errorf("paintDots = %q, want a coloured circle that restores the band, and nothing else touched", got)
 	}
 	want := []listRow{{path: "/src/ccwt/.claude/worktrees/calm-baking-otter", tab: "w1:t3"}, {path: "/src/ccwt", tab: "w1:t1"}}
 	if !slices.Equal(rows, want) {
@@ -478,7 +480,7 @@ esac
 	t.Setenv("HERDR_WORKSPACE_ID", "w1")
 	t.Setenv("HERDR_TAB_ID", "w1:t1")
 
-	busy := herdrBusy()
+	busy := herdrBusy(herdrAgents())
 	if busy["/src/mine"] {
 		t.Error("our own tab counts as busy: an agent could not run `ccwt done` on its own worktree")
 	}
@@ -488,7 +490,7 @@ esac
 	// No tab to go by — an older herdr, a pane outside one — and the whole
 	// workspace is ours again, which is what this used to do for everyone.
 	t.Setenv("HERDR_TAB_ID", "")
-	if busy := herdrBusy(); busy["/src/sibling"] {
+	if busy := herdrBusy(herdrAgents()); busy["/src/sibling"] {
 		t.Error("with no tab in the environment, our own workspace is no longer exempt")
 	}
 }
@@ -542,7 +544,7 @@ func TestHerdrIsAskedOverItsSocket(t *testing.T) {
 	if want := []wsTab{{ID: "w1:t1", Label: "1", Status: "working", Cwd: "/src/ccwt", Title: "zsh", Seq: 3}}; err != nil || !slices.Equal(ts, want) {
 		t.Errorf("herdrTabs() = %v, %v, want %v", ts, err, want)
 	}
-	herdrBusy()
+	herdrBusy(herdrAgents())
 	herdrLabels()
 	wsBadge(&mrLook{rows: []mrRow{{status: "merged"}}})
 	wsBadge(&mrLook{})
