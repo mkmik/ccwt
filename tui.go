@@ -1380,7 +1380,7 @@ func (u *ui) frame() ([]string, error) {
 			u.cols, u.div, u.cells = cols, nil, nil
 		} else {
 			var buf bytes.Buffer
-			listRows, cells, err := renderList(&buf, true, cols, u.projects, u.collapsed, true, u.sort)
+			listRows, cells, err := renderList(&buf, true, cols, u.projects, u.collapsed, true, u.sort, true)
 			if err != nil {
 				return nil, err
 			}
@@ -1424,15 +1424,22 @@ func (u *ui) frame() ([]string, error) {
 	// on — vim's hlsearch. In a list of near-identical generated names, a bar
 	// across one row doesn't say what about it matched.
 	re := u.re()
+	// The agent dots are painted where they are and nowhere else: first on the
+	// line in the list, under herdr, and in the ws view wherever its header
+	// says AGENT is. The ps view has none.
+	dots := -1
+	switch h := u.body[u.head-1]; {
+	case u.ws && strings.Contains(h, "AGENT"):
+		dots = screenWidth(h[:strings.Index(h, "AGENT")])
+	case !u.ws && !u.ps && underHerdr():
+		dots = 0
+	}
 	for i, line := range lines[u.head:] {
 		bg := ""
 		if i == sel-u.top {
 			bg = rowBar
 		}
-		lines[i+u.head] = draw(line, cols, re, bg)
-		if u.ws {
-			lines[i+u.head] = paintDots(lines[i+u.head], bg)
-		}
+		lines[i+u.head] = paintDots(draw(line, cols, re, bg), dots, bg)
 	}
 
 	for len(lines) < body {
@@ -2120,28 +2127,52 @@ var termSize = func() (cols, rows int) {
 // terminal worth running a TUI in has had it for a decade.
 const rowBar = "\x1b[48;2;44;100;118m\x1b[38;2;251;241;199m"
 
-// paintDots colours the ws view's agent marks. herdr draws blocked, working
-// and done as the same ● and tells them apart by colour alone, so wsDot leaves
-// a colourless stand-in in the table and the colour goes on here — after the
-// cut and the match highlighting, since an escape is no width and the search
-// reads the text underneath. bg is what the row is sitting on, the selection
-// band or nothing, and is what each dot hands back to the rest of the line.
+// paintDots colours the agent mark on a line of the table, the one at screen
+// column col — the first on the list's line, the ws view's AGENT. herdr draws
+// blocked, working and done as the same ● and tells them apart by colour alone,
+// so wsDot leaves a colourless stand-in in the table and the colour goes on
+// here — after the cut and the match highlighting, since an escape is no width
+// and the search reads the text underneath. bg is what the row is sitting on,
+// the selection band or nothing, and is what the dot hands back to the rest of
+// the line.
 //
-// ponytail: the whole line, not the AGENT column — the column's offset stops
-// being a rune count once draw has picked out the matches. A ✓ in an agent's
-// terminal title comes out a green dot; take the cell apart if that shows up.
-func paintDots(line, bg string) string {
-	off := cmp.Or(bg, "\x1b[0m")
-	// The palette's own red, yellow, green and greys, not hexes of our own:
-	// herdr paints its theme over the ansi sixteen, so a dot asked for by
-	// number comes out herdr's colour and follows it when the theme changes.
-	return strings.NewReplacer(
-		"×", "\x1b[91m●"+off,
-		"◐", "\x1b[33m●"+off,
-		"✓", "\x1b[92m●"+off,
-		"○", "\x1b[37m○"+off,
-		"·", "\x1b[90m·"+off,
-	).Replace(line)
+// The one column and no other: the stand-ins are ordinary characters, and the
+// list leads a merged worktree's name with the very ✓ that stands in for done,
+// as an agent's terminal title may have any of them in it. The walk steps over
+// the escapes draw put in, which is what keeps the column a count of what is
+// on screen.
+func paintDots(line string, col int, bg string) string {
+	w := 0
+	for i := 0; i < len(line); {
+		if line[i] == '\x1b' {
+			if loc := escapes.FindStringIndex(line[i:]); loc != nil && loc[0] == 0 {
+				i += loc[1]
+				continue
+			}
+		}
+		r, size := utf8.DecodeRuneInString(line[i:])
+		if w == col {
+			if dot, ok := dotColours[r]; ok {
+				return line[:i] + dot + cmp.Or(bg, "\x1b[0m") + line[i+size:]
+			}
+			return line
+		}
+		w += screenWidth(string(r))
+		i += size
+	}
+	return line
+}
+
+// dotColours is each stand-in as herdr draws it. The palette's own red,
+// yellow, green and greys, not hexes of our own: herdr paints its theme over
+// the ansi sixteen, so a dot asked for by number comes out herdr's colour and
+// follows it when the theme changes.
+var dotColours = map[rune]string{
+	'×': "\x1b[91m●",
+	'◐': "\x1b[33m●",
+	'✓': "\x1b[92m●",
+	'○': "\x1b[37m○",
+	'·': "\x1b[90m·",
 }
 
 // draw is one line as it goes on the screen: cut to the terminal width, every
@@ -3226,6 +3257,38 @@ func herdrListen(ctx context.Context, poke chan<- struct{}, types ...string) {
 	}
 }
 
+// herdrAgent is one agent as `herdr agent list` has it: where it is — its pane,
+// tab and workspace, the pane's cwd and its own — what it is doing, herdr's
+// counter for when that last changed, and whether its pane is the one you are
+// in, herdr-wide.
+type herdrAgent struct {
+	Status     string `json:"agent_status"`
+	Seq        int64  `json:"state_change_seq"`
+	Cwd        string `json:"cwd"`
+	Foreground string `json:"foreground_cwd"`
+	Workspace  string `json:"workspace_id"`
+	Tab        string `json:"tab_id"`
+	Pane       string `json:"pane_id"`
+	Focused    bool   `json:"focused"`
+}
+
+// herdrAgents is every agent herdr has, in every workspace: `agent list` takes
+// no workspace to narrow it to. No herdr, or none running, or one that won't
+// say, is no agents.
+//
+// ponytail: package var so tests can fake the herdr answer.
+var herdrAgents = func() []herdrAgent {
+	var resp struct {
+		Result struct {
+			Agents []herdrAgent `json:"agents"`
+		} `json:"result"`
+	}
+	if out, err := herdrAsk("agent.list", nil, "agent", "list"); err == nil {
+		_ = json.Unmarshal(out, &resp)
+	}
+	return resp.Result.Agents
+}
+
 // herdrBusy is the set of cwds herdr has an agent mid-task in: "working", or
 // "blocked" on a question it is waiting for an answer to. Both mean live work
 // that no git check can see — a branch made a minute ago, nothing committed to
@@ -3241,32 +3304,12 @@ func herdrListen(ctx context.Context, poke chan<- struct{}, types ...string) {
 // not pull the floor out from under. For a worktree open as its own single-tab
 // workspace the two are the same thing. A pane whose environment names no tab
 // falls back to the workspace. No herdr, or none running, is nobody working.
-//
-// ponytail: package var so tests can fake the herdr answer.
-var herdrBusy = func() map[string]bool {
+func herdrBusy(agents []herdrAgent) map[string]bool {
 	busy := map[string]bool{}
-	out, err := herdrAsk("agent.list", nil, "agent", "list")
-	if err != nil {
-		return busy
-	}
-	var resp struct {
-		Result struct {
-			Agents []struct {
-				Status     string `json:"agent_status"`
-				Cwd        string `json:"cwd"`
-				Foreground string `json:"foreground_cwd"`
-				Workspace  string `json:"workspace_id"`
-				Tab        string `json:"tab_id"`
-			} `json:"agents"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal(out, &resp); err != nil {
-		return busy
-	}
 	// A tab id ("w1:t2") is never a workspace id ("w1"), so one comparison does
 	// for whichever of the two we were handed.
 	self := cmp.Or(os.Getenv("HERDR_TAB_ID"), os.Getenv("HERDR_WORKSPACE_ID"))
-	for _, a := range resp.Result.Agents {
+	for _, a := range agents {
 		if a.Status != "working" && a.Status != "blocked" {
 			continue
 		}

@@ -285,7 +285,7 @@ func removeBlocked(root, name string, keepBranch bool) error {
 	// the only one git can't see: a branch it made a minute ago and hasn't
 	// committed to is both merged and clean. Removing it closes the workspace
 	// out from under the agent, so ask first — the same way out as the others.
-	if activeIn(worktreePath, herdrBusy()) {
+	if activeIn(worktreePath, herdrBusy(herdrAgents())) {
 		return fmt.Errorf("%s has an agent working in it: let it finish, or re-run with -D to remove it anyway", name)
 	}
 	return nil
@@ -533,7 +533,7 @@ func (c *GcCmd) Run() error {
 // this too, so both agree on what "done with" means.
 func gcNames(root string) (names []string, kept string, err error) {
 	active := claudeCwds()
-	maps.Copy(active, herdrBusy())
+	maps.Copy(active, herdrBusy(herdrAgents()))
 	names, err = gcCandidates(root, active)
 	if err != nil {
 		return nil, "", err
@@ -599,7 +599,7 @@ func (c *ListCmd) Run() error {
 	if tty {
 		width, _, _ = term.GetSize(int(os.Stdout.Fd()))
 	}
-	_, _, err = renderList(os.Stdout, tty, width, projects, nil, !c.NoHeaders, c.Sort)
+	_, _, err = renderList(os.Stdout, tty, width, projects, nil, !c.NoHeaders, c.Sort, false)
 	return err
 }
 
@@ -726,7 +726,13 @@ var (
 // there is nothing to unfold them with on the command line. headers draws the
 // header row; `list --no-headers` is the only caller that doesn't want it.
 // sort is the order to put the worktrees in, or "" for whatever the config says.
-func renderList(out io.Writer, tty bool, width int, projects []string, collapsed map[string]bool, headers bool, sort string) ([]listRow, map[listRow][]string, error) {
+//
+// dots, under herdr, leads every row with a strip of its own: on a worktree's,
+// the dot the ws view gives a tab, for the agents in the worktree (see
+// agentDots), and blank on the rest. Only the tui asks: green is a turn nobody
+// has read since, and a table drawn once has nobody to remember what has been
+// read — it would call every settled agent unread.
+func renderList(out io.Writer, tty bool, width int, projects []string, collapsed map[string]bool, headers bool, sort string, dots bool) ([]listRow, map[listRow][]string, error) {
 	global := projects != nil
 	if !global {
 		// "" is the current directory, which is how git reads "the repo we're in".
@@ -777,10 +783,10 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 		wg.Go(func() { cur, _, _ = gitutil.CurrentClaudeWorktree() })
 	}
 	// Needed by the second round rather than after it, so it goes in the first.
-	var busy map[string]bool
+	var agents []herdrAgent
 	var labels map[string]string
 	if tty {
-		wg.Go(func() { busy = herdrBusy() })
+		wg.Go(func() { agents = herdrAgents() })
 		if underHerdr() {
 			wg.Go(func() { labels = herdrLabels() })
 		}
@@ -809,6 +815,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	if err := errors.Join(errs...); err != nil {
 		return nil, nil, err
 	}
+	busy := herdrBusy(agents)
 
 	// One flat list of worktrees, each still knowing which project it came from.
 	type ref struct {
@@ -928,6 +935,15 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	if tty {
 		gutter = marker(false, "")
 	}
+	// The dots' strip goes ahead of whichever column comes first, so that it is
+	// the first thing on the line — where herdr's sidebar has its dot too.
+	// Worked out once a round, here: agentDots is also what remembers what has
+	// been read from one round to the next.
+	var dot func(path string) string
+	strip := ""
+	if dots && underHerdr() {
+		dot, strip = agentDots(agents), gutter
+	}
 	// Everything above builds the whole row; pick is where the hidden columns
 	// go, so a column's absence can't change anything but the printing.
 	pick := func(cells ...string) []string {
@@ -946,6 +962,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 				head[i] = gutter + gutter + c.name // clear of the two glyphs a name leads with
 			}
 		}
+		head[0] = strip + head[0]
 		table = append(table, head)
 	}
 	// The queued prompts are read here, on the same refresh as everything else:
@@ -964,9 +981,11 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 
 	var lines []listRow
 	details := map[listRow][]string{}
-	add := func(id listRow, cells []string) {
+	add := func(id listRow, lead string, cells []string) {
 		lines = append(lines, id)
-		table = append(table, pick(cells...)) // pick copies, so cells is ours to keep
+		row := pick(cells...) // pick copies, so cells is ours to keep
+		row[0] = lead + row[0]
+		table = append(table, row)
 	}
 	// emitTask draws one queued prompt and then whatever is queued behind it:
 	// the chain is a tree, and it's drawn as one, indented under the row it is
@@ -976,7 +995,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	emitTask = func(name string, t Task, depth int) {
 		id := listRow{project: t.Project, task: t.ID}
 		cells := taskCells(t, gutter, depth)
-		add(id, cells)
+		add(id, strip, cells)
 		cells[0] = name
 		details[id] = cells
 		for _, k := range queue.kids[t.ID] {
@@ -986,7 +1005,11 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	emit := func(r row) {
 		id := listRow{project: r.project, path: r.path}
 		cells := []string{r.marks + r.name, r.branch, r.age, r.claude, r.topic}
-		add(id, cells)
+		lead := strip
+		if dot != nil {
+			lead = marker(true, dot(r.path))
+		}
+		add(id, lead, cells)
 		// The pane names the worktree rather than repeating the row: the two
 		// glyphs the name leads with say where you are and whether it's safe to
 		// remove, and neither is something to copy out of a details view.
@@ -1010,7 +1033,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 			// removed one's path says for the rest of them.
 			id := listRow{project: project, path: cmp.Or(t.Worktree, project), task: t.ID}
 			cells := []string{gutter + gutter + newName, "", humanAge(time.Since(t.Created)), "", t.Prompt}
-			add(id, cells)
+			add(id, strip, cells)
 			cells[0] = newName
 			details[id] = cells
 			for _, k := range queue.kids[t.ID] {
