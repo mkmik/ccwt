@@ -663,17 +663,29 @@ func herdrFocusTab(id string) string {
 
 // wsDown is what the list warns of in its corner: the workspaces whose `ws` tab
 // has no ccwt running in it, by name, as watchWsDown last found them — or with
-// -g, the projects' own workspaces with no ccwt in any of their panes.
+// -g, the projects' own workspaces with no ccwt in any of their panes — and,
+// line for line, the first tab of each, which is where a double click on one goes.
 var wsDown struct {
 	sync.Mutex
-	names  []string
-	global bool
+	names, tabs []string
+	global      bool
 }
 
 func wsDownNames() ([]string, bool) {
 	wsDown.Lock()
 	defer wsDown.Unlock()
 	return wsDown.names, wsDown.global
+}
+
+// wsDownTab is the first tab of the workspace on line i of the corner's box,
+// or "" when there is no such line.
+func wsDownTab(i int) string {
+	wsDown.Lock()
+	defer wsDown.Unlock()
+	if i < 0 || i >= len(wsDown.tabs) {
+		return ""
+	}
+	return wsDown.tabs[i]
 }
 
 // wsDownEvents are what herdr says when the `ws` tabs, or the names of the
@@ -710,9 +722,9 @@ func watchWsDown(ctx context.Context, roots []string, global bool) {
 			}
 		case <-time.After(wsDownEvery):
 		}
-		names := herdrWsDown(roots, global)
+		names, tabs := herdrWsDown(roots, global)
 		wsDown.Lock()
-		wsDown.names, wsDown.global = names, global
+		wsDown.names, wsDown.tabs, wsDown.global = names, tabs, global
 		wsDown.Unlock()
 	}
 }
@@ -722,7 +734,8 @@ func watchWsDown(ctx context.Context, roots []string, global bool) {
 // or never came back after herdr did — herdr restores a tab's name but not what
 // was running in it. The name is what says a ccwt belongs there, since it is
 // the one `c` gives the tab it starts `ccwt ws` in. What is running is what
-// herdr says is in the foreground of the tab's panes.
+// herdr says is in the foreground of the tab's panes. Alongside the names, the
+// first tab of each workspace — the first herdr lists, the one leading its bar.
 //
 // Only the workspaces open on a worktree of the repos at roots: the list's own,
 // the ones herdr's sidebar shows under the repo. Another repo's are for its own
@@ -734,7 +747,7 @@ func watchWsDown(ctx context.Context, roots []string, global bool) {
 // A pane herdr can't say that about counts as having one, and a herdr that
 // won't answer at all as having no such tabs: this is a warning, and one that
 // isn't sure is one to leave out.
-func herdrWsDown(roots []string, global bool) []string {
+func herdrWsDown(roots []string, global bool) (names, tabs []string) {
 	var snap struct {
 		Result struct {
 			Snapshot struct {
@@ -759,7 +772,7 @@ func herdrWsDown(roots []string, global bool) []string {
 	}
 	out, err := herdrAsk("session.snapshot", nil, "api", "snapshot")
 	if err != nil || json.Unmarshal(out, &snap) != nil {
-		return nil
+		return nil, nil
 	}
 	s := snap.Result.Snapshot
 	ours := map[string]bool{} // a workspace -> it is open on one of our worktrees, or global, one of our repos
@@ -771,8 +784,12 @@ func herdrWsDown(roots []string, global bool) []string {
 			ours[w.ID] = ok && slices.Contains(roots, root)
 		}
 	}
-	unit := map[string]string{} // a tab -> what a ccwt should be running in: the `ws` tab itself, or global, its whole workspace
+	unit := map[string]string{}  // a tab -> what a ccwt should be running in: the `ws` tab itself, or global, its whole workspace
+	first := map[string]string{} // a workspace -> its first tab
 	for _, t := range s.Tabs {
+		if _, ok := first[t.Workspace]; !ok {
+			first[t.Workspace] = t.ID
+		}
 		switch {
 		case !ours[t.Workspace]:
 		case global:
@@ -796,13 +813,12 @@ func herdrWsDown(roots []string, global bool) []string {
 			down[t.Workspace] = true
 		}
 	}
-	var names []string
 	for _, w := range s.Workspaces {
 		if down[w.ID] {
-			names = append(names, w.Label)
+			names, tabs = append(names, w.Label), append(tabs, first[w.ID])
 		}
 	}
-	return names
+	return names, tabs
 }
 
 // herdrRunsCcwt reports whether a ccwt is in the foreground of a pane, or

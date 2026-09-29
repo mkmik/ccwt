@@ -933,7 +933,7 @@ func TestListWatchesTheWsTabsForTheirCcwt(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { watchWsDown(ctx, []string{"/src/app"}, false); close(done) }()
-	t.Cleanup(func() { cancel(); <-done; close(events); wsDown.names, wsSettle = nil, settle })
+	t.Cleanup(func() { cancel(); <-done; close(events); wsDown.names, wsDown.tabs, wsSettle = nil, nil, settle })
 
 	// Well inside wsDownEvery, so that only the subscription can have asked.
 	waitFor := func(want []string) {
@@ -957,9 +957,10 @@ func TestListWatchesTheWsTabsForTheirCcwt(t *testing.T) {
 	waitFor(nil)
 
 	// With -g it is the projects' own workspaces instead, and a ccwt in any
-	// pane of any of their tabs will do: other's is in its second tab.
-	if got, want := herdrWsDown([]string{"/src/app", "/src/other"}, true), []string{"app"}; !slices.Equal(got, want) {
-		t.Errorf("global corner names %q, want %q", got, want)
+	// pane of any of their tabs will do: other's is in its second tab. A
+	// double click on app goes to its first tab.
+	if got, tabs := herdrWsDown([]string{"/src/app", "/src/other"}, true); !slices.Equal(got, []string{"app"}) || !slices.Equal(tabs, []string{"w7:t1"}) {
+		t.Errorf("global corner names %q with first tabs %q, want [app] and [w7:t1]", got, tabs)
 	}
 }
 
@@ -973,8 +974,8 @@ func TestListCornerNamesTheWorkspacesWithNoCcwt(t *testing.T) {
 	capture(t, &NewWorktreeBranchCmd{Name: "corner-case", Path: true})
 	defer func(old func() (int, int)) { termSize = old }(termSize)
 	termSize = func() (int, int) { return 60, 5 }
-	wsDown.names = []string{"audit restore"}
-	t.Cleanup(func() { wsDown.names = nil })
+	wsDown.names, wsDown.tabs = []string{"audit restore"}, []string{"w1:t1"}
+	t.Cleanup(func() { wsDown.names, wsDown.tabs = nil, nil })
 
 	var u ui
 	if _, err := u.frame(); err != nil { // the first frame is what fills in the rows
@@ -993,6 +994,11 @@ func TestListCornerNamesTheWorkspacesWithNoCcwt(t *testing.T) {
 		if !strings.HasSuffix(l, "\x1b[33m"+want+"\x1b[0m") || screenWidth(plain(l)) != 59 {
 			t.Errorf("line %d = %q, want 59 columns ending in %q", i+1, l, want)
 		}
+	}
+	// The name is on the third line, and the box starts 59-25 columns in: that
+	// is where a double click goes to the workspace's first tab.
+	if want := (point{col: 35, row: 3}); u.corner != want || wsDownTab(0) != "w1:t1" || wsDownTab(1) != "" {
+		t.Errorf("corner at %+v with tab %q, want %+v and w1:t1", u.corner, wsDownTab(0), want)
 	}
 	if !strings.HasPrefix(lines[1], rowBar) || !strings.Contains(plain(lines[1]), "corner-case") {
 		t.Errorf("line 1 = %q, want the selected row, band and all, left of the box", lines[1])

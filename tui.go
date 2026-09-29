@@ -515,6 +515,19 @@ func (c *TuiCmd) Run() error {
 				// lists, as something to click through instead.
 				case row == rows && col <= hamburgerCols:
 					u.menu, u.menuSel = u.menuFor(), 0
+				// A workspace in the corner: a click is a click on the row
+				// under it, as ever, and a double goes to the workspace's first
+				// tab, where its ccwt ws belongs, rather than opening that row.
+				case u.corner.row > 0 && col >= u.corner.col && wsDownTab(row-u.corner.row) != "":
+					if hit != (listRow{}) {
+						u.click(hit)
+					}
+					tab := wsDownTab(row - u.corner.row)
+					if tab == u.cornerTab && time.Since(u.cornerClicked) < doubleClick {
+						u.cornerTab, u.msg = "", herdrFocusTab(tab)
+					} else {
+						u.cornerTab, u.cornerClicked = tab, time.Now()
+					}
 				// A click selects the row it landed on; it takes a second one to
 				// act on it, as it does in any other list.
 				case hit != (listRow{}) && u.click(hit):
@@ -629,6 +642,14 @@ type ui struct {
 	menu      []action
 	menuSel   int
 	menuFirst int
+
+	// Where the corner's first workspace came out — its box's left edge and
+	// the name's line — so a click on one goes to it. The zero point while
+	// the corner is empty. And the workspace last clicked there, and when,
+	// which is the first half of a double — see click.
+	corner        point
+	cornerTab     string
+	cornerClicked time.Time
 
 	// The last list read, kept so that moving the selection — which changes
 	// nothing but which row is reverse-videoed — doesn't re-run the git and
@@ -1357,6 +1378,7 @@ func (u *ui) dropSelected() {
 // SIGWINCH to hear.
 func (u *ui) frame() ([]string, error) {
 	cols, rows := termSize()
+	u.corner = point{} // until this frame draws the corner again
 
 	// Re-read only when the cache was dropped or the terminal got wider or
 	// narrower, since the table is laid out to the width.
@@ -1582,9 +1604,11 @@ func (u *ui) frame() ([]string, error) {
 	names, global := wsDownNames()
 	if box := wsDownPane(names, global, cols-1, body); box != nil {
 		top := body - len(box)
+		left := cols - 1 - screenWidth(box[0])
 		for i, l := range box {
-			lines[top+i] = cutTo(lines[top+i], cols-1-screenWidth(l)) + "\x1b[33m" + l + "\x1b[0m"
+			lines[top+i] = cutTo(lines[top+i], left) + "\x1b[33m" + l + "\x1b[0m"
 		}
+		u.corner = point{col: left + 1, row: top + 2} // +1 past the top rule, +1: a mouse counts from 1
 	}
 	return append(lines[:body], bar), nil
 }
