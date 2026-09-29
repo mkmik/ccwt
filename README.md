@@ -763,6 +763,10 @@ shows under the repo, or under any configured project with `-g` — and leaves a
 that repo's tui. Only the tui does this, not `ccwt ws`, and only when it is running in a Herdr
 pane.
 
+With `-g` the box is `ccwt tui not running` instead, and names the projects' own workspaces —
+the ones open on each configured repo's root checkout — that have no ccwt in any pane of any
+tab: the repo tuis that are gone.
+
 **Closing workspaces on removal.** Once its checks pass, `ccwt remove` closes the workspace
 open on the worktree, ending the agent living in it — including your own, which is closed
 last of all, after the worktree is gone and the shell has been cd'd out. Because a workspace
