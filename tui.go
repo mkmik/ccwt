@@ -748,7 +748,7 @@ func (u *ui) refresh() {
 // pinned ones, or the blank space under a list too short to fill the screen.
 func (u *ui) at(n int) listRow {
 	i := u.top + n - u.head - 1
-	if n <= u.head || n-u.head-1 >= u.height || i >= len(u.rows) {
+	if n <= u.head || n-u.head-1 >= u.height || i >= len(u.rows) || u.rows[i].sep != 0 {
 		return listRow{}
 	}
 	return u.rows[i]
@@ -784,6 +784,10 @@ func (u *ui) move(d int) {
 		return
 	}
 	i := min(max(slices.Index(u.rows, u.sel)+d, 0), len(u.rows)-1)
+	// A divider is only a line: the walk goes on past it, the way it came.
+	for s := cmp.Or(cmp.Compare(d, 0), 1); u.rows[i].sep != 0 && i+s >= 0 && i+s < len(u.rows); {
+		i += s
+	}
 	u.sel = u.rows[i]
 }
 
@@ -1493,6 +1497,9 @@ func (u *ui) frame() ([]string, error) {
 			bg = rowBar
 		}
 		lines[i+u.head] = paintDots(draw(line, cols, re, bg), dots, bg)
+		if u.rows[u.top+i].sep != 0 {
+			lines[i+u.head] = kittyRule(cols)
+		}
 	}
 
 	for len(lines) < body {
@@ -2446,7 +2453,7 @@ func (u *ui) selection(lines []string) (string, []string) {
 // own output brought along with it. The link's url is one of them rather than
 // text on the line, so a drag across the ref copies the ref and not the address
 // behind it.
-var escapes = regexp.MustCompile("\x1b\\[[0-9;?]*[ -/]*[@-~]|\x1b\\]8;;[^\x07\x1b]*(\x07|\x1b\\\\)")
+var escapes = regexp.MustCompile("\x1b\\[[0-9;?]*[ -/]*[@-~]|\x1b\\]8;;[^\x07\x1b]*(\x07|\x1b\\\\)|\x1b_G[^\x1b]*\x1b\\\\")
 
 // plain is line with those taken out — what a selection copies, and what its
 // columns are counted along.
@@ -3429,11 +3436,14 @@ var herdrWorkspaces = func(root, path string) ([]string, error) {
 // each repo's root too: the place of the repo's first workspace, main checkout
 // or not, which is where its section goes under -g.
 //
+// seps are the places in it of the workspaces named "------…": nothing's
+// workspace, only a divider in the sidebar, which the list draws too.
+//
 // ponytail: package var so tests can fake the herdr answer.
-var herdrLabels = func() (labels map[string]string, order map[string]int) {
+var herdrLabels = func() (labels map[string]string, order map[string]int, seps []int) {
 	out, err := herdrAsk("workspace.list", nil, "workspace", "list")
 	if err != nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	var resp struct {
 		Result struct {
@@ -3447,10 +3457,14 @@ var herdrLabels = func() (labels map[string]string, order map[string]int) {
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(out, &resp); err != nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	labels, order = map[string]string{}, map[string]int{}
 	for i, w := range resp.Result.Workspaces {
+		if strings.HasPrefix(w.Label, herdrSep) {
+			seps = append(seps, i)
+			continue
+		}
 		labels[w.Worktree.Path] = w.Label
 		for _, p := range []string{w.Worktree.Path, w.Worktree.Repo} {
 			if _, ok := order[p]; !ok && p != "" {
@@ -3458,8 +3472,11 @@ var herdrLabels = func() (labels map[string]string, order map[string]int) {
 			}
 		}
 	}
-	return labels, order
+	return labels, order, seps
 }
+
+// herdrSep is what the name of a workspace that is only a divider starts with.
+const herdrSep = "------"
 
 // herdrFirst puts what herdr has a place for ahead of what it hasn't, in
 // herdr's order, and says nothing about two paths it has no place for.
@@ -3580,6 +3597,12 @@ func lastLine(out []byte, err error) string {
 // bottom row that would scroll the screen.
 func paint(w io.Writer, lines []string) {
 	io.WriteString(w, "\x1b[H")
+	// Kitty images stay put when the text under them is written over, so the
+	// last frame's dividers go before this one's are placed. Under herdr only,
+	// which is the only place there are any.
+	if underHerdr() {
+		io.WriteString(w, kittyClear)
+	}
 	for i, line := range lines {
 		if i > 0 {
 			io.WriteString(w, "\r\n")
@@ -3589,3 +3612,20 @@ func paint(w io.Writer, lines []string) {
 	}
 	io.WriteString(w, "\x1b[J")
 }
+
+// kittyRule is a divider across cols columns, drawn with the kitty graphics
+// protocol: an image one pixel wide and a row tall, its middle pixel grey,
+// stretched across the row. Only across: it is as many pixels tall as the row
+// is, so the line through the middle of it is the one pixel. A terminal that
+// won't say how tall its rows are gets 16, and a line about that much thicker.
+// q=2 because an answer would come in on stdin as keys; C=1 leaves the cursor
+// where it was.
+func kittyRule(cols int) string {
+	h := cmp.Or(cellHeight(), 16)
+	px := make([]byte, h*4)
+	copy(px[h/2*4:], []byte{0x80, 0x80, 0x80, 0xff})
+	return fmt.Sprintf("\x1b_Ga=T,f=32,s=1,v=%d,c=%d,r=1,C=1,q=2;%s\x1b\\", h, cols, base64.StdEncoding.EncodeToString(px))
+}
+
+// kittyClear deletes every kitty image placed so far, and the images with them.
+const kittyClear = "\x1b_Ga=d,d=A,q=2\x1b\\"
