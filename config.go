@@ -14,11 +14,10 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// Config is ccwt's config file. It exists so `list -g` and `tui -g` know which
-// repos to span; the projects are named here rather than discovered so that
-// what shows up in a cross-project view is a decision, not whatever happens to
-// be on disk.
+// Config is ccwt's config file.
 type Config struct {
+	// Projects are repos `-g` spans on top of the ones ccwt has been used in:
+	// one it hasn't been run in yet, or a section to put first.
 	Projects []Project `toml:"projects"`
 	// BranchPrefix goes in front of a worktree's name to make its branch.
 	// Repos that want their branches namespaced ("mkm/") set it here.
@@ -155,9 +154,11 @@ func loadConfig() (Config, error) {
 	return cfg, nil
 }
 
-// projectRoots returns the repositories a listing should cover: the configured
-// projects when global is set, and nil — meaning "the repo we're standing in" —
-// otherwise.
+// projectRoots returns the repositories a listing should cover when global is
+// set — the configured projects, then every other one ccwt has been used in, in
+// the order it first was — and nil, meaning "the repo we're standing in",
+// otherwise. First use rather than last, so the sections don't shuffle under
+// the cursor every time ccwt runs somewhere.
 func projectRoots(global bool) ([]string, error) {
 	if !global {
 		return nil, nil
@@ -166,12 +167,21 @@ func projectRoots(global bool) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(cfg.Projects) == 0 {
-		return nil, fmt.Errorf("no projects configured in %s:\n\n[[projects]]\npath = \"~/src/some-repo\"\n", configPath())
+	var roots []string
+	for _, p := range cfg.Projects {
+		roots = append(roots, expandHome(p.Path))
 	}
-	roots := make([]string, len(cfg.Projects))
-	for i, p := range cfg.Projects {
-		roots[i] = expandHome(p.Path)
+	seen, err := seenProjects()
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range seen {
+		if !slices.Contains(roots, p) {
+			roots = append(roots, p)
+		}
+	}
+	if len(roots) == 0 {
+		return nil, fmt.Errorf("no projects yet: run ccwt in a repo, or list one in %s:\n\n[[projects]]\npath = \"~/src/some-repo\"\n", configPath())
 	}
 	return roots, nil
 }

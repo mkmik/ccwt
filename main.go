@@ -573,7 +573,7 @@ func gcCandidates(root string, active map[string]bool) ([]string, error) {
 }
 
 type ListCmd struct {
-	Global    bool   `short:"g" help:"List the worktrees of every project listed in $XDG_CONFIG_HOME/ccwt/config.toml, not just this repo's."`
+	Global    bool   `short:"g" help:"List the worktrees of every project ccwt has been used in or $XDG_CONFIG_HOME/ccwt/config.toml lists, not just this repo's."`
 	NoHeaders bool   `help:"Leave out the header row, for feeding the table to cut, awk, or a shell loop."`
 	Sort      string `help:"Order the worktrees by \"freshness\" — the last commit or the last thing written to the newest Claude Code session there, whichever is younger — or by \"commit\" alone. Overrides sort in the config file (freshness when neither says)."`
 }
