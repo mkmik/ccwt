@@ -471,6 +471,9 @@ the key.
 The queue lives in `$XDG_STATE_HOME/ccwt/tasks.db` (`~/.local/state/ccwt/tasks.db` by
 default) — one SQLite database for every project, so a prompt queued in a project's own tui
 shows up in `tui -g` and the other way round, within a refresh interval either way.
+The same database keeps a `seen` table: every repo and Claude Code worktree `ccwt` has been
+run in or has made, with when it was first and last used and how many times — nothing reads
+it yet.
 
 `/` searches, as in vim or less: type a pattern into the bar and the selection moves to the
 match as you type, `enter` accepts it, `esc` puts back the pattern and the row you started

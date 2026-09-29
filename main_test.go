@@ -31,6 +31,14 @@ func TestMain(m *testing.M) {
 			os.Unsetenv(k)
 		}
 	}
+	// Creating a worktree records it in the state database, which must not be
+	// the one of the machine the suite runs on.
+	state, err := os.MkdirTemp("", "ccwt-state")
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(state)
+	os.Setenv("XDG_STATE_HOME", state)
 	m.Run()
 }
 
