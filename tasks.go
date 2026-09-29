@@ -108,7 +108,7 @@ func openTasks() (*sql.DB, error) {
 			_, _ = db.Exec(`ALTER TABLE task ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0`)
 			// The worklog shares the file: one thing that outlives the process,
 			// one place to keep it, and the pragmas above cover both tables.
-			if _, err = db.Exec(worklogSchema); err != nil {
+			if _, err = db.Exec(worklogSchema + ";" + seenSchema); err != nil {
 				db.Close()
 				return nil, fmt.Errorf("%s: %w", path, err)
 			}

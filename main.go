@@ -180,6 +180,10 @@ func (c *NewWorktreeBranchCmd) create(root string) (string, string, error) {
 		return "", "", statErr
 	}
 
+	// The tui makes worktrees in projects it isn't standing in, which the
+	// record main takes of the cwd would miss. ponytail: dropped on failure,
+	// as the worklog is — it's bookkeeping, not the worktree.
+	_ = markSeen(root, worktreePath, time.Now())
 	return worktreePath, name, nil
 }
 
@@ -2216,6 +2220,7 @@ func main() {
 			"version": getVersion(),
 		},
 	)
+	markCwdSeen()
 	err := ctx.Run()
 	// The tui saying the binary underneath it has changed and the screen is
 	// its own again: this is the moment to become the new one. reexec only
