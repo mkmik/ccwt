@@ -547,6 +547,12 @@ func (c *TuiCmd) Run() error {
 					} else {
 						u.cornerTab, u.cornerClicked = tab, time.Now()
 					}
+				// A "…" opens on the one click: there's nothing on it a stray
+				// click could do harm to, and it's what it is there for.
+				case hit.more:
+					if !u.click(hit) { // the second of a double would shut it again
+						u.toggle()
+					}
 				// A click selects the row it landed on; it takes a second one to
 				// act on it, as it does in any other list.
 				case hit != (listRow{}) && u.click(hit):
@@ -578,6 +584,7 @@ type ui struct {
 	height    int // how many rows the frame has room for
 	projects  []string
 	collapsed map[string]bool // project root -> section folded shut
+	shown     map[string]bool // project root -> its "…" open; "" is -g's for whole repos
 	sort      string          // --sort, or "" for the config's order
 	msg       string
 
@@ -1204,16 +1211,21 @@ func (u *ui) re() *regexp.Regexp {
 	return re
 }
 
-// toggle folds the selected project's section shut, or opens it back up. Only
-// section headers fold, and only -g draws any.
+// toggle folds the selected project's section shut, or opens it back up, and
+// the same for a "…" and what herdr has no workspace on. Only those fold:
+// section headers, which only -g draws, and the "…", which only herdr does.
 func (u *ui) toggle() {
-	if !u.sel.section() {
+	m := &u.collapsed
+	switch {
+	case u.sel.more:
+		m = &u.shown
+	case !u.sel.section():
 		return
 	}
-	if u.collapsed == nil {
-		u.collapsed = map[string]bool{}
+	if *m == nil {
+		*m = map[string]bool{}
 	}
-	u.collapsed[u.sel.project] = !u.collapsed[u.sel.project]
+	(*m)[u.sel.project] = !(*m)[u.sel.project]
 	u.stale()
 }
 
@@ -1421,7 +1433,7 @@ func (u *ui) frame() ([]string, error) {
 			u.cols, u.div, u.cells = cols, nil, nil
 		} else {
 			var buf bytes.Buffer
-			listRows, cells, err := renderList(&buf, true, cols, u.projects, u.collapsed, true, u.sort, true)
+			listRows, cells, err := renderList(&buf, true, cols, u.projects, u.collapsed, u.shown, true, u.sort, true)
 			if err != nil {
 				return nil, err
 			}
@@ -3413,11 +3425,15 @@ var herdrWorkspaces = func(root, path string) ([]string, error) {
 // the worktree's own and is usually renamed to what the work is. No herdr, or
 // none running, is no names.
 //
+// order is where each sits in that sidebar, keyed by the same paths, and by
+// each repo's root too: the place of the repo's first workspace, main checkout
+// or not, which is where its section goes under -g.
+//
 // ponytail: package var so tests can fake the herdr answer.
-var herdrLabels = func() map[string]string {
+var herdrLabels = func() (labels map[string]string, order map[string]int) {
 	out, err := herdrAsk("workspace.list", nil, "workspace", "list")
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	var resp struct {
 		Result struct {
@@ -3425,18 +3441,40 @@ var herdrLabels = func() map[string]string {
 				Label    string `json:"label"`
 				Worktree struct {
 					Path string `json:"checkout_path"`
+					Repo string `json:"repo_root"`
 				} `json:"worktree"`
 			} `json:"workspaces"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(out, &resp); err != nil {
-		return nil
+		return nil, nil
 	}
-	labels := map[string]string{}
-	for _, w := range resp.Result.Workspaces {
+	labels, order = map[string]string{}, map[string]int{}
+	for i, w := range resp.Result.Workspaces {
 		labels[w.Worktree.Path] = w.Label
+		for _, p := range []string{w.Worktree.Path, w.Worktree.Repo} {
+			if _, ok := order[p]; !ok && p != "" {
+				order[p] = i
+			}
+		}
 	}
-	return labels
+	return labels, order
+}
+
+// herdrFirst puts what herdr has a place for ahead of what it hasn't, in
+// herdr's order, and says nothing about two paths it has no place for.
+func herdrFirst(order map[string]int, a, b string) int {
+	i, aok := order[a]
+	j, bok := order[b]
+	switch {
+	case aok && bok:
+		return cmp.Compare(i, j)
+	case aok:
+		return -1
+	case bok:
+		return 1
+	}
+	return 0
 }
 
 // herdrCloseWS closes one workspace. Closing our own kills this process, so

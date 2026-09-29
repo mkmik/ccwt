@@ -797,8 +797,10 @@ func TestListNamesHerdrWorkspaces(t *testing.T) {
 	open := capture(t, &NewWorktreeBranchCmd{Name: "open", Path: true})
 	capture(t, &NewWorktreeBranchCmd{Name: "closed"})
 
-	defer func(orig func() map[string]string) { herdrLabels = orig }(herdrLabels)
-	herdrLabels = func() map[string]string { return map[string]string{open: "mTLS subresource"} }
+	defer func(orig func() (map[string]string, map[string]int)) { herdrLabels = orig }(herdrLabels)
+	herdrLabels = func() (map[string]string, map[string]int) {
+		return map[string]string{open: "mTLS subresource"}, nil
+	}
 	defer func(orig func() bool) { stdoutIsTTY = orig }(stdoutIsTTY)
 	for _, tc := range []struct {
 		env  string
@@ -820,6 +822,59 @@ func TestListNamesHerdrWorkspaces(t *testing.T) {
 		if want := []string{"closed", tc.want}; !slices.Equal(names, want) {
 			t.Errorf("HERDR_ENV=%q tty=%v: names = %q, want %q", tc.env, tc.tty, names, want)
 		}
+	}
+}
+
+// TestListFollowsHerdrOrder: under herdr the worktrees open in a workspace are
+// listed in its sidebar's order, ahead of the ones that aren't.
+func TestListFollowsHerdrOrder(t *testing.T) {
+	initRepo(t)
+	capture(t, &NewWorktreeBranchCmd{Name: "c"})
+	a := capture(t, &NewWorktreeBranchCmd{Name: "a", Path: true})
+	b := capture(t, &NewWorktreeBranchCmd{Name: "b", Path: true})
+
+	defer func(orig func() (map[string]string, map[string]int)) { herdrLabels = orig }(herdrLabels)
+	herdrLabels = func() (map[string]string, map[string]int) {
+		return nil, map[string]int{b: 0, a: 1}
+	}
+	defer func(orig func() bool) { stdoutIsTTY = orig }(stdoutIsTTY)
+	stdoutIsTTY = func() bool { return true }
+	t.Setenv("HERDR_ENV", "1")
+	var names []string
+	for line := range strings.SplitSeq(capture(t, &ListCmd{NoHeaders: true}), "\n") {
+		name, _, _ := strings.Cut(strings.TrimLeft(line, "✓ "), "  ")
+		names = append(names, name)
+	}
+	if want := []string{"b", "a", "c"}; !slices.Equal(names, want) {
+		t.Errorf("names = %q, want %q", names, want)
+	}
+
+	// c has no workspace, so the tui folds it behind a "…", and shows it
+	// once that is opened.
+	tui := func(shown map[string]bool) (got []string, rows []listRow) {
+		rows, _, err := renderList(io.Discard, true, 0, nil, nil, shown, false, "", true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range rows {
+			name := filepath.Base(r.path)
+			if r.more {
+				name = "…"
+			}
+			got = append(got, name)
+		}
+		return got, rows
+	}
+	got, rows := tui(nil)
+	if want := []string{"b", "a", "…"}; !slices.Equal(got, want) {
+		t.Fatalf("folded = %q, want %q", got, want)
+	}
+	if got, _ := tui(map[string]bool{rows[2].project: true}); !slices.Equal(got, []string{"b", "a", "…", "c"}) {
+		t.Errorf("shown = %q, want c after the …", got)
+	}
+	t.Setenv("HERDR_ENV", "")
+	if got, _ := tui(nil); len(got) != 3 || slices.Contains(got, "…") {
+		t.Errorf("outside herdr = %q, want the three worktrees and no …", got)
 	}
 }
 
@@ -1770,7 +1825,7 @@ func TestListFitsTerminalWidth(t *testing.T) {
 
 	for _, width := range []int{20, 50, 60, 80, 100, 200} {
 		var buf bytes.Buffer
-		if _, _, err := renderList(&buf, true, width, nil, nil, true, "", false); err != nil {
+		if _, _, err := renderList(&buf, true, width, nil, nil, nil, true, "", false); err != nil {
 			t.Fatal(err)
 		}
 		// Every column bottoms out at minCol, so a terminal narrower than that
@@ -1902,7 +1957,7 @@ func TestConfigColumns(t *testing.T) {
 
 	writeConfig("columns = [\"topic\", \"name\"]\n")
 	var buf bytes.Buffer
-	if _, _, err := renderList(&buf, false, 0, nil, nil, true, "", false); err != nil {
+	if _, _, err := renderList(&buf, false, 0, nil, nil, nil, true, "", false); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -1920,7 +1975,7 @@ func TestConfigColumns(t *testing.T) {
 	// rename still names it that.
 	writeConfig("columns = [\"claude\"]\n")
 	buf.Reset()
-	if _, _, err := renderList(&buf, false, 0, nil, nil, true, "", false); err != nil {
+	if _, _, err := renderList(&buf, false, 0, nil, nil, nil, true, "", false); err != nil {
 		t.Fatalf("columns = [\"claude\"]: %v", err)
 	}
 	if head, _, _ := strings.Cut(buf.String(), "\n"); !strings.HasPrefix(head, "AGENT") {
@@ -1928,7 +1983,7 @@ func TestConfigColumns(t *testing.T) {
 	}
 
 	writeConfig("columns = [\"nmae\"]\n")
-	if _, _, err := renderList(&buf, false, 0, nil, nil, true, "", false); err == nil || !strings.Contains(err.Error(), "nmae") {
+	if _, _, err := renderList(&buf, false, 0, nil, nil, nil, true, "", false); err == nil || !strings.Contains(err.Error(), "nmae") {
 		t.Errorf("unknown column: err = %v, want one naming it", err)
 	}
 }
@@ -2024,7 +2079,7 @@ func TestGlobalListSpansProjects(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	got, _, err := renderList(&buf, false, 0, roots, nil, true, "", false)
+	got, _, err := renderList(&buf, false, 0, roots, nil, nil, true, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2046,7 +2101,7 @@ func TestGlobalListSpansProjects(t *testing.T) {
 	// Folded shut, a project keeps its header — turned around, and still saying
 	// how much is underneath — and contributes no rows at all.
 	buf.Reset()
-	got, _, err = renderList(&buf, false, 0, roots, map[string]bool{gitRoots[0]: true}, true, "", false)
+	got, _, err = renderList(&buf, false, 0, roots, map[string]bool{gitRoots[0]: true}, nil, true, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2101,7 +2156,7 @@ func TestGlobalListOutsideAnyRepo(t *testing.T) {
 	// tty: the markers are the only thing that ever looked at the current
 	// directory, so the complaint only shows up with them turned on.
 	var buf bytes.Buffer
-	_, _, err = renderList(&buf, true, 0, []string{root}, nil, true, "", false)
+	_, _, err = renderList(&buf, true, 0, []string{root}, nil, nil, true, "", false)
 	w.Close()
 	if err != nil {
 		t.Fatal(err)
@@ -2270,7 +2325,7 @@ func TestDefaultCommandIsTui(t *testing.T) {
 func renderRows(t *testing.T) ([]listRow, string) {
 	t.Helper()
 	var buf bytes.Buffer
-	rows, _, err := renderList(&buf, false, 0, nil, nil, false, "", false)
+	rows, _, err := renderList(&buf, false, 0, nil, nil, nil, false, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2518,7 +2573,7 @@ esac
 	}
 	// What the tui has when a key is pressed: the rows of the last frame and
 	// their cells, which is where startPending reads the prompt from.
-	rows, cells, err := renderList(io.Discard, false, 0, nil, nil, false, "", false)
+	rows, cells, err := renderList(io.Discard, false, 0, nil, nil, nil, false, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2647,7 +2702,7 @@ func TestALongPasteGoesInAsAMarker(t *testing.T) {
 	if u.msg != "queued" {
 		t.Fatalf("queueing: %s", u.msg)
 	}
-	rows, cells, err := renderList(io.Discard, false, 0, nil, nil, false, "", false)
+	rows, cells, err := renderList(io.Discard, false, 0, nil, nil, nil, false, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
