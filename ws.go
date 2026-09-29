@@ -662,16 +662,18 @@ func herdrFocusTab(id string) string {
 }
 
 // wsDown is what the list warns of in its corner: the workspaces whose `ws` tab
-// has no ccwt running in it, by name, as watchWsDown last found them.
+// has no ccwt running in it, by name, as watchWsDown last found them — or with
+// -g, the projects' own workspaces with no ccwt in any of their panes.
 var wsDown struct {
 	sync.Mutex
-	names []string
+	names  []string
+	global bool
 }
 
-func wsDownNames() []string {
+func wsDownNames() ([]string, bool) {
 	wsDown.Lock()
 	defer wsDown.Unlock()
-	return wsDown.names
+	return wsDown.names, wsDown.global
 }
 
 // wsDownEvents are what herdr says when the `ws` tabs, or the names of the
@@ -691,9 +693,9 @@ const wsDownEvery = 10 * time.Second
 var wsSettle = 2 * time.Second
 
 // watchWsDown keeps wsDown up to date for as long as ctx lasts, for the
-// worktrees of the repos at roots: a look when herdr says the tabs have moved,
-// and every wsDownEvery besides.
-func watchWsDown(ctx context.Context, roots []string) {
+// worktrees of the repos at roots — or, global, for the repos' own workspaces:
+// a look when herdr says the tabs have moved, and every wsDownEvery besides.
+func watchWsDown(ctx context.Context, roots []string, global bool) {
 	poke := make(chan struct{}, 1)
 	go herdrListen(ctx, poke, wsDownEvents...)
 	for {
@@ -708,9 +710,9 @@ func watchWsDown(ctx context.Context, roots []string) {
 			}
 		case <-time.After(wsDownEvery):
 		}
-		names := herdrWsDown(roots)
+		names := herdrWsDown(roots, global)
 		wsDown.Lock()
-		wsDown.names = names
+		wsDown.names, wsDown.global = names, global
 		wsDown.Unlock()
 	}
 }
@@ -726,10 +728,13 @@ func watchWsDown(ctx context.Context, roots []string) {
 // the ones herdr's sidebar shows under the repo. Another repo's are for its own
 // list to name, and their panes go unasked.
 //
+// Global, it is the workspaces open on the repos at roots themselves — where
+// the -g list's tui lives — with no ccwt in any pane of any tab.
+//
 // A pane herdr can't say that about counts as having one, and a herdr that
 // won't answer at all as having no such tabs: this is a warning, and one that
 // isn't sure is one to leave out.
-func herdrWsDown(roots []string) []string {
+func herdrWsDown(roots []string, global bool) []string {
 	var snap struct {
 		Result struct {
 			Snapshot struct {
@@ -757,25 +762,37 @@ func herdrWsDown(roots []string) []string {
 		return nil
 	}
 	s := snap.Result.Snapshot
-	ours := map[string]bool{} // a workspace -> it is open on one of our worktrees
+	ours := map[string]bool{} // a workspace -> it is open on one of our worktrees, or global, one of our repos
 	for _, w := range s.Workspaces {
-		root, ok := gitutil.ClaudeWorktreeRepoRoot(w.Worktree.Path)
-		ours[w.ID] = ok && slices.Contains(roots, root)
-	}
-	up := map[string]bool{} // a `ws` tab -> a ccwt is running in it
-	for _, t := range s.Tabs {
-		if t.Label == "ws" && ours[t.Workspace] {
-			up[t.ID] = false
+		if global {
+			ours[w.ID] = slices.Contains(roots, filepath.Clean(w.Worktree.Path))
+		} else {
+			root, ok := gitutil.ClaudeWorktreeRepoRoot(w.Worktree.Path)
+			ours[w.ID] = ok && slices.Contains(roots, root)
 		}
 	}
+	unit := map[string]string{} // a tab -> what a ccwt should be running in: the `ws` tab itself, or global, its whole workspace
+	for _, t := range s.Tabs {
+		switch {
+		case !ours[t.Workspace]:
+		case global:
+			unit[t.ID] = t.Workspace
+		case t.Label == "ws":
+			unit[t.ID] = t.ID
+		}
+	}
+	up := map[string]bool{} // a unit -> a ccwt is running in it
+	for _, u := range unit {
+		up[u] = false
+	}
 	for _, p := range s.Panes {
-		if running, ok := up[p.Tab]; ok && !running {
-			up[p.Tab] = herdrRunsCcwt(p.ID)
+		if u, ok := unit[p.Tab]; ok && !up[u] {
+			up[u] = herdrRunsCcwt(p.ID)
 		}
 	}
 	down := map[string]bool{}
 	for _, t := range s.Tabs {
-		if running, ok := up[t.ID]; ok && !running {
+		if u, ok := unit[t.ID]; ok && !up[u] {
 			down[t.Workspace] = true
 		}
 	}
@@ -816,8 +833,11 @@ func herdrRunsCcwt(pane string) bool {
 // under a rule that says what they are missing. As wide as its widest line, as
 // the menu is, and as tall as rows leaves room for; nil when there is nothing
 // to say, or nowhere to say it.
-func wsDownPane(names []string, cols, rows int) []string {
-	const title = "ccwt ws not running"
+func wsDownPane(names []string, global bool, cols, rows int) []string {
+	title := "ccwt ws not running"
+	if global {
+		title = "ccwt tui not running"
+	}
 	if len(names) == 0 || rows < 3 {
 		return nil
 	}

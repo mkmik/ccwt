@@ -884,11 +884,11 @@ func TestListWatchesTheWsTabsForTheirCcwt(t *testing.T) {
 	}
 	t.Cleanup(func() { l.Close() })
 	const snapshot = `{"result":{"snapshot":{` +
-		`"workspaces":[{"workspace_id":"w1","label":"alpha","worktree":{"checkout_path":"/src/app/.claude/worktrees/alpha"}},{"workspace_id":"w2","label":"beta","worktree":{"checkout_path":"/src/app/.claude/worktrees/beta"}},{"workspace_id":"w3","label":"gamma","worktree":{"checkout_path":"/src/app/.claude/worktrees/gamma"}},{"workspace_id":"w4","label":"delta","worktree":{"checkout_path":"/src/app/.claude/worktrees/delta"}},{"workspace_id":"w5","label":"epsilon","worktree":{"checkout_path":"/src/app/.claude/worktrees/epsilon"}},{"workspace_id":"w6","label":"zeta","worktree":{"checkout_path":"/src/other/.claude/worktrees/zeta"}}],` +
-		`"tabs":[{"tab_id":"w1:t1","workspace_id":"w1","label":"ws"},{"tab_id":"w2:t1","workspace_id":"w2","label":"ws"},{"tab_id":"w2:t2","workspace_id":"w2","label":"2"},{"tab_id":"w3:t1","workspace_id":"w3","label":"1"},{"tab_id":"w4:t1","workspace_id":"w4","label":"ws"},{"tab_id":"w5:t1","workspace_id":"w5","label":"ws"},{"tab_id":"w6:t1","workspace_id":"w6","label":"ws"}],` +
-		`"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1"},{"pane_id":"w2:p1","tab_id":"w2:t1"},{"pane_id":"w2:p2","tab_id":"w2:t2"},{"pane_id":"w3:p1","tab_id":"w3:t1"},{"pane_id":"w4:p1","tab_id":"w4:t1"},{"pane_id":"w5:p1","tab_id":"w5:t1"},{"pane_id":"w5:p2","tab_id":"w5:t1"},{"pane_id":"w6:p1","tab_id":"w6:t1"}]}}}`
+		`"workspaces":[{"workspace_id":"w1","label":"alpha","worktree":{"checkout_path":"/src/app/.claude/worktrees/alpha"}},{"workspace_id":"w2","label":"beta","worktree":{"checkout_path":"/src/app/.claude/worktrees/beta"}},{"workspace_id":"w3","label":"gamma","worktree":{"checkout_path":"/src/app/.claude/worktrees/gamma"}},{"workspace_id":"w4","label":"delta","worktree":{"checkout_path":"/src/app/.claude/worktrees/delta"}},{"workspace_id":"w5","label":"epsilon","worktree":{"checkout_path":"/src/app/.claude/worktrees/epsilon"}},{"workspace_id":"w6","label":"zeta","worktree":{"checkout_path":"/src/other/.claude/worktrees/zeta"}},{"workspace_id":"w7","label":"app","worktree":{"checkout_path":"/src/app"}},{"workspace_id":"w8","label":"other","worktree":{"checkout_path":"/src/other"}}],` +
+		`"tabs":[{"tab_id":"w1:t1","workspace_id":"w1","label":"ws"},{"tab_id":"w2:t1","workspace_id":"w2","label":"ws"},{"tab_id":"w2:t2","workspace_id":"w2","label":"2"},{"tab_id":"w3:t1","workspace_id":"w3","label":"1"},{"tab_id":"w4:t1","workspace_id":"w4","label":"ws"},{"tab_id":"w5:t1","workspace_id":"w5","label":"ws"},{"tab_id":"w6:t1","workspace_id":"w6","label":"ws"},{"tab_id":"w7:t1","workspace_id":"w7","label":"ws"},{"tab_id":"w7:t2","workspace_id":"w7","label":"2"},{"tab_id":"w8:t1","workspace_id":"w8","label":"1"},{"tab_id":"w8:t2","workspace_id":"w8","label":"2"}],` +
+		`"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1"},{"pane_id":"w2:p1","tab_id":"w2:t1"},{"pane_id":"w2:p2","tab_id":"w2:t2"},{"pane_id":"w3:p1","tab_id":"w3:t1"},{"pane_id":"w4:p1","tab_id":"w4:t1"},{"pane_id":"w5:p1","tab_id":"w5:t1"},{"pane_id":"w5:p2","tab_id":"w5:t1"},{"pane_id":"w6:p1","tab_id":"w6:t1"},{"pane_id":"w7:p1","tab_id":"w7:t1"},{"pane_id":"w7:p2","tab_id":"w7:t2"},{"pane_id":"w8:p1","tab_id":"w8:t1"},{"pane_id":"w8:p2","tab_id":"w8:t2"}]}}}`
 	var mu sync.Mutex
-	foreground := map[string]string{"w1:p1": "ccwt", "w2:p1": "zsh", "w2:p2": "zsh", "w3:p1": "zsh", "w5:p1": "zsh", "w5:p2": "ccwt", "w6:p1": "zsh"} // w4:p1: herdr can't say
+	foreground := map[string]string{"w1:p1": "ccwt", "w2:p1": "zsh", "w2:p2": "zsh", "w3:p1": "zsh", "w5:p1": "zsh", "w5:p2": "ccwt", "w6:p1": "zsh", "w7:p1": "zsh", "w7:p2": "zsh", "w8:p1": "zsh", "w8:p2": "ccwt"} // w4:p1: herdr can't say
 	events := make(chan string)
 	go func() {
 		for {
@@ -932,15 +932,19 @@ func TestListWatchesTheWsTabsForTheirCcwt(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { watchWsDown(ctx, []string{"/src/app"}); close(done) }()
+	go func() { watchWsDown(ctx, []string{"/src/app"}, false); close(done) }()
 	t.Cleanup(func() { cancel(); <-done; close(events); wsDown.names, wsSettle = nil, settle })
 
 	// Well inside wsDownEvery, so that only the subscription can have asked.
 	waitFor := func(want []string) {
 		t.Helper()
-		for deadline := time.Now().Add(wsDownEvery / 2); !slices.Equal(wsDownNames(), want); time.Sleep(10 * time.Millisecond) {
+		for deadline := time.Now().Add(wsDownEvery / 2); ; time.Sleep(10 * time.Millisecond) {
+			names, _ := wsDownNames()
+			if slices.Equal(names, want) {
+				return
+			}
 			if time.Now().After(deadline) {
-				t.Fatalf("the corner names %q, want %q", wsDownNames(), want)
+				t.Fatalf("the corner names %q, want %q", names, want)
 			}
 		}
 	}
@@ -951,6 +955,12 @@ func TestListWatchesTheWsTabsForTheirCcwt(t *testing.T) {
 	mu.Unlock()
 	events <- `{"event":"tab_renamed","data":{"type":"tab_renamed","tab_id":"w2:t1","workspace_id":"w2","label":"ws"}}`
 	waitFor(nil)
+
+	// With -g it is the projects' own workspaces instead, and a ccwt in any
+	// pane of any of their tabs will do: other's is in its second tab.
+	if got, want := herdrWsDown([]string{"/src/app", "/src/other"}, true), []string{"app"}; !slices.Equal(got, want) {
+		t.Errorf("global corner names %q, want %q", got, want)
+	}
 }
 
 // The corner is a box over the end of the lines at the bottom of the list,

@@ -80,7 +80,7 @@ func (c *TuiCmd) Run() error {
 	// socket was meant to cut. A repo git can't name has no worktrees to list.
 	if !c.ws && os.Getenv("HERDR_SOCKET_PATH") != "" {
 		if roots, err := worklogProjects(projects); err == nil {
-			go watchWsDown(ctx, roots)
+			go watchWsDown(ctx, roots, projects != nil)
 		}
 	}
 
@@ -1579,7 +1579,8 @@ func (u *ui) frame() ([]string, error) {
 	// goes on working around it. Yellow, as a warning is. A column in from the
 	// edge, as the bar's version is: the erase paint ends a line with takes the
 	// last column with it when the line reaches it, and that is the border.
-	if box := wsDownPane(wsDownNames(), cols-1, body); box != nil {
+	names, global := wsDownNames()
+	if box := wsDownPane(names, global, cols-1, body); box != nil {
 		top := body - len(box)
 		for i, l := range box {
 			lines[top+i] = cutTo(lines[top+i], cols-1-screenWidth(l)) + "\x1b[33m" + l + "\x1b[0m"
