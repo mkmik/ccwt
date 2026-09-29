@@ -167,7 +167,7 @@ func claudeWorktrees(dir string) (string, []string, error) {
 }
 
 type PsCmd struct {
-	Global bool `short:"g" help:"Cover every project listed in $XDG_CONFIG_HOME/ccwt/config.toml, a section per project, not just this repo's worktrees."`
+	Global bool `short:"g" help:"Cover every project ccwt has been used in or $XDG_CONFIG_HOME/ccwt/config.toml lists, a section per project, not just this repo's worktrees."`
 	Depth  int  `short:"d" default:"1" help:"How many generations below each shell to show: 0 for the shells alone, --depth=-1 for everything they started."`
 }
 

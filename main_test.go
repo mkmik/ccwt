@@ -2134,12 +2134,14 @@ func TestRemoveFromAnotherProject(t *testing.T) {
 }
 
 // Where -g gets its projects: XDG's config location, and a leading ~ expanded
-// the way the shell would. With no config file there is nothing to show, so it
-// has to say where to write one rather than print an empty table.
+// the way the shell would, then the seen table. With neither there is nothing
+// to show, so it has to say where to write one rather than print an empty
+// table.
 func TestProjectRootsFromConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, ".state"))
 
 	if roots, err := projectRoots(false); err != nil || roots != nil {
 		t.Errorf("projectRoots(false) = (%v, %v), want (nil, nil): no -g, no config", roots, err)
@@ -2163,6 +2165,26 @@ func TestProjectRootsFromConfig(t *testing.T) {
 	}
 	if want := []string{filepath.Join(home, "src", "one"), "/srv/two"}; !slices.Equal(got, want) {
 		t.Errorf("projectRoots = %v, want %v", got, want)
+	}
+
+	// The repos ccwt has been used in come after, oldest first: not one the
+	// config already has, nor one that isn't a checkout there any more.
+	one, three := filepath.Join(home, "src", "one"), filepath.Join(home, "src", "three")
+	for _, d := range []string{one, three} {
+		if err := os.MkdirAll(filepath.Join(d, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, p := range []string{filepath.Join(home, "gone"), three, one} {
+		if err := markSeen(p, "", time.Unix(int64(i), 0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, err = projectRoots(true); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{one, "/srv/two", three}; !slices.Equal(got, want) {
+		t.Errorf("projectRoots with seen repos = %v, want %v", got, want)
 	}
 }
 

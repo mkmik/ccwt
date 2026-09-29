@@ -1,7 +1,9 @@
 package main
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,7 +18,8 @@ import (
 // One row per path. A project's row has path = project; a worktree's names the
 // repo it hangs off, so the projects are `WHERE path = project` and a project's
 // worktrees are the rest of its rows. uses sits next to first and last for a
-// picker that ranks by frecency rather than by recency alone.
+// picker that ranks by frecency rather than by recency alone. hidden, on a
+// project's row, keeps it out of `-g` without forgetting it was ever used.
 //
 // ponytail: nothing prunes it, and a row can outlive its directory — a picker
 // stats what it offers. A row per worktree ever made is not a size problem.
@@ -25,7 +28,8 @@ const seenSchema = `CREATE TABLE IF NOT EXISTS seen (
 	project TEXT    NOT NULL,
 	first   INTEGER NOT NULL,
 	last    INTEGER NOT NULL,
-	uses    INTEGER NOT NULL DEFAULT 1
+	uses    INTEGER NOT NULL DEFAULT 1,
+	hidden  INTEGER NOT NULL DEFAULT 0
 ) STRICT`
 
 // markSeen records a use of project and, unless it is "", of its worktree
@@ -65,4 +69,44 @@ func markCwdSeen() {
 		project, top = top, ""
 	}
 	_ = markSeen(project, top, time.Now())
+}
+
+// seenProjects is the repos ccwt has been used in and nobody hid, oldest first:
+// only the ones still a main checkout there, since a row outlives its directory
+// and a section git can't read is no use to anyone.
+func seenProjects() ([]string, error) {
+	db, err := openTasks()
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	rows, err := db.Query(`SELECT path FROM seen WHERE path = project AND NOT hidden ORDER BY first, path`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var paths []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		if fi, err := os.Stat(filepath.Join(p, ".git")); err == nil && fi.IsDir() {
+			paths = append(paths, p)
+		}
+	}
+	return paths, rows.Err()
+}
+
+// hideProject keeps project out of the seen projects from now on, however much
+// ccwt goes on being used there. Its row stays, so the day something wants the
+// history — or to unhide it — it's all still there.
+func hideProject(project string) error {
+	db, err := openTasks()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	_, err = db.Exec(`UPDATE seen SET hidden = 1 WHERE path = ?`, project)
+	return err
 }

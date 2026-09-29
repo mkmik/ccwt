@@ -179,7 +179,7 @@ func worklogTable(log []Removal, width int) []string {
 }
 
 type WorklogCmd struct {
-	Global bool `short:"g" help:"Show the removals of every project listed in $XDG_CONFIG_HOME/ccwt/config.toml, not just this repo's."`
+	Global bool `short:"g" help:"Show the removals of every project ccwt has been used in or $XDG_CONFIG_HOME/ccwt/config.toml lists, not just this repo's."`
 	Limit  int  `short:"n" default:"20" help:"How many removals to show, newest first."`
 }
 

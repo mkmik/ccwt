@@ -112,6 +112,8 @@ func openTasks() (*sql.DB, error) {
 				db.Close()
 				return nil, fmt.Errorf("%s: %w", path, err)
 			}
+			// The same story for the seen table's hidden, which came after it.
+			_, _ = db.Exec(`ALTER TABLE seen ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0`)
 			return db, nil
 		}
 		if wait > 64*time.Millisecond {

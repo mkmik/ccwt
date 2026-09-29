@@ -35,7 +35,7 @@ import (
 type TuiCmd struct {
 	Interval time.Duration `default:"2s" help:"How often to re-read the worktree list."`
 	Fetch    time.Duration `default:"1m" help:"How often to fetch origin/main in the background (0 to never)."`
-	Global   bool          `short:"g" help:"Show the worktrees of every project listed in $XDG_CONFIG_HOME/ccwt/config.toml, not just this repo's."`
+	Global   bool          `short:"g" help:"Show the worktrees of every project ccwt has been used in or $XDG_CONFIG_HOME/ccwt/config.toml lists, not just this repo's."`
 	Sort     string        `help:"Order the worktrees by \"freshness\" — the last commit or the last thing written to the newest Claude Code session there, whichever is younger — or by \"commit\" alone. Overrides sort in the config file (freshness when neither says)."`
 
 	ws bool // `ccwt ws`: the workspace's tabs instead of the repo's worktrees
@@ -484,6 +484,25 @@ func (c *TuiCmd) Run() error {
 				}
 				copyClip(root)
 				u.msg = "copied to clipboard: " + root
+			// Hiding takes the section off the list for good — the seen table
+			// keeps the row, marked — except that config.toml is a list somebody
+			// wrote on purpose, and what it names stays.
+			case k == hideKey && u.sel.section():
+				p := u.sel.project
+				if err := hideProject(p); err != nil {
+					u.msg = "hide: " + err.Error()
+					break
+				}
+				if cfg, _ := loadConfig(); slices.ContainsFunc(cfg.Projects, func(c Project) bool { return expandHome(c.Path) == p }) {
+					u.msg = filepath.Base(p) + " is in " + configPath() + ": take it out of there too"
+					break
+				}
+				// ponytail: the fetch and ws-down watchers keep the roots they
+				// started with, so they go on covering it until the tui restarts.
+				u.projects = slices.DeleteFunc(u.projects, func(r string) bool { return r == p })
+				u.sel = listRow{}
+				u.msg = "hid " + filepath.Base(p)
+				u.stale()
 			// In the ws view `r` is `ccwt done` for the workspace itself, and
 			// only when this one is finished with: the worktree the tui stands
 			// in goes, and the workspace closes behind it.
@@ -2601,7 +2620,7 @@ func (a action) name() string {
 		return "↵"
 	case "\x1b":
 		return "esc"
-	case copyDirKey:
+	case copyDirKey, hideKey:
 		return "" // nothing to press: the menu is the only way to it
 	}
 	return a.key
@@ -2622,6 +2641,10 @@ func (a action) entry() string {
 // switch, which is where the copying happens.
 const copyDirKey = "\x00copy-dir"
 
+// hideKey is the same for hiding a project from -g: a thing done once per
+// project, if ever, which a key of its own would only make easy to misfire.
+const hideKey = "\x00hide"
+
 // menuActions is what the hamburger lists: the bar's keys, plus the three that
 // belong in a menu and nowhere else. `G` collects every worktree that's done
 // with at once — rare, and too much of a mouthful for a bar that has to say
@@ -2629,10 +2652,15 @@ const copyDirKey = "\x00copy-dir"
 // (the ps view) is the way in for a hand that's on the mouse, the view's own bar
 // being the way back out. "copy dir" puts the project's path on the clipboard
 // and has no key at all — a path is fetched to paste somewhere else, which is
-// already a hand off the keyboard.
+// already a hand off the keyboard. "hide" is keyless too, and only there on a
+// section header under -g: the one place a project is what's selected.
 func menuActions(sel listRow, searching, global bool) []action {
-	return append(actions(sel, searching, global), action{"G", "gc"}, action{"P", "ps"},
+	as := append(actions(sel, searching, global), action{"G", "gc"}, action{"P", "ps"},
 		action{copyDirKey, "copy dir"})
+	if global && sel.section() {
+		as = append(as, action{hideKey, "hide"})
+	}
+	return as
 }
 
 // psDepth is how far under each shell the ps view draws, `ccwt ps`'s own
