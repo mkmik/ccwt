@@ -116,7 +116,9 @@ newer but that nobody has touched since, and one an agent started twenty minutes
 to the top rather than to the bottom on its zero commits. `--sort=commit` is git's answer
 on its own, which is what the list did before there was a choice; the default is
 [configurable](#several-projects-at-once) and `--sort` overrides it, on both `ccwt list` and
-`ccwt tui`.
+`ccwt tui`. Under Herdr the worktrees open in a workspace come first, in the order of its
+sidebar, and under `-g` so do the sections of the repos it has open; the rest follow as above.
+In the tui the rest are folded away behind a `▸ … N more` row, which a click or `↵` opens.
 
 TOPIC says what the worktree is about, and its glyph says where that came from. `✳` is an
 agent session — the newest transcript for that worktree, showing the last recap it produced

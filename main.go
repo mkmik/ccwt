@@ -603,7 +603,7 @@ func (c *ListCmd) Run() error {
 	if tty {
 		width, _, _ = term.GetSize(int(os.Stdout.Fd()))
 	}
-	_, _, err = renderList(os.Stdout, tty, width, projects, nil, !c.NoHeaders, c.Sort, false)
+	_, _, err = renderList(os.Stdout, tty, width, projects, nil, nil, !c.NoHeaders, c.Sort, false)
 	return err
 }
 
@@ -626,6 +626,7 @@ type listRow struct {
 	task          int64  // a queued prompt's id; 0 for the other rows
 	pid           int    // a process in the ps view; 0 for the other rows
 	tab           string // a herdr tab's id in the ws view; "" for the other rows
+	more          bool   // the "…" the rows herdr has no workspace on fold behind
 }
 
 // worktree reports whether the row is a live worktree — the rows the
@@ -647,7 +648,7 @@ func (r listRow) pending() bool { return r.path != "" && r.task > 0 }
 // fold into nothing, so a pid — its own, or the -1 of a line that is only a
 // line — is what says this isn't one of them.
 func (r listRow) section() bool {
-	return r.path == "" && r.task == 0 && r.pid == 0 && r.tab == "" && r.project != ""
+	return r.path == "" && r.task == 0 && r.pid == 0 && r.tab == "" && r.project != "" && !r.more
 }
 
 // process reports whether the row is a process in the ps view — the rows
@@ -736,7 +737,7 @@ var (
 // agentDots), and blank on the rest. Only the tui asks: green is a turn nobody
 // has read since, and a table drawn once has nobody to remember what has been
 // read — it would call every settled agent unread.
-func renderList(out io.Writer, tty bool, width int, projects []string, collapsed map[string]bool, headers bool, sort string, dots bool) ([]listRow, map[listRow][]string, error) {
+func renderList(out io.Writer, tty bool, width int, projects []string, collapsed, shown map[string]bool, headers bool, sort string, dots bool) ([]listRow, map[listRow][]string, error) {
 	global := projects != nil
 	if !global {
 		// "" is the current directory, which is how git reads "the repo we're in".
@@ -789,10 +790,11 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	// Needed by the second round rather than after it, so it goes in the first.
 	var agents []herdrAgent
 	var labels map[string]string
+	var herdrOrder map[string]int
 	if tty {
 		wg.Go(func() { agents = herdrAgents() })
 		if underHerdr() {
-			wg.Go(func() { labels = herdrLabels() })
+			wg.Go(func() { labels, herdrOrder = herdrLabels() })
 		}
 	}
 	for i, dir := range projects {
@@ -930,9 +932,11 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	// Stable: worktrees sharing a timestamp keep `git worktree list` order
 	// rather than shuffling between runs. Newest-first, which is the order you
 	// were working in — across all the projects at once outside -g's sections,
-	// and within each section under them.
+	// and within each section under them. Under herdr, though, the worktrees
+	// open in a workspace go first and in its sidebar's order, so the list reads
+	// the way the sidebar does; the rest follow, newest first.
 	slices.SortStableFunc(rows, func(a, b row) int {
-		return b.sortTime.Compare(a.sortTime)
+		return cmp.Or(herdrFirst(herdrOrder, a.path, b.path), b.sortTime.Compare(a.sortTime))
 	})
 
 	gutter := ""
@@ -985,6 +989,26 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 
 	var lines []listRow
 	details := map[listRow][]string{}
+	// In the tui under herdr, what herdr has no workspace on — worktree or repo
+	// — is folded away behind a "…" row, which shown opens back up: the list
+	// reads as the sidebar does, with the rest a click away. Sorted as they
+	// are, those are always the tail. Only when herdr answered, though: a herdr
+	// that didn't would fold away everything.
+	fold := dots && herdrOrder != nil
+	open := func(path string) bool {
+		_, ok := herdrOrder[path]
+		return !fold || ok
+	}
+	more := func(project string, n int) {
+		glyph := "▸"
+		if shown[project] {
+			glyph = "▾"
+		}
+		lines = append(lines, listRow{project: project, more: true})
+		row := make([]string, len(cols))
+		row[0] = fmt.Sprintf("%s%s%s… %d more", strip, gutter, glyph+" ", n)
+		table = append(table, row)
+	}
 	add := func(id listRow, lead string, cells []string) {
 		lines = append(lines, id)
 		row := pick(cells...) // pick copies, so cells is ours to keep
@@ -1045,10 +1069,25 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 			}
 		}
 	}
-	if !global {
-		for _, r := range rows {
+	// emitRows draws a project's worktrees, the ones herdr has no workspace on
+	// behind their "…".
+	emitRows := func(project string, rs []row) {
+		n := len(rs)
+		if i := slices.IndexFunc(rs, func(r row) bool { return !open(r.path) }); i >= 0 {
+			n = i
+		}
+		for i, r := range rs {
+			if i == n {
+				more(project, len(rs)-n)
+				if !shown[project] {
+					break
+				}
+			}
 			emit(r)
 		}
+	}
+	if !global {
+		emitRows(roots[0], rows)
 		emitPending(roots[0])
 	} else {
 		// Sections in the order the config lists the projects: stable, unlike an
@@ -1057,13 +1096,25 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 		// entries pointing into the same repo share the one section. A project
 		// with no worktrees still gets its (0) header — it's a configured
 		// project, and in the tui that header is where `x` makes its first
-		// worktree; only one git couldn't read at all is left out.
-		seen := map[string]bool{}
-		for _, root := range roots {
-			if root == "" || seen[root] {
-				continue
+		// worktree; only one git couldn't read at all is left out. Under herdr
+		// the repos it has open go first, in its sidebar's order.
+		// The repos herdr has nothing open in go behind a "…" of their own,
+		// sections and all, which is the project "" in shown.
+		var sections []string
+		for _, root := range slices.SortedStableFunc(slices.Values(roots), func(a, b string) int {
+			return herdrFirst(herdrOrder, a, b)
+		}) {
+			if root != "" && !slices.Contains(sections, root) {
+				sections = append(sections, root)
 			}
-			seen[root] = true
+		}
+		for i, root := range sections {
+			if !open(root) && (i == 0 || open(sections[i-1])) {
+				more("", len(sections)-i)
+				if !shown[""] {
+					break
+				}
+			}
 			var mine []row
 			for _, r := range rows {
 				if r.project == root {
@@ -1080,9 +1131,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 			if collapsed[root] {
 				continue
 			}
-			for _, r := range mine {
-				emit(r)
-			}
+			emitRows(root, mine)
 			emitPending(root)
 		}
 	}
