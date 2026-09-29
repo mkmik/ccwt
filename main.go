@@ -627,6 +627,7 @@ type listRow struct {
 	pid           int    // a process in the ps view; 0 for the other rows
 	tab           string // a herdr tab's id in the ws view; "" for the other rows
 	more          bool   // the "…" the rows herdr has no workspace on fold behind
+	sep           int    // a herdr divider, by the place after it in herdr's sidebar; 0 for the other rows
 }
 
 // worktree reports whether the row is a live worktree — the rows the
@@ -791,10 +792,11 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	var agents []herdrAgent
 	var labels map[string]string
 	var herdrOrder map[string]int
+	var herdrSeps []int
 	if tty {
 		wg.Go(func() { agents = herdrAgents() })
 		if underHerdr() {
-			wg.Go(func() { labels, herdrOrder = herdrLabels() })
+			wg.Go(func() { labels, herdrOrder, herdrSeps = herdrLabels() })
 		}
 	}
 	for i, dir := range projects {
@@ -1119,6 +1121,18 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 			for _, r := range rows {
 				if r.project == root {
 					mine = append(mine, r)
+				}
+			}
+			// herdr's "------" dividers go between the sections they sit between
+			// in its sidebar, and only between: one ahead of the first thing is
+			// a heading, not a divider. By the repo's place, never a worktree's:
+			// herdr's list has a worktree where it was made, which can be past a
+			// divider its sidebar has it nested well above, under the repo.
+			if k, ok := herdrOrder[root]; fold && ok && i > 0 {
+				prev := herdrOrder[sections[i-1]]
+				if slices.ContainsFunc(herdrSeps, func(s int) bool { return prev < s && s < k }) {
+					lines = append(lines, listRow{sep: k})
+					table = append(table, make([]string, len(cols)))
 				}
 			}
 			lines = append(lines, listRow{project: root})

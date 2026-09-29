@@ -797,9 +797,9 @@ func TestListNamesHerdrWorkspaces(t *testing.T) {
 	open := capture(t, &NewWorktreeBranchCmd{Name: "open", Path: true})
 	capture(t, &NewWorktreeBranchCmd{Name: "closed"})
 
-	defer func(orig func() (map[string]string, map[string]int)) { herdrLabels = orig }(herdrLabels)
-	herdrLabels = func() (map[string]string, map[string]int) {
-		return map[string]string{open: "mTLS subresource"}, nil
+	defer func(orig func() (map[string]string, map[string]int, []int)) { herdrLabels = orig }(herdrLabels)
+	herdrLabels = func() (map[string]string, map[string]int, []int) {
+		return map[string]string{open: "mTLS subresource"}, nil, nil
 	}
 	defer func(orig func() bool) { stdoutIsTTY = orig }(stdoutIsTTY)
 	for _, tc := range []struct {
@@ -833,9 +833,9 @@ func TestListFollowsHerdrOrder(t *testing.T) {
 	a := capture(t, &NewWorktreeBranchCmd{Name: "a", Path: true})
 	b := capture(t, &NewWorktreeBranchCmd{Name: "b", Path: true})
 
-	defer func(orig func() (map[string]string, map[string]int)) { herdrLabels = orig }(herdrLabels)
-	herdrLabels = func() (map[string]string, map[string]int) {
-		return nil, map[string]int{b: 0, a: 1}
+	defer func(orig func() (map[string]string, map[string]int, []int)) { herdrLabels = orig }(herdrLabels)
+	herdrLabels = func() (map[string]string, map[string]int, []int) {
+		return nil, map[string]int{b: 0, a: 2}, []int{1}
 	}
 	defer func(orig func() bool) { stdoutIsTTY = orig }(stdoutIsTTY)
 	stdoutIsTTY = func() bool { return true }
@@ -861,11 +861,16 @@ func TestListFollowsHerdrOrder(t *testing.T) {
 			if r.more {
 				name = "…"
 			}
+			if r.sep != 0 {
+				name = "—"
+			}
 			got = append(got, name)
 		}
 		return got, rows
 	}
 	got, rows := tui(nil)
+	// No divider between b and a, though herdr's list has one there: it lists
+	// a worktree where it was made, and its sidebar nests it under the repo.
 	if want := []string{"b", "a", "…"}; !slices.Equal(got, want) {
 		t.Fatalf("folded = %q, want %q", got, want)
 	}
@@ -873,8 +878,46 @@ func TestListFollowsHerdrOrder(t *testing.T) {
 		t.Errorf("shown = %q, want c after the …", got)
 	}
 	t.Setenv("HERDR_ENV", "")
-	if got, _ := tui(nil); len(got) != 3 || slices.Contains(got, "…") {
-		t.Errorf("outside herdr = %q, want the three worktrees and no …", got)
+	if got, _ := tui(nil); len(got) != 3 || slices.Contains(got, "…") || slices.Contains(got, "—") {
+		t.Errorf("outside herdr = %q, want the three worktrees and no … or divider", got)
+	}
+}
+
+// TestListDividesLikeHerdr: under -g, a herdr workspace named "------…" draws a
+// divider between the sections either side of it in the sidebar — not ahead of
+// the first, where it is a heading, and not by where a worktree sits in herdr's
+// list, which is where it was made rather than under its repo.
+func TestListDividesLikeHerdr(t *testing.T) {
+	work := initRepo(t)
+	personal := t.TempDir()
+	git(t, "-C", personal, "init", "-b", "main")
+	git(t, "-C", personal, "commit", "--allow-empty", "-m", "init")
+	wt := capture(t, &NewWorktreeBranchCmd{Name: "wt", Path: true})
+	work, personal = gitLine(work, "rev-parse", "--show-toplevel"), gitLine(personal, "rev-parse", "--show-toplevel")
+
+	defer func(orig func() (map[string]string, map[string]int, []int)) { herdrLabels = orig }(herdrLabels)
+	herdrLabels = func() (map[string]string, map[string]int, []int) {
+		// ------ work, work, ------ personal, personal, wt (of work)
+		return nil, map[string]int{work: 1, personal: 3, wt: 4}, []int{0, 2}
+	}
+	t.Setenv("HERDR_ENV", "1")
+	rows, _, err := renderList(io.Discard, true, 0, []string{work, personal}, nil, nil, false, "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, r := range rows {
+		switch {
+		case r.sep != 0:
+			got = append(got, "—")
+		case r.path != "":
+			got = append(got, filepath.Base(r.path))
+		default:
+			got = append(got, r.project)
+		}
+	}
+	if want := []string{work, "wt", "—", personal}; !slices.Equal(got, want) {
+		t.Errorf("rows = %q, want %q", got, want)
 	}
 }
 
