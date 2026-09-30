@@ -281,6 +281,18 @@ func (c *TuiCmd) Run() error {
 				u.queue(k)
 			case u.typing:
 				u.edit(k)
+			case u.opener != nil && k == "\x03":
+				return nil
+			case u.opener != nil:
+				if p, done := u.opener.key(k); done {
+					u.opener = nil
+					if p != "" {
+						if err := act("opening "+filepath.Base(p)+"…", func() string { return openProject(p) }); err != nil {
+							return err
+						}
+					}
+					u.stale()
+				}
 			// A removal's page sits on top of the worklog pane that opened it, so
 			// it takes the keys first: esc goes back to the log, and the rest of
 			// them are a pager's — a session is far longer than a screen.
@@ -384,6 +396,14 @@ func (c *TuiCmd) Run() error {
 			// workspace of agents: the same new worktree, with `ccwt ws` started
 			// in it, which is where the prompts and the tabs they run in come
 			// from.
+			// `o` under -g opens a repo that isn't open yet, picked from the
+			// ones ccwt has been used in.
+			case k == "o" && underHerdr() && u.projects != nil:
+				if o, err := newOpener(); err != nil {
+					u.msg = "open: " + err.Error()
+				} else {
+					u.opener = o
+				}
 			case k == "c" && underHerdr() && !u.ws:
 				if err := act("creating…", u.newWorkspace); err != nil {
 					return err
@@ -677,6 +697,9 @@ type ui struct {
 	// run in it included, or the history `g` shows. nil when there is none.
 	page *page
 
+	// `o`'s picker under -g, nil when it's shut.
+	opener *opener
+
 	// The hamburger's menu: the actions it was opened on, which of them is
 	// selected, and the screen line the first one came out on — what turns a
 	// click into the entry it landed on, as logFirst does for the worklog. nil
@@ -721,7 +744,7 @@ func (u *ui) stale() {
 // quiet reports that the list is all there is on screen: no pane, box or menu
 // over it. What stale may refresh behind, and what a restart may take down.
 func (u *ui) quiet() bool {
-	return u.detail == nil && !u.entry.open && !u.logOpen && u.menu == nil && u.page == nil && u.trust == ""
+	return u.detail == nil && !u.entry.open && !u.logOpen && u.menu == nil && u.page == nil && u.trust == "" && u.opener == nil
 }
 
 // psView is the switch between the two lists: what's in the window is a
@@ -1619,6 +1642,17 @@ func (u *ui) frame() ([]string, error) {
 		}
 		// The bar is the only line left to say why the editor didn't open.
 		return append(lines[:body], highlight(keys+u.msg, cols)), nil
+	}
+
+	// `o`'s picker is another, and another list of rows to pick from.
+	if u.opener != nil {
+		pane, keys := u.opener.pane(cols, body)
+		for i, l := range pane {
+			if l != "" && i < body {
+				lines[i] = l
+			}
+		}
+		return append(lines[:body], highlight(keys, cols)), nil
 	}
 
 	// The menu is a modal of the same kind, over the same standing list — the
@@ -2753,6 +2787,9 @@ func actions(sel listRow, searching, global bool) []action {
 	}
 	if herdr {
 		as = append(as, action{"x", "new"}, action{"c", "new+ws"})
+		if global {
+			as = append(as, action{"o", "open"})
+		}
 	}
 	switch {
 	case sel.worktree():

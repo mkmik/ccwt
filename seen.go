@@ -74,13 +74,21 @@ func markCwdSeen() {
 // seenProjects is the repos ccwt has been used in and nobody hid, oldest first:
 // only the ones still a main checkout there, since a row outlives its directory
 // and a section git can't read is no use to anyone.
-func seenProjects() ([]string, error) {
+func seenProjects() ([]string, error) { return seenPaths("first, path") }
+
+// recentProjects is the same repos, most recently used first: the order `o`
+// offers them in.
+func recentProjects() ([]string, error) { return seenPaths("last DESC, path") }
+
+// seenPaths is the seen projects sorted by order, an ORDER BY clause — one of
+// the two above, never anything typed.
+func seenPaths(order string) ([]string, error) {
 	db, err := openTasks()
 	if err != nil {
 		return nil, err
 	}
 	defer db.Close()
-	rows, err := db.Query(`SELECT path FROM seen WHERE path = project AND NOT hidden ORDER BY first, path`)
+	rows, err := db.Query(`SELECT path FROM seen WHERE path = project AND NOT hidden ORDER BY ` + order)
 	if err != nil {
 		return nil, err
 	}
