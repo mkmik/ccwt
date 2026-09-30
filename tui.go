@@ -430,12 +430,12 @@ func (c *TuiCmd) Run() error {
 			// has to be for the pattern you just typed to be walkable at all.
 			// `esc` clears the pattern and gives the key back.
 			//
-			// In the ws view it is the seed prompt: the same box, and what's
-			// typed there starts an agent in a tab of its own rather than
-			// waiting on anything.
-			case k == "n" && u.query == "" && u.ws:
+			// In the ws view there is no queue: `c` is the seed prompt there, the
+			// same box, and what's typed in it starts an agent in a tab of its
+			// own rather than waiting on anything.
+			case k == "c" && u.ws:
 				u.entry = newEntry(listRow{}, "", 0)
-			case k == "n" && u.query == "":
+			case k == "n" && u.query == "" && !u.ws:
 				if parent, err := u.queueParent(); err != nil {
 					u.msg = "queue: " + err.Error()
 				} else {
