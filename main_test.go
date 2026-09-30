@@ -1270,6 +1270,31 @@ func TestUpgradeNoticeNeedsTwoReadableStamps(t *testing.T) {
 	}
 }
 
+// `go install` in a loop rewrites the binary whether or not anything was
+// pulled, so a new mtime on the same bytes mustn't read as an upgrade. The test
+// binary is the one os.Executable names, so it's the one touched here.
+func TestSelfStampIgnoresATouch(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, key := selfStamp(), selfHash.key
+	later := fi.ModTime().Add(time.Hour)
+	if err := os.Chtimes(exe, later, later); err != nil {
+		t.Fatal(err)
+	}
+	if after := selfStamp(); before == "" || after != before {
+		t.Errorf("stamp went %q -> %q on a touch, want it unchanged", before, after)
+	}
+	if selfHash.key == key {
+		t.Errorf("the touch didn't make selfStamp read the file again")
+	}
+}
+
 // The upgrade restarts the tui by itself, but not out from under anyone: the
 // keys have to have been quiet for restartIdle, with nothing being typed and
 // nothing open over the list that the restart would take with it.
