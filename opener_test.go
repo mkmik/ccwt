@@ -115,3 +115,51 @@ func TestOpenerOffersWhatHerdrHasNot(t *testing.T) {
 		t.Errorf("reopen: herdr ran:\n%s\nwant only:\n%s", out, ran)
 	}
 }
+
+// TestHerdrPlaceLastInCategory: a project opened under a category's directory
+// goes last under that category's divider, above the next one.
+func TestHerdrPlaceLastInCategory(t *testing.T) {
+	cats := []Category{{"work", "/u/w"}, {"personal", "/u/p"}, {"deep", "/u/w/deep"}}
+	for path, want := range map[string]string{"/u/w/x": "work", "/u/w": "work", "/u/wx/y": "", "/u/p/z": "personal", "/u/w/deep/q": "deep"} {
+		if got := categoryOf(cats, path); got != want {
+			t.Errorf("categoryOf(%s) = %q, want %q", path, got, want)
+		}
+	}
+
+	t.Chdir(t.TempDir()) // a unix socket's path has to be short
+	l, err := net.Listen("unix", "herdr.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	t.Setenv("HERDR_SOCKET_PATH", "herdr.sock")
+	list := `{"result":{"workspaces":[{"workspace_id":"w1","label":"tmp"},{"workspace_id":"w2","label":"------ work"},{"workspace_id":"w3","label":"a"},{"workspace_id":"w4","label":"------ personal"},{"workspace_id":"w5","label":"b"},{"workspace_id":"w9","label":"new"}]}}`
+	moved := make(chan string, 1)
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			var req struct {
+				Method string         `json:"method"`
+				Params map[string]any `json:"params"`
+			}
+			line, _ := bufio.NewReader(c).ReadBytes('\n')
+			_ = json.Unmarshal(line, &req)
+			if req.Method == "workspace.list" {
+				fmt.Fprintln(c, list)
+			} else {
+				moved <- fmt.Sprint(req.Method, " ", req.Params["workspace_id"], " ", req.Params["insert_index"])
+				fmt.Fprintln(c, `{"result":{}}`)
+			}
+			c.Close()
+		}
+	}()
+	for cat, want := range map[string]string{"work": "workspace.move w9 3", "personal": "workspace.move w9 5"} {
+		herdrFile("w9", cat)
+		if got := <-moved; got != want {
+			t.Errorf("%s: herdr was asked %q, want %q", cat, got, want)
+		}
+	}
+}

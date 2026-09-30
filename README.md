@@ -555,6 +555,20 @@ path = "~/src/ccwt"
 path = "~/src/platform"
 ```
 
+Categories name the projects checked out under a directory (the longest match wins). Under
+Herdr, a workspace named `------ <name>` heads a category's section of the sidebar, and a
+project `o` opens goes last in its own, just above the next `------` divider:
+
+```toml
+[[categories]]
+name = "work"
+path = "~/w"
+
+[[categories]]
+name = "personal"
+path = "~/p"
+```
+
 `branch_prefix` sets what `ccwt new` puts in front of a worktree's name to make its branch
 (`worktree-` when unset), for repos that want their branches namespaced:
 
@@ -895,7 +909,7 @@ swallow stderr, or you'll lose the cwd report.
 | `ccwt repo-root` | Print the root of the current git repository. Add `--root-worktree` to print the *enclosing* repo root when you're inside a `.claude/worktrees/<name>` worktree. |
 | `ccwt ..` | Shorthand for `repo-root --root-worktree`: print (and, with shell integration, `cd` to) the enclosing repository root. |
 | `ccwt init <shell>` | Emit the shell-integration snippet to source from your rc file. For `zsh` the snippet carries completion too: commands, and worktree names for `cd`, `remove` and `lock`. |
-| `ccwt config view` / `ccwt config edit` | Print the config file, or open it in `$EDITOR` (`vi` if unset). Both create an empty one if there isn't any. The file holds `[[projects]]`, repos for `-g` to span besides the ones `ccwt` has been run in, `branch_prefix` — what `ccwt new` puts in front of a worktree's name to make its branch (`worktree-` when unset) — `columns`, which columns the table draws, `sort`, the order the worktrees come in (`freshness` when unset), `task_command`, the agent cli a queued prompt is run with (`claude` when unset), `forges`, which cli finds a host's reviews for the tui's `m` and `ccwt mr`, and `environments`, what `ccwt mr`'s `ENV` column calls each environment (`production = "prod"`). |
+| `ccwt config view` / `ccwt config edit` | Print the config file, or open it in `$EDITOR` (`vi` if unset). Both create an empty one if there isn't any. The file holds `[[projects]]`, repos for `-g` to span besides the ones `ccwt` has been run in, `branch_prefix` — what `ccwt new` puts in front of a worktree's name to make its branch (`worktree-` when unset) — `columns`, which columns the table draws, `sort`, the order the worktrees come in (`freshness` when unset), `task_command`, the agent cli a queued prompt is run with (`claude` when unset), `forges`, which cli finds a host's reviews for the tui's `m` and `ccwt mr`, `environments`, what `ccwt mr`'s `ENV` column calls each environment (`production = "prod"`), and `categories`, which section of Herdr's sidebar `o` puts a project in. |
 | `ccwt --version` | Print version information. |
 
 ### Layout

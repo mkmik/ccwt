@@ -48,6 +48,33 @@ type Config struct {
 	//	production = "prod"
 	//	staging = "stg"
 	Environments map[string]string `toml:"environments"`
+	// Categories sort projects by where they are checked out. Under herdr a
+	// workspace named "------ <name>" heads each one, and `o` puts a project
+	// it opens last under its category's divider.
+	//
+	//	[[categories]]
+	//	name = "work"
+	//	path = "~/w"
+	Categories []Category `toml:"categories"`
+}
+
+// Category is a name for the projects checked out under a directory.
+type Category struct {
+	Name string `toml:"name"`
+	Path string `toml:"path"` // may start with ~/
+}
+
+// categoryOf names the category of the repo at path: the one with the longest
+// path it is under, "" when there is none.
+func categoryOf(cats []Category, path string) string {
+	name, best := "", -1
+	for _, c := range cats {
+		dir := filepath.Clean(expandHome(c.Path))
+		if (path == dir || strings.HasPrefix(path, dir+string(filepath.Separator))) && len(dir) > best {
+			name, best = c.Name, len(dir)
+		}
+	}
+	return name
 }
 
 // sortOrders are the orders the worktree list can be in, the first being the

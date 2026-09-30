@@ -158,7 +158,10 @@ func openProject(path string) string {
 	var resp struct {
 		Result struct {
 			AlreadyOpen bool `json:"already_open"`
-			Tab         struct {
+			Workspace   struct {
+				ID string `json:"workspace_id"`
+			} `json:"workspace"`
+			Tab struct {
 				ID string `json:"tab_id"`
 			} `json:"tab"`
 			Pane struct {
@@ -172,10 +175,58 @@ func openProject(path string) string {
 	if resp.Result.AlreadyOpen {
 		return "opened " + filepath.Base(path)
 	}
+	// Best effort: a workspace in the wrong place is still open.
+	if cfg, err := loadConfig(); err == nil {
+		if cat := categoryOf(cfg.Categories, path); cat != "" {
+			herdrFile(resp.Result.Workspace.ID, cat)
+		}
+	}
 	if out, err := exec.Command(herdrBin(), "pane", "run", resp.Result.Pane.ID, exe).CombinedOutput(); err != nil {
 		return "opened, but ccwt did not start: " + lastLine(out, err)
 	}
 	// Best effort, as `c`'s `ws`: a tab with the wrong name still has its tui.
 	_ = exec.Command(herdrBin(), "tab", "rename", resp.Result.Tab.ID, "prj").Run()
 	return "opened " + filepath.Base(path)
+}
+
+// herdrFile moves the workspace id to the end of category cat's section of
+// herdr's sidebar: just above the divider after "------ cat", or last when
+// that is the last divider. No such divider leaves it where it is.
+func herdrFile(id, cat string) {
+	out, err := herdrAsk("workspace.list", nil, "workspace", "list")
+	var resp struct {
+		Result struct {
+			Workspaces []struct {
+				ID    string `json:"workspace_id"`
+				Label string `json:"label"`
+			} `json:"workspaces"`
+		} `json:"result"`
+	}
+	if err != nil || json.Unmarshal(out, &resp) != nil {
+		return
+	}
+	// Counted without the workspace itself, since that is how herdr counts
+	// where it lands.
+	at, in := -1, false
+	i := 0
+	for _, w := range resp.Result.Workspaces {
+		if w.ID == id {
+			continue
+		}
+		if rest, ok := strings.CutPrefix(w.Label, herdrSep); ok {
+			if in {
+				break
+			}
+			in = strings.TrimSpace(strings.TrimLeft(rest, "-")) == cat
+		}
+		i++
+		if in {
+			at = i
+		}
+	}
+	if at < 0 {
+		return
+	}
+	_, _ = herdrAsk("workspace.move", map[string]any{"workspace_id": id, "insert_index": at},
+		"workspace", "move", id, fmt.Sprint(at)) // ponytail: herdr 0.9.1 has no cli for it, only the socket
 }
