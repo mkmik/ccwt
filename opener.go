@@ -141,16 +141,24 @@ func (o *opener) pane(cols, rows int) ([]string, string) {
 // openProject opens the repo at path in a workspace of its own and runs ccwt
 // in its first tab, named `prj` — where ↻ under -g looks for it, and starts it
 // again, should it ever stop.
+//
+// A worktree open rather than a workspace create: only the former tells herdr
+// which repo the workspace is on, and without that herdrLabels can't see it —
+// the repo would stay behind -g's "…" and `o` would go on offering it. A
+// workspace already there on path, made some other way, is taken over rather
+// than doubled, and gets that repo from then on; it has its own shell in its
+// first pane, so nothing is started there.
 func openProject(path string) string {
 	exe, err := os.Executable()
 	if err != nil {
 		return "open failed: " + err.Error()
 	}
-	out, err := herdrAsk("workspace.create", map[string]any{"cwd": path, "focus": true},
-		"workspace", "create", "--cwd", path, "--focus")
+	out, err := herdrAsk("worktree.open", map[string]any{"cwd": path, "path": path, "focus": true},
+		"worktree", "open", "--cwd", path, "--path", path, "--focus")
 	var resp struct {
 		Result struct {
-			Tab struct {
+			AlreadyOpen bool `json:"already_open"`
+			Tab         struct {
 				ID string `json:"tab_id"`
 			} `json:"tab"`
 			Pane struct {
@@ -159,7 +167,10 @@ func openProject(path string) string {
 		} `json:"result"`
 	}
 	if err != nil || json.Unmarshal(out, &resp) != nil || resp.Result.Pane.ID == "" {
-		return fmt.Sprintf("open failed: herdr workspace create: %v", err)
+		return fmt.Sprintf("open failed: herdr worktree open: %v", err)
+	}
+	if resp.Result.AlreadyOpen {
+		return "opened " + filepath.Base(path)
 	}
 	if out, err := exec.Command(herdrBin(), "pane", "run", resp.Result.Pane.ID, exe).CombinedOutput(); err != nil {
 		return "opened, but ccwt did not start: " + lastLine(out, err)
