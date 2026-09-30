@@ -14,7 +14,8 @@ import (
 
 // TestOpenerOffersWhatHerdrHasNot: `o` offers the seen projects most recently
 // used first, less the hidden ones and those herdr has a workspace on; `/`
-// narrows them; picking one makes a workspace there with ccwt in a `prj` tab.
+// narrows them; picking one makes a workspace there with ccwt in a `prj` tab,
+// or takes over one herdr had there without knowing its repo.
 func TestOpenerOffersWhatHerdrHasNot(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	base := t.TempDir()
@@ -59,21 +60,24 @@ func TestOpenerOffersWhatHerdrHasNot(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { l.Close() })
-	asked := make(chan string, 1)
+	asked := make(chan string, 2)
 	go func() {
-		c, err := l.Accept()
-		if err != nil {
-			return
+		// The second open finds the workspace the first one made.
+		for _, already := range []bool{false, true} {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			var req struct {
+				Method string         `json:"method"`
+				Params map[string]any `json:"params"`
+			}
+			line, _ := bufio.NewReader(c).ReadBytes('\n')
+			_ = json.Unmarshal(line, &req)
+			asked <- fmt.Sprint(req.Method, " ", req.Params["cwd"], " ", req.Params["path"], " ", req.Params["focus"])
+			fmt.Fprintf(c, `{"result":{"already_open":%v,"tab":{"tab_id":"w9:t1"},"root_pane":{"pane_id":"w9:p1"}}}`+"\n", already)
+			c.Close()
 		}
-		defer c.Close()
-		var req struct {
-			Method string         `json:"method"`
-			Params map[string]any `json:"params"`
-		}
-		line, _ := bufio.NewReader(c).ReadBytes('\n')
-		_ = json.Unmarshal(line, &req)
-		asked <- fmt.Sprint(req.Method, " ", req.Params["cwd"], " ", req.Params["focus"])
-		fmt.Fprintln(c, `{"result":{"tab":{"tab_id":"w9:t1"},"root_pane":{"pane_id":"w9:p1"}}}`)
 	}()
 	log, err := filepath.Abs("herdr.log")
 	if err != nil {
@@ -89,12 +93,25 @@ func TestOpenerOffersWhatHerdrHasNot(t *testing.T) {
 	if msg := openProject(recent); msg != "opened recent" {
 		t.Errorf("openProject said %q", msg)
 	}
-	if got, want := <-asked, "workspace.create "+recent+" true"; got != want {
+	want := "worktree.open " + recent + " " + recent + " true"
+	if got := <-asked; got != want {
 		t.Errorf("herdr was asked %q, want %q", got, want)
 	}
 	out, _ := os.ReadFile(log)
 	exe, _ := os.Executable()
-	if want := "pane run w9:p1 " + exe + "\ntab rename w9:t1 prj\n"; string(out) != want {
-		t.Errorf("herdr ran:\n%s\nwant:\n%s", out, want)
+	ran := "pane run w9:p1 " + exe + "\ntab rename w9:t1 prj\n"
+	if string(out) != ran {
+		t.Errorf("herdr ran:\n%s\nwant:\n%s", out, ran)
+	}
+
+	// A workspace herdr already had there keeps its own shell and tab name.
+	if msg := openProject(recent); msg != "opened recent" {
+		t.Errorf("reopen: openProject said %q", msg)
+	}
+	if got := <-asked; got != want {
+		t.Errorf("reopen: herdr was asked %q, want %q", got, want)
+	}
+	if out, _ := os.ReadFile(log); string(out) != ran {
+		t.Errorf("reopen: herdr ran:\n%s\nwant only:\n%s", out, ran)
 	}
 }
