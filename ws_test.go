@@ -989,21 +989,120 @@ func TestListCornerNamesTheWorkspacesWithNoCcwt(t *testing.T) {
 	if len(lines) != 5 {
 		t.Fatalf("frame is %d lines, want the 5 the terminal has", len(lines))
 	}
-	for i, want := range []string{"┌─ ccwt ws not running ─┐", "│ audit restore         │", "└───────────────────────┘"} {
+	for i, want := range []string{"┌─ ccwt ws not running ↻ ─┐", "│ audit restore           │", "└─────────────────────────┘"} {
 		l := lines[i+1]
 		if !strings.HasSuffix(l, "\x1b[33m"+want+"\x1b[0m") || screenWidth(plain(l)) != 59 {
 			t.Errorf("line %d = %q, want 59 columns ending in %q", i+1, l, want)
 		}
 	}
-	// The name is on the third line, and the box starts 59-25 columns in: that
-	// is where a double click goes to the workspace's first tab.
-	if want := (point{col: 35, row: 3}); u.corner != want || wsDownTab(0) != "w1:t1" || wsDownTab(1) != "" {
+	// The name is on the third line, and the box starts 59-27 columns in: that
+	// is where a double click goes to the workspace's first tab. The ↻ is on
+	// the rule above it, 23 columns further in.
+	if want := (point{col: 33, row: 3}); u.corner != want || wsDownTab(0) != "w1:t1" || wsDownTab(1) != "" {
 		t.Errorf("corner at %+v with tab %q, want %+v and w1:t1", u.corner, wsDownTab(0), want)
+	}
+	if want := (point{col: 56, row: 2}); u.cornerRestart != want {
+		t.Errorf("↻ at %+v, want %+v", u.cornerRestart, want)
 	}
 	if !strings.HasPrefix(lines[1], rowBar) || !strings.Contains(plain(lines[1]), "corner-case") {
 		t.Errorf("line 1 = %q, want the selected row, band and all, left of the box", lines[1])
 	}
 	if !strings.Contains(lines[0], "NAME") || !strings.Contains(lines[4], "q:quit") {
 		t.Errorf("frame = %q, want the header above the box and the bar under it", lines)
+	}
+}
+
+// The corner's ↻ plans before it acts, from a fresh look at herdr: under -g a
+// project workspace with no `prj` tab gets one, made first in its bar; one
+// whose `prj` tab is at its shell gets `ccwt` typed there; and one whose `prj`
+// tab is busy with something else is left to it, and says so. Only what the
+// corner named is in the plan.
+func TestRestartMakesOrReusesThePrjTab(t *testing.T) {
+	t.Chdir(t.TempDir()) // a unix socket's path has to be short
+	l, err := net.Listen("unix", "herdr.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	const snapshot = `{"result":{"snapshot":{` +
+		`"workspaces":[{"workspace_id":"w1","label":"app","worktree":{"checkout_path":"/src/app"}},{"workspace_id":"w2","label":"other","worktree":{"checkout_path":"/src/other"}},{"workspace_id":"w3","label":"busy","worktree":{"checkout_path":"/src/busy"}},{"workspace_id":"w4","label":"fine","worktree":{"checkout_path":"/src/fine"}}],` +
+		`"tabs":[{"tab_id":"w1:t1","workspace_id":"w1","label":"1"},{"tab_id":"w2:t1","workspace_id":"w2","label":"1"},{"tab_id":"w2:t2","workspace_id":"w2","label":"prj"},{"tab_id":"w3:t1","workspace_id":"w3","label":"prj"},{"tab_id":"w4:t1","workspace_id":"w4","label":"prj"}],` +
+		`"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1"},{"pane_id":"w2:p1","tab_id":"w2:t1"},{"pane_id":"w2:p2","tab_id":"w2:t2"},{"pane_id":"w3:p1","tab_id":"w3:t1"},{"pane_id":"w4:p1","tab_id":"w4:t1"}]}}}`
+	var mu sync.Mutex
+	var asked []string
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				var req struct {
+					Method string         `json:"method"`
+					Params map[string]any `json:"params"`
+				}
+				line, _ := bufio.NewReader(c).ReadBytes('\n')
+				_ = json.Unmarshal(line, &req)
+				mu.Lock()
+				defer mu.Unlock()
+				switch req.Method {
+				case "session.snapshot":
+					fmt.Fprintln(c, snapshot)
+				case "pane.process_info":
+					if req.Params["pane_id"] == "w3:p1" {
+						fmt.Fprintln(c, `{"result":{"process_info":{"shell_pid":1,"foreground_process_group_id":2,"foreground_processes":[{"name":"vim"}]}}}`)
+					} else {
+						fmt.Fprintln(c, `{"result":{"process_info":{"shell_pid":1,"foreground_process_group_id":1,"foreground_processes":[{"name":"zsh"}]}}}`)
+					}
+				case "tab.create":
+					asked = append(asked, fmt.Sprint(req.Method, " ", req.Params["workspace_id"], " ", req.Params["cwd"], " ", req.Params["label"], " ", req.Params["focus"]))
+					fmt.Fprintln(c, `{"result":{"tab":{"tab_id":"w1:t2"},"root_pane":{"pane_id":"w1:p2"}}}`)
+				case "tab.move":
+					asked = append(asked, fmt.Sprint(req.Method, " ", req.Params["tab_id"], " ", req.Params["insert_index"]))
+					fmt.Fprintln(c, `{"result":{}}`)
+				}
+			}()
+		}
+	}()
+	log, err := filepath.Abs("herdr.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(t.TempDir(), "herdr")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho \"$@\" >> "+log+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_SOCKET_PATH", "herdr.sock")
+	t.Setenv("HERDR_BIN_PATH", bin)
+	wsDown.tabs, wsDown.global = []string{"w1:t1", "w2:t1", "w3:t1"}, true
+	t.Cleanup(func() { wsDown.tabs, wsDown.global = nil, false })
+
+	steps, global := restartPlan()
+	want := []restartStep{
+		{name: "app", ws: "w1", cwd: "/src/app"},
+		{name: "other", ws: "w2", cwd: "/src/other", tab: "w2:t2", pane: "w2:p2"},
+		{name: "busy", ws: "w3", cwd: "/src/busy", tab: "w3:t1", pane: "w3:p1", skip: "its `prj` tab is running vim"},
+	}
+	if !global || !slices.Equal(steps, want) {
+		t.Fatalf("plan = %+v, want %+v", steps, want)
+	}
+	text := strings.Join(restartText(steps, global), "\n")
+	for _, s := range []string{"app: a new `prj` tab, first", "other: ccwt in its `prj` tab", "busy: left alone, its `prj` tab is running vim", "y to go ahead"} {
+		if !strings.Contains(text, s) {
+			t.Errorf("plan text %q, want it to say %q", text, s)
+		}
+	}
+
+	if msg := restart(steps, global); msg != "restarted 2 of 3" {
+		t.Errorf("restart said %q", msg)
+	}
+	if w := []string{"tab.create w1 /src/app prj false", "tab.move w1:t2 0"}; !slices.Equal(asked, w) {
+		t.Errorf("asked herdr %q, want %q", asked, w)
+	}
+	exe, _ := os.Executable()
+	ran, _ := os.ReadFile(log)
+	if w := "pane run w1:p2 " + exe + "\npane run w2:p2 " + exe + "\n"; string(ran) != w {
+		t.Errorf("ran %q, want %q", ran, w)
 	}
 }

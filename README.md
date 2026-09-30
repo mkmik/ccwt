@@ -759,9 +759,9 @@ was running in them — and the tab is a bare shell under the same name. The tui
 its worktrees' workspaces in that state, in a yellow box in its bottom-right corner:
 
 ```
-                                  ┌─ ccwt ws not running ─┐
-                                  │ audit restore         │
-                                  └───────────────────────┘
+                                ┌─ ccwt ws not running ↻ ─┐
+                                │ audit restore           │
+                                └─────────────────────────┘
  ☰  q:quit  p:pull  g:git  /:search  l:log  x:new  c:new+ws  n:queue │ main
 ```
 
@@ -775,6 +775,13 @@ pane.
 With `-g` the box is `ccwt tui not running` instead, and names the projects' own workspaces —
 the ones open on each configured repo's root checkout — that have no ccwt in any pane of any
 tab: the repo tuis that are gone.
+
+A click on the `↻` in its title starts them again, once you have read the plan it shows and
+said `y` to it. Each workspace gets its tui back in the tab it belongs in — `prj` for a
+project's own workspace under `-g`, running `ccwt`; `ws` for a worktree's, running `ccwt ws`.
+A workspace with no such tab gets one, made first in its bar; one whose tab is at its shell
+has the tui typed there; one whose tab is busy with something else is left to it, and the plan
+says so.
 
 **Closing workspaces on removal.** Once its checks pass, `ccwt remove` closes the workspace
 open on the worktree, ending the agent living in it — including your own, which is closed

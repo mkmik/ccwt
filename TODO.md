@@ -31,7 +31,7 @@ stages; tick things off as they land.
   - [x] a way to open a workspace with `ccwt ws` already in its first tab — the tui's `c`, which runs it there instead of the agent (`TestNewWorkspaceRunsWs`); the herdr plugin's own action still opens a bare worktree
   - [x] the list names, in a box in its corner, the workspaces whose `ws` tab has no ccwt running in it (`herdrWsDown`, `TestListWatchesTheWsTabsForTheirCcwt`): a look when herdr's events say a tab or workspace was made, renamed or closed, and every 10s besides
   - [x] only its own worktrees' workspaces: another repo's are that repo's list's to name, and their panes go unasked
-  - [ ] start `ccwt ws` again in those tabs, rather than only saying so
+  - [x] start `ccwt ws` again in those tabs, rather than only saying so — the corner's `↻`, after a plan and a `y` (`TestRestartMakesOrReusesThePrjTab`); under -g it is `ccwt` in a `prj` tab, made first when there is none
 
 ## Decisions
 
