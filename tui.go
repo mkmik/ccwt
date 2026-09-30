@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	jsonv2 "encoding/json/v2"
 	"errors"
@@ -2181,11 +2183,13 @@ func (u *ui) idle() bool {
 	return time.Since(u.nav) >= restartIdle && u.quiet() && !u.typing
 }
 
-// selfStamp identifies the file behind os.Executable(): its size and mtime,
-// which between them change for any upgrade worth restarting for. Empty when
-// there's nothing to stat. ponytail: package var so tests can move the binary
-// without installing one; a content hash would be surer, but this runs every
-// interval and no upgrade lands on the same size and nanosecond.
+// selfStamp identifies the file behind os.Executable() by a hash of its
+// content, so a `go install` that rewrites the same bytes (nothing pulled)
+// isn't an upgrade, while one that rebuilds them (a new Go toolchain, a local
+// change under the same version) is. The file is only read again when its size
+// or mtime moves, since this runs every interval. Empty when there's nothing
+// to read. ponytail: package var so tests can move the binary without
+// installing one.
 var selfStamp = func() string {
 	exe, err := os.Executable()
 	if err != nil {
@@ -2195,8 +2199,25 @@ var selfStamp = func() string {
 	if err != nil {
 		return ""
 	}
-	return fmt.Sprintf("%d@%d", fi.Size(), fi.ModTime().UnixNano())
+	key := fmt.Sprintf("%d@%d", fi.Size(), fi.ModTime().UnixNano())
+	if key == selfHash.key {
+		return selfHash.sum
+	}
+	f, err := os.Open(exe)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return ""
+	}
+	selfHash.key, selfHash.sum = key, hex.EncodeToString(h.Sum(nil))
+	return selfHash.sum
 }
+
+// selfHash is selfStamp's last read, keyed by the size and mtime it was read at.
+var selfHash struct{ key, sum string }
 
 // selfVersion asks the new binary what version it is, which is the half of
 // "restart me" worth reading: it names what you'd be restarting into. Anything
