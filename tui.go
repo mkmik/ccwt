@@ -291,6 +291,14 @@ func (c *TuiCmd) Run() error {
 					u.page = nil
 				case "\x03":
 					return nil
+				// A page that is a plan asks before it is carried out.
+				case "y":
+					if run := u.page.confirm; run != nil {
+						u.page = nil
+						if err := act("restarting…", run); err != nil {
+							return err
+						}
+					}
 				case "\x1b[A", "k":
 					u.page.top--
 				case "\x1b[B", "j":
@@ -534,6 +542,14 @@ func (c *TuiCmd) Run() error {
 				// lists, as something to click through instead.
 				case row == rows && col <= hamburgerCols:
 					u.menu, u.menuSel = u.menuFor(), 0
+				// The corner's ↻: starting those ccwts again, once the plan
+				// for it has been read and said yes to.
+				case u.cornerRestart.row > 0 && u.cornerRestart == (point{col: col, row: row}):
+					steps, global := restartPlan()
+					u.page = &page{title: "restart", text: restartText(steps, global)}
+					if slices.ContainsFunc(steps, func(s restartStep) bool { return s.skip == "" }) {
+						u.page.confirm = func() string { return restart(steps, global) }
+					}
 				// A workspace in the corner: a click is a click on the row
 				// under it, as ever, and a double goes to the workspace's first
 				// tab, where its ccwt ws belongs, rather than opening that row.
@@ -674,6 +690,7 @@ type ui struct {
 	// the corner is empty. And the workspace last clicked there, and when,
 	// which is the first half of a double — see click.
 	corner        point
+	cornerRestart point // the ↻ in its title
 	cornerTab     string
 	cornerClicked time.Time
 
@@ -1413,7 +1430,7 @@ func (u *ui) dropSelected() {
 // SIGWINCH to hear.
 func (u *ui) frame() ([]string, error) {
 	cols, rows := termSize()
-	u.corner = point{} // until this frame draws the corner again
+	u.corner, u.cornerRestart = point{}, point{} // until this frame draws the corner again
 
 	// Re-read only when the cache was dropped or the terminal got wider or
 	// narrower, since the table is laid out to the width.
@@ -1544,7 +1561,11 @@ func (u *ui) frame() ([]string, error) {
 				lines[i] = l
 			}
 		}
-		return append(lines[:body], highlight(" ↑↓:scroll  space/b:page  g/G:ends  esc:back ", cols)), nil
+		keys := " ↑↓:scroll  space/b:page  g/G:ends  esc:back "
+		if u.page.confirm != nil {
+			keys = " y:go ahead  esc:cancel "
+		}
+		return append(lines[:body], highlight(keys, cols)), nil
 	}
 
 	// The worklog is a modal of the same kind, over the same standing list: what
@@ -1647,6 +1668,9 @@ func (u *ui) frame() ([]string, error) {
 			lines[top+i] = cutTo(lines[top+i], left) + "\x1b[33m" + l + "\x1b[0m"
 		}
 		u.corner = point{col: left + 1, row: top + 2} // +1 past the top rule, +1: a mouse counts from 1
+		if i := strings.Index(box[0], "↻"); i >= 0 {
+			u.cornerRestart = point{col: left + 1 + utf8.RuneCountInString(box[0][:i]), row: top + 1}
+		}
 	}
 	return append(lines[:body], bar), nil
 }
@@ -1803,6 +1827,8 @@ type page struct {
 	lines []string // text wrapped to width, which is what the window slices
 	width int      // what lines was wrapped to
 	top   int      // lines[top] is the first line showing
+
+	confirm func() string // what y does, on a page that is a plan; nil on the rest
 }
 
 // window is the slice of the page showing in a pane width columns wide and rows

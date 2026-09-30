@@ -748,33 +748,10 @@ func watchWsDown(ctx context.Context, roots []string, global bool) {
 // won't answer at all as having no such tabs: this is a warning, and one that
 // isn't sure is one to leave out.
 func herdrWsDown(roots []string, global bool) (names, tabs []string) {
-	var snap struct {
-		Result struct {
-			Snapshot struct {
-				Workspaces []struct {
-					ID       string `json:"workspace_id"`
-					Label    string `json:"label"`
-					Worktree struct {
-						Path string `json:"checkout_path"`
-					} `json:"worktree"`
-				} `json:"workspaces"`
-				Tabs []struct {
-					ID        string `json:"tab_id"`
-					Workspace string `json:"workspace_id"`
-					Label     string `json:"label"`
-				} `json:"tabs"`
-				Panes []struct {
-					ID  string `json:"pane_id"`
-					Tab string `json:"tab_id"`
-				} `json:"panes"`
-			} `json:"snapshot"`
-		} `json:"result"`
-	}
-	out, err := herdrAsk("session.snapshot", nil, "api", "snapshot")
-	if err != nil || json.Unmarshal(out, &snap) != nil {
+	s, ok := herdrSnap()
+	if !ok {
 		return nil, nil
 	}
-	s := snap.Result.Snapshot
 	ours := map[string]bool{} // a workspace -> it is open on one of our worktrees, or global, one of our repos
 	for _, w := range s.Workspaces {
 		if global {
@@ -821,13 +798,54 @@ func herdrWsDown(roots []string, global bool) (names, tabs []string) {
 	return names, tabs
 }
 
-// herdrRunsCcwt reports whether a ccwt is in the foreground of a pane, or
-// herdr can't say.
-func herdrRunsCcwt(pane string) bool {
+// herdrSnapshot is the part of herdr's `api snapshot` the corner looks at: the
+// workspaces, tabs and panes, each in the order herdr lists them.
+type herdrSnapshot struct {
+	Workspaces []struct {
+		ID       string `json:"workspace_id"`
+		Label    string `json:"label"`
+		Worktree struct {
+			Path string `json:"checkout_path"`
+		} `json:"worktree"`
+	} `json:"workspaces"`
+	Tabs []struct {
+		ID        string `json:"tab_id"`
+		Workspace string `json:"workspace_id"`
+		Label     string `json:"label"`
+	} `json:"tabs"`
+	Panes []struct {
+		ID  string `json:"pane_id"`
+		Tab string `json:"tab_id"`
+	} `json:"panes"`
+}
+
+func herdrSnap() (herdrSnapshot, bool) {
+	var snap struct {
+		Result struct {
+			Snapshot herdrSnapshot `json:"snapshot"`
+		} `json:"result"`
+	}
+	out, err := herdrAsk("session.snapshot", nil, "api", "snapshot")
+	if err != nil || json.Unmarshal(out, &snap) != nil {
+		return herdrSnapshot{}, false
+	}
+	return snap.Result.Snapshot, true
+}
+
+// paneProcs is what herdr says is in the foreground of a pane: the processes by
+// name, and whether that is the pane's shell itself, waiting at its prompt.
+type paneProcs struct {
+	names []string
+	shell bool
+}
+
+func herdrProcs(pane string) (paneProcs, bool) {
 	out, err := herdrAsk("pane.process_info", map[string]any{"pane_id": pane}, "pane", "process-info", "--pane", pane)
 	var resp struct {
 		Result struct {
 			Info struct {
+				Group      int `json:"foreground_process_group_id"`
+				Shell      int `json:"shell_pid"`
 				Foreground []struct {
 					Name string `json:"name"`
 				} `json:"foreground_processes"`
@@ -835,29 +853,170 @@ func herdrRunsCcwt(pane string) bool {
 		} `json:"result"`
 	}
 	if err != nil || json.Unmarshal(out, &resp) != nil {
-		return true
+		return paneProcs{}, false
 	}
-	for _, p := range resp.Result.Info.Foreground {
-		if p.Name == "ccwt" {
-			return true
+	i := resp.Result.Info
+	p := paneProcs{shell: i.Shell != 0 && i.Group == i.Shell}
+	for _, f := range i.Foreground {
+		p.names = append(p.names, f.Name)
+	}
+	return p, true
+}
+
+// herdrRunsCcwt reports whether a ccwt is in the foreground of a pane, or
+// herdr can't say.
+func herdrRunsCcwt(pane string) bool {
+	p, ok := herdrProcs(pane)
+	return !ok || slices.Contains(p.names, "ccwt")
+}
+
+// restartStep is what the corner's ↻ does for one of the workspaces in its box:
+// start the tui again in the tab it belongs in — `prj` for a project's own
+// workspace under -g, `ws` for a worktree's — making that tab, first in the
+// bar, when there is none. skip says why a workspace is being left alone.
+type restartStep struct {
+	name, ws, cwd string
+	tab, pane     string // "" when the tab is to be made
+	skip          string
+}
+
+// restartTab is the tab the tui is restarted in, and the arguments it is run
+// with there.
+func restartTab(global bool) (string, []string) {
+	if global {
+		return "prj", nil
+	}
+	return "ws", []string{"ws"}
+}
+
+// restartPlan is what ↻ would do, from a fresh look at herdr, for the
+// workspaces the corner last named.
+func restartPlan() ([]restartStep, bool) {
+	wsDown.Lock()
+	firsts, global := slices.Clone(wsDown.tabs), wsDown.global
+	wsDown.Unlock()
+	label, _ := restartTab(global)
+	s, ok := herdrSnap()
+	if !ok {
+		return nil, global
+	}
+	down := map[string]bool{} // a workspace -> the corner named it, by its first tab
+	for _, t := range s.Tabs {
+		if slices.Contains(firsts, t.ID) {
+			down[t.Workspace] = true
 		}
 	}
-	return false
+	var steps []restartStep
+	for _, w := range s.Workspaces {
+		if !down[w.ID] {
+			continue
+		}
+		st := restartStep{name: w.Label, ws: w.ID, cwd: w.Worktree.Path}
+		for _, t := range s.Tabs {
+			if t.Workspace == w.ID && t.Label == label {
+				st.tab = t.ID
+				break
+			}
+		}
+		if st.tab != "" {
+			for _, p := range s.Panes {
+				if p.Tab == st.tab {
+					st.pane = p.ID
+					break
+				}
+			}
+			switch procs, ok := herdrProcs(st.pane); {
+			case st.pane == "" || !ok:
+				st.skip = "herdr can't say what its `" + label + "` tab is running"
+			case !procs.shell:
+				st.skip = "its `" + label + "` tab is running " + strings.Join(procs.names, ", ")
+			}
+		}
+		steps = append(steps, st)
+	}
+	return steps, global
+}
+
+// restartText is the plan as the confirmation pane shows it.
+func restartText(steps []restartStep, global bool) []string {
+	label, args := restartTab(global)
+	cmd := strings.Join(append([]string{"ccwt"}, args...), " ")
+	if len(steps) == 0 {
+		return []string{"Nothing to restart: herdr has none of these workspaces any more."}
+	}
+	lines := []string{"↻ starts `" + cmd + "` again in these workspaces:", ""}
+	for _, st := range steps {
+		switch {
+		case st.skip != "":
+			lines = append(lines, "  "+st.name+": left alone, "+st.skip)
+		case st.tab == "":
+			lines = append(lines, "  "+st.name+": a new `"+label+"` tab, first in the bar, running "+cmd)
+		default:
+			lines = append(lines, "  "+st.name+": "+cmd+" in its `"+label+"` tab, at the shell there")
+		}
+	}
+	if !slices.ContainsFunc(steps, func(s restartStep) bool { return s.skip == "" }) {
+		return append(lines, "", "Nothing here to do: esc to close.")
+	}
+	return append(lines, "", "y to go ahead, esc to leave them be.")
+}
+
+// restart carries the plan out, and says for the bar how it went.
+func restart(steps []restartStep, global bool) string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "restart failed: " + err.Error()
+	}
+	label, args := restartTab(global)
+	n := 0
+	for _, st := range steps {
+		if st.skip != "" {
+			continue
+		}
+		pane := st.pane
+		if st.tab == "" {
+			out, err := herdrAsk("tab.create", map[string]any{"workspace_id": st.ws, "cwd": st.cwd, "label": label, "focus": false},
+				"tab", "create", "--workspace", st.ws, "--cwd", st.cwd, "--label", label, "--no-focus")
+			var resp struct {
+				Result struct {
+					Tab struct {
+						ID string `json:"tab_id"`
+					} `json:"tab"`
+					Pane struct {
+						ID string `json:"pane_id"`
+					} `json:"root_pane"`
+				} `json:"result"`
+			}
+			if err != nil || json.Unmarshal(out, &resp) != nil || resp.Result.Pane.ID == "" {
+				return fmt.Sprintf("restart failed in %s: herdr tab create: %v", st.name, err)
+			}
+			pane = resp.Result.Pane.ID
+			// Only over the socket: the cli has no `tab move`. Best effort: a
+			// tab in the wrong place still has its tui.
+			_, _ = herdrAsk("tab.move", map[string]any{"tab_id": resp.Result.Tab.ID, "insert_index": 0}, "tab", "move", resp.Result.Tab.ID, "0")
+		}
+		if out, err := exec.Command(herdrBin(), append([]string{"pane", "run", pane, exe}, args...)...).CombinedOutput(); err != nil {
+			return "restart failed in " + st.name + ": herdr pane run: " + lastLine(out, err)
+		}
+		n++
+	}
+	return fmt.Sprintf("restarted %d of %d", n, len(steps))
 }
 
 // wsDownPane is the corner's box: the workspaces herdrWsDown named, one a line,
 // under a rule that says what they are missing. As wide as its widest line, as
 // the menu is, and as tall as rows leaves room for; nil when there is nothing
-// to say, or nowhere to say it.
+// to say, or nowhere to say it. The title ends in a ↻ to click, for starting
+// them again.
 func wsDownPane(names []string, global bool, cols, rows int) []string {
-	title := "ccwt ws not running"
+	title := "ccwt ws not running ↻"
 	if global {
-		title = "ccwt tui not running"
+		title = "ccwt tui not running ↻"
 	}
 	if len(names) == 0 || rows < 3 {
 		return nil
 	}
-	inner := len(title) + 4 // the rule either side of it
+	inner := len([]rune(title)) + 4 // the rule either side of it
 	for _, n := range names {
 		inner = max(inner, len([]rune(n))+2)
 	}
