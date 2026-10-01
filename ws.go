@@ -565,7 +565,11 @@ func (u *ui) startSeed() string {
 		u.entry = entry{}
 		return ""
 	}
-	if err := u.seed(u.entry.expanded()); err != nil {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "start failed: " + err.Error()
+	}
+	if err := seed(os.Getenv("HERDR_WORKSPACE_ID"), cwd, u.modelName, u.entry.expanded()); err != nil {
 		return "start failed: " + err.Error()
 	}
 	u.entry = entry{}
@@ -591,9 +595,9 @@ func (u *ui) askModel(k string) {
 	}
 }
 
-// seed starts an agent on prompt in a tab of its own: a tab of this workspace
-// in the directory the tui is standing in, with task_command's cli run there on
-// the prompt.
+// seed starts an agent on prompt in a tab of its own: a tab of workspace ws in
+// cwd — the ws view's own, or the one a "<new>" row has just opened — with
+// task_command's cli run there on the prompt.
 //
 // The worktree is the workspace's, not the tab's: the agents of one workspace
 // are working on one thing, and a `c` from the list has already made them a
@@ -601,25 +605,21 @@ func (u *ui) askModel(k string) {
 // would be the same name every time, and herdr names an unlabelled tab after
 // what runs in it, which is the agent saying what it is doing.
 //
-// The model is whatever ctrl-o last set, appended as a flag rather than woven
+// The model is whatever ctrl-o last set, if anything, appended as a flag rather than woven
 // into task_command: the command is the config's, the same for every agent, and
 // the model is this one's.
 //
 // The pane comes out of the create's own answer: with every tab in the one
 // directory, there is nothing else that tells the new pane from the tui's own.
-func (u *ui) seed(prompt string) error {
+func seed(ws, cwd, model, prompt string) error {
 	argv, err := taskCommand()
 	if err != nil {
 		return err
 	}
-	if u.modelName != "" {
-		argv = append(argv, "--model", shellQuote(u.modelName))
+	if model != "" {
+		argv = append(argv, "--model", shellQuote(model))
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	out, err := exec.Command(herdrBin(), "tab", "create", "--workspace", os.Getenv("HERDR_WORKSPACE_ID"),
+	out, err := exec.Command(herdrBin(), "tab", "create", "--workspace", ws,
 		"--cwd", cwd, "--no-focus").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("herdr tab create: %s", lastLine(out, err))
