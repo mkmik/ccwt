@@ -2596,7 +2596,8 @@ func TestAPromptReachesTheCommandWholeThroughAShell(t *testing.T) {
 }
 
 // Opening a "<new>" row is what finally makes its worktree: a fresh one, a
-// workspace on it, the prompt running there, and the rest of the chain now
+// workspace on it the way `c` makes one — `ccwt ws` in its first tab — the
+// prompt running in a tab of its own there, and the rest of the chain now
 // waiting on that worktree rather than on a prompt that has started.
 func TestStartingAPendingPromptMakesItsWorktree(t *testing.T) {
 	initRepo(t)
@@ -2607,13 +2608,15 @@ func TestStartingAPendingPromptMakesItsWorktree(t *testing.T) {
 	herdr := filepath.Join(dir, "herdr")
 	// A herdr that logs what it was asked and, for `pane list`, answers with a
 	// pane sitting in the worktree the `worktree open` before it named — which
-	// is the pane the prompt is meant to run in.
+	// is the pane the tui is meant to run in — and for `tab create` with the
+	// pane the prompt is.
 	script := fmt.Sprintf(`#!/bin/sh
 echo "$@" >> %[1]q
 case "$1 $2" in
 "pane list")
   p=$(sed -n 's/.*--path \([^ ]*\).*/\1/p' %[1]q | tail -1)
-  printf '{"result":{"panes":[{"pane_id":"w1:p1","cwd":"%%s"}]}}' "$p" ;;
+  printf '{"result":{"panes":[{"pane_id":"w1:p1","cwd":"%%s","workspace_id":"w1"}]}}' "$p" ;;
+"tab create") printf '{"result":{"root_pane":{"pane_id":"w1:p2"}}}' ;;
 "worktree list") printf '{"result":{"worktrees":[]}}' ;;
 "agent list")    printf '{"result":{"agents":[]}}' ;;
 esac
@@ -2656,8 +2659,18 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(calls), `pane run w1:p1 claude "$(cat `) {
-		t.Errorf("herdr calls = %q, want the cli run in the pane on the file the prompt went into", calls)
+	if !strings.Contains(string(calls), "tab create --workspace w1 --cwd ") {
+		t.Errorf("herdr calls = %q, want a tab for the agent in the new workspace", calls)
+	}
+	if !strings.Contains(string(calls), `pane run w1:p2 claude "$(cat `) {
+		t.Errorf("herdr calls = %q, want the cli run in the new tab on the file the prompt went into", calls)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(calls), "pane run w1:p1 "+exe+" ws") {
+		t.Errorf("herdr calls = %q, want `ccwt ws` run in the workspace's first pane", calls)
 	}
 	if got := seededPrompt(t, string(calls)); got != "then update Bob's docs" {
 		t.Errorf("the agent would be started on %q, want the whole prompt, apostrophe and all", got)

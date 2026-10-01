@@ -3130,20 +3130,29 @@ func (u *ui) newWorktreePath() (string, string) {
 // so the open's own message stands rather than an error: `c` got as far as `x`
 // gets.
 func (u *ui) newWorkspace() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return "new failed: " + err.Error()
-	}
 	path, msg := u.newWorktreePath()
 	if path == "" {
 		return msg
 	}
-	pane := herdrPane(path)
+	pane, _ := herdrPane(path)
 	if pane == "" {
 		return msg
 	}
+	if err := runWs(pane); err != nil {
+		return "opened, but " + err.Error()
+	}
+	return msg
+}
+
+// runWs starts `ccwt ws` in pane, the first one of a workspace that `c` or a
+// "<new>" row has just opened.
+func runWs(pane string) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
 	if out, err := exec.Command(herdrBin(), "pane", "run", pane, exe, "ws").CombinedOutput(); err != nil {
-		return "opened, but `ccwt ws` did not start: " + lastLine(out, err)
+		return errors.New("`ccwt ws` did not start: " + lastLine(out, err))
 	}
 	// "ws", since an unlabelled tab is named after what runs in it and that
 	// reads as the shell the tui happens to sit in. Best effort: a tab with the
@@ -3151,12 +3160,13 @@ func (u *ui) newWorkspace() string {
 	if tab, err := herdrPaneTab(pane); err == nil {
 		_ = exec.Command(herdrBin(), "tab", "rename", tab, "ws").Run()
 	}
-	return msg
+	return nil
 }
 
 // startPending is what opening a "<new>" row does: make the worktree its prompt
 // has been waiting for, hand it whatever was queued behind that prompt, open it
-// as a workspace, and set the prompt running there. That is the whole of what
+// as a workspace the way `c` does — `ccwt ws` in its first tab — and set the
+// prompt running in a tab of its own there, as the seed prompt would have. That is the whole of what
 // the row stood for, so the prompt itself goes — from here on the row is a
 // worktree like any other.
 //
@@ -3169,10 +3179,6 @@ func (u *ui) startPending() string {
 		return "start failed: no prompt on that row"
 	}
 	prompt := cells[4]
-	argv, err := taskCommand()
-	if err != nil {
-		return "start failed: " + err.Error()
-	}
 	root, err := u.root()
 	if err != nil {
 		return "start failed: " + err.Error()
@@ -3182,16 +3188,17 @@ func (u *ui) startPending() string {
 		return "start failed: " + err.Error()
 	}
 	msg := herdrOpen(path, filepath.Base(path))
-	pane := herdrPane(path)
+	pane, ws := herdrPane(path)
 	if pane == "" {
 		return msg // no pane to run in: whatever herdrOpen said went wrong
 	}
-	arg, err := promptArg(prompt)
-	if err != nil {
+	// The agent's tab before the tui: a `ccwt ws` that finds itself alone in
+	// the workspace opens on the seed prompt, asking for what is already running.
+	if err := seed(ws, path, "", prompt); err != nil {
 		return "start failed: " + err.Error()
 	}
-	if out, err := exec.Command(herdrBin(), append([]string{"pane", "run", pane}, append(argv, arg)...)...).CombinedOutput(); err != nil {
-		return "start failed: " + lastLine(out, err)
+	if err := runWs(pane); err != nil {
+		return "started, but " + err.Error()
 	}
 	// Last, once the prompt is actually running: a promote is a delete, and
 	// until this point every failure above is one the row survives — the "<new>"
@@ -3259,35 +3266,37 @@ func promptArg(prompt string) (string, error) {
 }
 
 // herdrPane is the pane sitting in the worktree at path, which after a
-// `worktree open` is the one it just made — where the queued prompt is to run.
-// "" when herdr hasn't got one, which is the same answer as an open that
-// failed, and is handled as one.
+// `worktree open` is the one it just made — where `ccwt ws` is to run — and the
+// workspace it is in, which is where a queued prompt's tab goes. "" when herdr
+// hasn't got one, which is the same answer as an open that failed, and is
+// handled as one.
 //
 // Retried for a second, since the pane is spawned by the open we have just
 // returned from and takes a moment to show up in the list: giving up on the
 // first look would drop the prompt on the floor on a loaded machine.
-func herdrPane(path string) string {
+func herdrPane(path string) (pane, ws string) {
 	for wait := 50 * time.Millisecond; ; wait *= 2 {
 		out, err := exec.Command(herdrBin(), "pane", "list").Output()
 		if err == nil {
 			var resp struct {
 				Result struct {
 					Panes []struct {
-						ID  string `json:"pane_id"`
-						Cwd string `json:"cwd"`
+						ID        string `json:"pane_id"`
+						Cwd       string `json:"cwd"`
+						Workspace string `json:"workspace_id"`
 					} `json:"panes"`
 				} `json:"result"`
 			}
 			if err := json.Unmarshal(out, &resp); err == nil {
 				for _, p := range resp.Result.Panes {
 					if p.Cwd == path {
-						return p.ID
+						return p.ID, p.Workspace
 					}
 				}
 			}
 		}
 		if wait > time.Second {
-			return ""
+			return "", ""
 		}
 		time.Sleep(wait)
 	}
