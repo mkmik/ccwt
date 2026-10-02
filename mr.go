@@ -238,6 +238,7 @@ type mr struct {
 	Merge      string `json:"merge_status"`
 	Detailed   string `json:"detailed_merge_status"`
 	AutoMerge  string `json:"auto_merge_strategy"`
+	MWPS       bool   `json:"merge_when_pipeline_succeeds"`
 	Title      string `json:"title"`
 	WebURL     string `json:"web_url"`
 	SquashSHA  string `json:"squash_commit_sha"`
@@ -312,6 +313,15 @@ type headPipeline struct {
 func fetchMR(host, project string, iid int) (mr, error) {
 	var m mr
 	err := glabAPI(host, fmt.Sprintf("projects/%s/merge_requests/%d", project, iid), &m)
+	// Not every gitlab says auto_merge_strategy, so a merge request set to
+	// merge whose pipeline is still going asks the train itself — it answers
+	// a 404 for one that isn't on it.
+	if err == nil && m.AutoMerge == "" && m.MWPS && m.Detailed == "ci_still_running" {
+		var car struct{ ID int }
+		if glabAPI(host, fmt.Sprintf("projects/%s/merge_trains/merge_requests/%d", project, iid), &car) == nil && car.ID != 0 {
+			m.AutoMerge = "merge_train"
+		}
+	}
 	return m, err
 }
 
