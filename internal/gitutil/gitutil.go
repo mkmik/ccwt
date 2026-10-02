@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -298,6 +299,10 @@ var haveTreeMerged = sync.OnceValue(func() bool {
 // only needed once it says no. Without the plugin we stop there, which errs
 // the safe way: a missed "merged", never a false one.
 //
+// The tree walk replays the branch onto main, so once later commits on main
+// touch the same lines it conflicts and says no. The last question is the
+// squash itself: a commit on main whose patch is the branch's whole diff.
+//
 // ponytail: one `git log` walk of main per unmerged branch, unbounded. Fine at
 // worktree-sized branch counts behind the tui's cache window; capping the walk
 // is the upgrade if a huge repo ever makes it stutter.
@@ -309,8 +314,50 @@ func Merged(dir, branch string) bool {
 		if haveTreeMerged() && git(dir, "tree-merged", branch, "--onto", ref, "-q").Run() == nil {
 			return true
 		}
+		if squashed(dir, branch, ref) {
+			return true
+		}
 	}
 	return false
+}
+
+// squashed reports whether some commit on ref since it forked from branch
+// carries branch's whole diff, by patch-id: what a squash merge leaves behind,
+// whatever main did on top of it afterwards. An edited squash reads as not
+// merged, the safe side.
+func squashed(dir, branch, ref string) bool {
+	mb, err := git(dir, "merge-base", branch, ref).Output()
+	if err != nil {
+		return false
+	}
+	base := strings.TrimSpace(string(mb))
+	diff, err := git(dir, "diff", base, branch).Output()
+	if err != nil || len(diff) == 0 {
+		return false
+	}
+	want := patchIDs(dir, diff)
+	log, err := git(dir, "log", "-p", base+".."+ref).Output()
+	if err != nil || len(want) != 1 {
+		return false
+	}
+	return slices.Contains(patchIDs(dir, log), want[0])
+}
+
+// patchIDs runs patches through `git patch-id --stable`, one id per patch.
+func patchIDs(dir string, patches []byte) []string {
+	cmd := git(dir, "patch-id", "--stable")
+	cmd.Stdin = bytes.NewReader(patches)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	var ids []string
+	for line := range strings.Lines(string(out)) {
+		if id, _, ok := strings.Cut(line, " "); ok {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 // BranchExists reports whether refs/heads/<branch> resolves.

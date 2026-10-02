@@ -375,6 +375,26 @@ func TestRemoveSquashMergedNotAncestor(t *testing.T) {
 	}
 }
 
+// TestRemoveSquashMergedThenEdited: a squash-merged PR whose lines main has
+// edited since. Replaying the branch onto main conflicts, so the tree walk
+// says no; the squash commit's patch-id still matches the branch's diff.
+func TestRemoveSquashMergedThenEdited(t *testing.T) {
+	repo := initRepo(t)
+	path := capture(t, &NewWorktreeBranchCmd{Name: "squashed", Path: true})
+	commitWork(t, path, "work")
+
+	git(t, "merge", "--squash", "worktree-squashed")
+	git(t, "commit", "-m", "squashed work (#1)")
+	commitWork(t, repo, "later work (#2)")
+
+	if err := (&RemoveCmd{Name: "squashed"}).Run(); err != nil {
+		t.Fatalf("removing a squash-merged worktree: %v", err)
+	}
+	if gitutil.BranchExists("", "worktree-squashed") {
+		t.Error("worktree removed but the branch was stranded")
+	}
+}
+
 // TestRemoveMergedUpstream: a branch merged into origin/main is removable even
 // when local main hasn't been pulled and so doesn't contain it yet.
 func TestRemoveMergedUpstream(t *testing.T) {
