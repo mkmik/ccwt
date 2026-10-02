@@ -83,13 +83,13 @@ esac
 	}
 
 	bar := keyBar(200, "", "", wsActions(rows[0], false))
-	for _, key := range []string{"n:agent", "space:go", "g:git"} {
+	for _, key := range []string{"c:agent", "space:go", "g:git"} {
 		if !strings.Contains(bar, key) {
 			t.Errorf("bar on a tab = %q, want %s on it", bar, key)
 		}
 	}
-	if bar := keyBar(200, "", "", wsActions(rows[1], true)); !strings.Contains(bar, "n:next") || strings.Contains(bar, "n:agent") {
-		t.Errorf("bar with a pattern in force = %q, want n:next and no n:agent", bar)
+	if bar := keyBar(200, "", "", wsActions(rows[1], true)); !strings.Contains(bar, "n:next") || !strings.Contains(bar, "c:agent") {
+		t.Errorf("bar with a pattern in force = %q, want n:next and c:agent", bar)
 	}
 	if bar := keyBar(200, "", "", wsActions(listRow{}, false)); strings.Contains(bar, "space:go") {
 		t.Errorf("bar with nothing selected = %q, want nothing to go to", bar)

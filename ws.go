@@ -483,17 +483,16 @@ func wsDot(status string) string {
 	return "·" // "unknown": a shell, or a tab with nothing in it yet
 }
 
-// wsActions is what the keys do in the ws view. `n` is the seed prompt — a new
-// agent in a tab of its own — unless a search is in force, where it is vim's
-// next match as it is on the list; a tab is somewhere to go, and `g` shows the
+// wsActions is what the keys do in the ws view. `c` is the seed prompt — a new
+// agent in a tab of its own — and `n` is vim's next match while a search is in
+// force, as it is on the list; a tab is somewhere to go, and `g` shows the
 // history of the worktree it sits in.
 func wsActions(sel listRow, searching bool) []action {
 	as := []action{{"q", "quit"}, {"/", "search"}}
 	if searching {
 		as = append(as, action{"n", "next"}, action{"N", "prev"})
-	} else {
-		as = append(as, action{"n", "agent"})
 	}
+	as = append(as, action{"c", "agent"})
 	if sel.tab != "" {
 		as = append(as, action{" ", "go"}, action{"g", "git"})
 	}
