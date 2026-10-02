@@ -26,7 +26,7 @@ type Config struct {
 	// are named here. Unset (or empty) means all of them.
 	Columns []string `toml:"columns"`
 	// TaskCommand is the agent cli: what a queued prompt is handed to when its
-	// worktree is made — the new pane runs `<task_command> "<the prompt>"` —
+	// worktree is made — the new pane runs `<task_command> -- "<the prompt>"` —
 	// and what the tui's `c` runs on its own, with no prompt to hand it.
 	TaskCommand string `toml:"task_command"`
 	// Sort is the order `list` and `tui` put the worktrees in; see sortOrders.

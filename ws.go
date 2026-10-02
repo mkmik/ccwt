@@ -641,7 +641,9 @@ func seed(ws, cwd, model, prompt string) error {
 	if err != nil {
 		return err
 	}
-	if out, err := exec.Command(herdrBin(), append([]string{"pane", "run", pane}, append(argv, arg)...)...).CombinedOutput(); err != nil {
+	// `--` before it, or a prompt that opens on a dash — a list pasted in, say
+	// — is read by the cli as an option it doesn't know.
+	if out, err := exec.Command(herdrBin(), append([]string{"pane", "run", pane}, append(argv, "--", arg)...)...).CombinedOutput(); err != nil {
 		return fmt.Errorf("herdr pane run: %s", lastLine(out, err))
 	}
 	return nil

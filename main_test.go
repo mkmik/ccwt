@@ -2682,7 +2682,7 @@ esac
 	if !strings.Contains(string(calls), "tab create --workspace w1 --cwd ") {
 		t.Errorf("herdr calls = %q, want a tab for the agent in the new workspace", calls)
 	}
-	if !strings.Contains(string(calls), `pane run w1:p2 claude "$(cat `) {
+	if !strings.Contains(string(calls), `pane run w1:p2 claude -- "$(cat `) {
 		t.Errorf("herdr calls = %q, want the cli run in the new tab on the file the prompt went into", calls)
 	}
 	exe, err := os.Executable()
