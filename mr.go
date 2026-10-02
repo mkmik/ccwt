@@ -150,9 +150,13 @@ func lookThing(thing string, askEnvs bool) ([]mrRow, error) {
 		// together: the url already says which project, and neither answer
 		// is any use without the other.
 		var envs []env
+		var open []int
 		var wg sync.WaitGroup
 		wg.Go(func() {
 			envs = environments(host, project, askEnvs)
+		})
+		wg.Go(func() {
+			open = openThreads(host, project, iid)
 		})
 		got, err := fetchMR(host, project, iid)
 		wg.Wait()
@@ -161,7 +165,7 @@ func lookThing(thing string, askEnvs bool) ([]mrRow, error) {
 		}
 		// One of these two asks anything: a merge request that has landed
 		// reports no pipeline, and one that hasn't is running nowhere.
-		return []mrRow{got.row(pipelineNote(host, got), deployedTo(host, project, got, envs, askEnvs))}, nil
+		return []mrRow{got.row(pipelineNote(host, got), open, deployedTo(host, project, got, envs, askEnvs))}, nil
 	}
 	if m := prURL.FindStringSubmatch(thing); m != nil {
 		return lookPR(m[1], m[2], m[0], askEnvs)
@@ -219,9 +223,10 @@ func branchMR() (string, error) {
 // table of one row: the columns are what the answer is, and a lone answer
 // laid out differently is one more shape to read.
 //
-// The url isn't a column — it's what the ref column links to.
+// The url isn't a column — it's what the ref column links to, as commentsURL,
+// the first of the open threads, is what COMMENTS links to.
 type mrRow struct {
-	ref, url, title, status, pipeline, env string
+	ref, url, title, status, pipeline, comments, commentsURL, env string
 }
 
 // mr is what the api says about a merge request, cut down to what the row
@@ -243,17 +248,29 @@ type mr struct {
 	Pipeline *headPipeline `json:"head_pipeline"`
 }
 
-// row is the merge request as the table shows it, bar the two columns that
-// are answers to further questions: what its pipeline did, and what is
-// running its commit.
-func (m mr) row(pipeline, env string) mrRow {
+// row is the merge request as the table shows it, bar the three columns that
+// are answers to further questions: what its pipeline did, which of its
+// threads are still open (see openThreads), and what is running its commit.
+//
+// One that is in or dropped has no open threads to speak of, as it has no
+// pipeline: whatever was left hanging on it is history too.
+func (m mr) row(pipeline string, open []int, env string) mrRow {
+	if settled(m) {
+		open = nil
+	}
+	note := ""
+	if len(open) > 0 {
+		note = fmt.Sprintf("%s#note_%d", m.WebURL, open[0])
+	}
 	return mrRow{
-		ref:      shortRef(cmp.Or(m.References.Full, fmt.Sprintf("!%d", m.IID))),
-		url:      m.WebURL,
-		title:    m.Title,
-		status:   mrStatus(m),
-		pipeline: pipeline,
-		env:      env,
+		ref:         shortRef(cmp.Or(m.References.Full, fmt.Sprintf("!%d", m.IID))),
+		url:         m.WebURL,
+		title:       m.Title,
+		status:      mrStatus(m),
+		pipeline:    pipeline,
+		comments:    openNote(len(open)),
+		commentsURL: note,
+		env:         env,
 	}
 }
 
@@ -353,7 +370,11 @@ func ticketMRs(key string, askEnvs bool) ([]mrRow, error) {
 	for i, m := range full {
 		wg.Go(func() {
 			project := strconv.Itoa(hits[i].ProjectID)
-			rows[i] = m.row(pipelineNote("", m), deployedTo("", project, m, envs[slices.Index(projects, hits[i].ProjectID)], askEnvs))
+			var open []int
+			if !settled(m) {
+				open = openThreads("", project, m.IID)
+			}
+			rows[i] = m.row(pipelineNote("", m), open, deployedTo("", project, m, envs[slices.Index(projects, hits[i].ProjectID)], askEnvs))
 		})
 	}
 	wg.Wait()
@@ -533,6 +554,49 @@ func pipelineNote(host string, m mr) string {
 	}
 }
 
+// openThreads is a merge request's threads that are waiting on an answer —
+// the resolvable ones nobody has resolved — oldest first, as the first note
+// of each, which is what a link to the thread points at. gitlab's own
+// "discussions_not_resolved" says the same only when the project makes it a
+// rule, and only once every check ahead of it has passed — so a merge request
+// still waiting on approval shows nothing of the comments waiting on you.
+//
+// A lookup that fails is none, as failedJobs's is: nobody asked about threads
+// on their own, and an error on the row for them would hide the rest of it.
+//
+// ponytail: the first hundred threads. A review longer than that undercounts;
+// follow the pages when one does.
+func openThreads(host, project string, iid int) []int {
+	var threads []struct {
+		Notes []struct {
+			ID         int  `json:"id"`
+			Resolvable bool `json:"resolvable"`
+			Resolved   bool `json:"resolved"`
+		} `json:"notes"`
+	}
+	path := fmt.Sprintf("projects/%s/merge_requests/%d/discussions?per_page=100", project, iid)
+	if err := glabAPI(host, path, &threads); err != nil {
+		return nil
+	}
+	var open []int
+	for _, t := range threads {
+		// A thread is resolved as a whole, so its first note speaks for it.
+		if len(t.Notes) > 0 && t.Notes[0].Resolvable && !t.Notes[0].Resolved {
+			open = append(open, t.Notes[0].ID)
+		}
+	}
+	return open
+}
+
+// openNote is the COMMENTS cell for that many open threads: nothing at all
+// for none.
+func openNote(open int) string {
+	if open == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d open", open)
+}
+
 // shownJobs is how many failures a line names before giving up and saying
 // there are more: a pipeline that breaks early fails dozens of jobs, and the
 // answer has to stay one line.
@@ -594,6 +658,7 @@ func mrTable(subject string, rows []mrRow, width int) []string {
 	fitTable(table, width, cols)
 	lines := tabbed(table)
 	paintMerged(lines, table, rows)
+	linkComments(lines, table, rows)
 	linkRefs(lines, table, rows)
 	return lines
 }
@@ -647,6 +712,27 @@ func linkRefs(lines []string, table [][]string, rows []mrRow) {
 	}
 }
 
+// linkComments makes the COMMENTS cell of each row the link to its first open
+// thread, the one to go and answer, put on as linkRefs's is and for the same
+// reason. The cell is found as paintMerged finds STATUS, as the first "n open"
+// past the ref — nothing between the two says that — and a row whose column
+// was cut away is left alone. It runs before linkRefs, which needs the ref
+// where the table put it.
+func linkComments(lines []string, table [][]string, rows []mrRow) {
+	for i, r := range rows {
+		if r.commentsURL == "" {
+			continue
+		}
+		ref := table[i+1][0]
+		j := strings.Index(lines[i+1][len(ref):], r.comments)
+		if j < 0 {
+			continue
+		}
+		j += len(ref)
+		lines[i+1] = lines[i+1][:j] + hyperlink(r.commentsURL, r.comments) + lines[i+1][j+len(r.comments):]
+	}
+}
+
 // mrCells is the merge requests as a table: the header and a row each, and
 // alongside it how wide each column may get and how it is to be shortened when
 // it can't have that. The ws view lays the same cells out in its first section
@@ -659,24 +745,29 @@ func mrCells(rows []mrRow) ([][]string, []column) {
 		{name: "MR", cut: elide, max: 44},
 		{name: "STATUS"},
 		{name: "PIPELINE", cut: truncate, pipe: 60}, // room for the failed jobs, which jobsNote has already bounded
+		{name: "COMMENTS"},
 		{name: "ENV", cut: truncate, max: 30},
 		{name: "TITLE", cut: truncate, pipe: 50},
 	}
-	table := [][]string{{"MR", "STATUS", "PIPELINE", "ENV", "TITLE"}}
+	table := [][]string{{"MR", "STATUS", "PIPELINE", "COMMENTS", "ENV", "TITLE"}}
 	for _, r := range rows {
-		table = append(table, []string{r.ref, r.status, r.pipeline, r.env, r.title})
+		table = append(table, []string{r.ref, r.status, r.pipeline, r.comments, r.env, r.title})
 	}
 	// Merge requests that are all in already have nothing to put under
-	// PIPELINE, and a column of blanks under a header is just the header, so
-	// it goes — as PROJECT does when the worklog is one project's.
+	// PIPELINE, and a review with nothing left open nothing under COMMENTS;
+	// a column of blanks under a header is just the header, so it goes — as
+	// PROJECT does when the worklog is one project's. Right to left, so the
+	// one going doesn't move the other.
 	//
 	// ENV stays whether anything fills it or not: a project that deploys
 	// nowhere is a thing to see rather than a column to hide.
-	const pipelineCol = 2
-	if !slices.ContainsFunc(rows, func(r mrRow) bool { return r.pipeline != "" }) {
-		cols = slices.Delete(cols, pipelineCol, pipelineCol+1)
+	for _, col := range []int{3, 2} {
+		if slices.ContainsFunc(table[1:], func(row []string) bool { return row[col] != "" }) {
+			continue
+		}
+		cols = slices.Delete(cols, col, col+1)
 		for i, row := range table {
-			table[i] = slices.Delete(row, pipelineCol, pipelineCol+1)
+			table[i] = slices.Delete(row, col, col+1)
 		}
 	}
 	return table, cols
@@ -703,6 +794,13 @@ func mrMarkdown(table [][]string, rows []mrRow) []string {
 		// run one behind it — and one with no url is left as its own text.
 		if i > 0 && rows[i-1].url != "" {
 			cells[0] = "[" + cells[0] + "](" + rows[i-1].url + ")"
+		}
+		// COMMENTS links to the first open thread, as on a terminal. Found by
+		// its text, since the column may have gone, and it is "" when it has.
+		if i > 0 && rows[i-1].commentsURL != "" {
+			if j := slices.Index(row, rows[i-1].comments); j > 0 {
+				cells[j] = "[" + cells[j] + "](" + rows[i-1].commentsURL + ")"
+			}
 		}
 		lines = append(lines, "| "+strings.Join(cells, " | ")+" |")
 		if i == 0 {

@@ -48,6 +48,7 @@ func onGitHub(host string) bool {
 const prFields = `
 fragment pr on PullRequest {
 	number title url state isDraft isInMergeQueue mergeStateStatus reviewDecision
+	reviewThreads(first: 100) { nodes { isResolved comments(first: 1) { nodes { url } } } }
 	mergeCommit { oid }
 	repository { nameWithOwner }
 	commits(last: 1) { nodes { commit { statusCheckRollup {
@@ -69,7 +70,17 @@ type pr struct {
 	InMergeQueue bool   `json:"isInMergeQueue"`
 	MergeState   string `json:"mergeStateStatus"`
 	Review       string `json:"reviewDecision"`
-	MergeCommit  struct {
+	Threads      struct {
+		Nodes []struct {
+			Resolved bool `json:"isResolved"`
+			Comments struct {
+				Nodes []struct {
+					URL string `json:"url"`
+				} `json:"nodes"`
+			} `json:"comments"`
+		} `json:"nodes"`
+	} `json:"reviewThreads"`
+	MergeCommit struct {
 		OID string `json:"oid"`
 	} `json:"mergeCommit"`
 	Repository struct {
@@ -97,13 +108,16 @@ type pr struct {
 // question of its own (see prDeployedTo). The ref is github's own spelling of
 // one, which has no middle to take out.
 func (p pr) row(env string) mrRow {
+	open := prOpenThreads(p)
 	return mrRow{
-		ref:      fmt.Sprintf("%s#%d", p.Repository.Name, p.Number),
-		url:      p.URL,
-		title:    p.Title,
-		status:   prStatus(p),
-		pipeline: prChecks(p),
-		env:      env,
+		comments:    openNote(len(open)),
+		commentsURL: cmp.Or(append(open, "")...),
+		ref:         fmt.Sprintf("%s#%d", p.Repository.Name, p.Number),
+		url:         p.URL,
+		title:       p.Title,
+		status:      prStatus(p),
+		pipeline:    prChecks(p),
+		env:         env,
 	}
 }
 
@@ -159,6 +173,26 @@ func prChecks(p pr) string {
 		}
 	}
 	return "failed" + jobsNote(failed)
+}
+
+// prOpenThreads is openThreads for a pull request: its review threads nobody
+// has resolved, the first hundred of them as a merge request's are, as the url
+// of each one's first comment. One that is in or dropped has none to speak of.
+func prOpenThreads(p pr) []string {
+	if p.State != "OPEN" {
+		return nil
+	}
+	var open []string
+	for _, t := range p.Threads.Nodes {
+		if !t.Resolved {
+			url := ""
+			if len(t.Comments.Nodes) > 0 {
+				url = t.Comments.Nodes[0].URL
+			}
+			open = append(open, url)
+		}
+	}
+	return open
 }
 
 // lookPR is lookThing for a pull request url: the pull request, and what its
