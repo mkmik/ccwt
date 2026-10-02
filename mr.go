@@ -194,7 +194,7 @@ func lookThing(thing string, askEnvs bool) ([]mrRow, error) {
 // source_project_id when someone works that way.
 func branchMR() (string, error) {
 	origin := gitLine(".", "remote", "get-url", "origin")
-	branch := gitLine(".", "rev-parse", "--abbrev-ref", "HEAD")
+	branch := checkedOutBranch(".")
 	project := urlPath(origin)
 	if project == "" || branch == "" {
 		return "", errors.New("no merge request for this branch: no origin remote or no branch here")
@@ -217,6 +217,24 @@ func branchMR() (string, error) {
 		return "", errors.New("no merge request for this branch")
 	}
 	return hits[0].WebURL, nil
+}
+
+// checkedOutBranch is dir's branch, and still the branch while a rebase has
+// HEAD detached: rev-parse says "HEAD" then, and the branch being rebased is
+// only written down in the rebase's head-name. Asked for a branch called
+// HEAD, the forge says there is no review for it.
+func checkedOutBranch(dir string) string {
+	branch := gitLine(dir, "rev-parse", "--abbrev-ref", "HEAD")
+	if branch != "HEAD" {
+		return branch
+	}
+	for _, f := range []string{"rebase-merge/head-name", "rebase-apply/head-name"} {
+		path := gitLine(dir, "rev-parse", "--path-format=absolute", "--git-path", f)
+		if b, err := os.ReadFile(path); err == nil && path != "" {
+			return strings.TrimPrefix(strings.TrimSpace(string(b)), "refs/heads/")
+		}
+	}
+	return ""
 }
 
 // mrRow is one merge request as the table shows it. One merge request is a
