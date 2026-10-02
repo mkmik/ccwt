@@ -622,7 +622,7 @@ esac
 	if want := "tab create --workspace w1 --cwd " + cwd + " --no-focus"; !strings.Contains(string(calls), want) {
 		t.Errorf("herdr calls = %q, want %q — a tab of w1 here, unlabelled", calls, want)
 	}
-	if !strings.Contains(string(calls), `pane run w1:p2 claude "$(cat `) {
+	if !strings.Contains(string(calls), `pane run w1:p2 claude -- "$(cat `) {
 		t.Errorf("herdr calls = %q, want the cli run in the pane the create named, on the file the prompt went into", calls)
 	}
 	if got := seededPrompt(t, string(calls)); got != "fix Bob's bug" {
@@ -793,7 +793,7 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `pane run w1:p2 claude --model 'claude-opus-5' "$(cat `; !strings.Contains(string(calls), want) {
+	if want := `pane run w1:p2 claude --model 'claude-opus-5' -- "$(cat `; !strings.Contains(string(calls), want) {
 		t.Errorf("herdr calls = %q, want %q — the model as a flag, the prompt still the last word", calls, want)
 	}
 
@@ -809,7 +809,7 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(calls), `pane run w1:p2 claude "$(cat `) {
+	if !strings.Contains(string(calls), `pane run w1:p2 claude -- "$(cat `) {
 		t.Errorf("herdr calls = %q, want no --model once the box was emptied", calls)
 	}
 	if got := seededPrompt(t, string(calls)); got != "and the docs" {
