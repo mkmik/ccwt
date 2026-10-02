@@ -217,6 +217,27 @@ func TestMrSpinnerIsQuietOffATerminal(t *testing.T) {
 	spin()() // it hangs or it doesn't
 }
 
+// COMMENTS counts the threads still open on a review that is still going, and
+// links to the oldest of them; one that is in has nothing left to answer,
+// whatever was left hanging on it.
+func TestMrCommentsCountsOpenThreads(t *testing.T) {
+	const web = "https://gl/acme/api/-/merge_requests/7"
+	for _, tc := range []struct {
+		state     string
+		open      []int
+		want, url string
+	}{
+		{"opened", []int{11, 12}, "2 open", web + "#note_11"},
+		{"opened", nil, "", ""},
+		{"merged", []int{11, 12}, "", ""},
+	} {
+		got := mr{State: tc.state, WebURL: web}.row("", tc.open, "")
+		if got.comments != tc.want || got.commentsURL != tc.url {
+			t.Errorf("row(%q, %v) comments = %q at %q, want %q at %q", tc.state, tc.open, got.comments, got.commentsURL, tc.want, tc.url)
+		}
+	}
+}
+
 // A row says where the merge request stands and what its pipeline did. The
 // standing is gitlab's own mergeability check put into the words you'd use
 // about it, and a status we have no word for comes through as gitlab spells
@@ -314,6 +335,11 @@ func TestPrRowIsReadOffTheApi(t *testing.T) {
 		"state": "OPEN", "isDraft": false, "isInMergeQueue": false,
 		"mergeStateStatus": "BLOCKED", "reviewDecision": "REVIEW_REQUIRED",
 		"mergeCommit": null, "repository": {"nameWithOwner": "acme/api"},
+		"reviewThreads": {"nodes": [
+			{"isResolved": true, "comments": {"nodes": [{"url": "https://github.com/acme/api/pull/42#discussion_r1"}]}},
+			{"isResolved": false, "comments": {"nodes": [{"url": "https://github.com/acme/api/pull/42#discussion_r2"}]}},
+			{"isResolved": false, "comments": {"nodes": [{"url": "https://github.com/acme/api/pull/42#discussion_r3"}]}}
+		]},
 		"commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "FAILURE", "contexts": {"nodes": [
 			{"name": "lint", "conclusion": "FAILURE"},
 			{"name": "unit", "conclusion": "SUCCESS"},
@@ -326,12 +352,15 @@ func TestPrRowIsReadOffTheApi(t *testing.T) {
 	if err := json.Unmarshal([]byte(answer), &p); err != nil {
 		t.Fatal(err)
 	}
-	want := mrRow{ref: "acme/api#42", url: "https://github.com/acme/api/pull/42", title: "a widget", status: "needs approval", pipeline: "failed: lint, ci/jenkins", env: "prod"}
+	want := mrRow{ref: "acme/api#42", url: "https://github.com/acme/api/pull/42", title: "a widget", status: "needs approval", pipeline: "failed: lint, ci/jenkins", comments: "2 open", commentsURL: "https://github.com/acme/api/pull/42#discussion_r2", env: "prod"}
 	if got := p.row("prod"); got != want {
 		t.Errorf("row = %+v, want %+v", got, want)
 	}
 
 	p.State = "MERGED"
+	if got := prOpenThreads(p); got != nil {
+		t.Errorf("prOpenThreads(merged) = %q, want nothing to say", got)
+	}
 	if got := prChecks(p); got != "" {
 		t.Errorf("prChecks(merged) = %q, want nothing to say", got)
 	}
@@ -350,7 +379,7 @@ func TestMrTableIsARowPerMergeRequest(t *testing.T) {
 	stdoutIsTTY = func() bool { return true } // the columns table; markdown has its own test
 	rows := []mrRow{
 		{ref: "acme/tools/backend/api!2596", url: "https://gitlab.example.com/acme/tools/backend/api/-/merge_requests/2596", title: "add a widget to the dashboard", status: "merged"},
-		{ref: "acme/tools/backend/api!2670", title: "fix the flux capacitor", status: "needs approval", pipeline: "failed: e2e", env: "staging, production"},
+		{ref: "acme/tools/backend/api!2670", title: "fix the flux capacitor", status: "needs approval", pipeline: "failed: e2e", comments: "3 open", env: "staging, production"},
 	}
 	lines := mrTable("PROJ-1234", rows, 0)
 	if len(lines) != 3 || !strings.HasPrefix(lines[0], "MR") || !strings.Contains(lines[0], "PIPELINE") {
@@ -365,7 +394,7 @@ func TestMrTableIsARowPerMergeRequest(t *testing.T) {
 			t.Errorf("line %d = %q, want %q on it", i+1, lines[i+1], want)
 		}
 	}
-	if !strings.Contains(lines[2], "needs approval") || !strings.Contains(lines[2], "failed: e2e") {
+	if !strings.Contains(lines[2], "needs approval") || !strings.Contains(lines[2], "failed: e2e") || !strings.Contains(lines[2], "3 open") {
 		t.Errorf("line 2 = %q, want the status and the failing job on it", lines[2])
 	}
 	if !strings.Contains(lines[0], "ENV") || !strings.Contains(lines[2], "staging, production") {
@@ -377,7 +406,7 @@ func TestMrTableIsARowPerMergeRequest(t *testing.T) {
 
 	// One merge request is a table of one row — the same shape, not a second
 	// one to read. Being in already, it has no PIPELINE to report and that
-	// column goes; ENV stays, empty, because deploying nowhere is worth
+	// column goes, as does COMMENTS with nothing open; ENV stays, empty, because deploying nowhere is worth
 	// seeing.
 	lines = mrTable("PROJ-1234", []mrRow{{ref: "api!2596", title: "a widget", status: "merged"}}, 0)
 	if len(lines) != 2 || !strings.HasPrefix(lines[0], "MR") || !strings.Contains(lines[1], "merged") {
@@ -396,8 +425,15 @@ func TestMrTableLinksTheMergeRequest(t *testing.T) {
 	rows := []mrRow{
 		{ref: "api!2596", url: "https://gitlab.example.com/acme/tools/backend/api/-/merge_requests/2596", title: "a widget", status: "merged"},
 		{ref: "deploy!280", title: "a fix", status: "merged"}, // no url: nothing to link to
+		{ref: "api!2597", title: "1 open bug", status: "needs approval", comments: "1 open", commentsURL: "https://gitlab.example.com/x#note_5"},
 	}
 	linked := mrTable("PROJ-9", rows, 0)
+
+	// COMMENTS links to the first open thread, and the title saying the
+	// same words doesn't get a link of its own.
+	if want := "\x1b]8;;" + rows[2].commentsURL + "\x1b\\1 open\x1b]8;;\x1b\\"; strings.Count(linked[3], want) != 1 || strings.Count(linked[3], "\x1b]8;;\x1b") != 1 {
+		t.Errorf("line 3 = %q, want the one link %q on it", linked[3], want)
+	}
 
 	if want := "\x1b]8;;" + rows[0].url + "\x1b\\api!2596\x1b]8;;\x1b\\"; !strings.HasPrefix(linked[1], want) {
 		t.Errorf("line 1 = %q, want it to start with the link %q", linked[1], want)
@@ -408,9 +444,9 @@ func TestMrTableLinksTheMergeRequest(t *testing.T) {
 	// Taking the sequences back out gives exactly the table of the same rows
 	// with nothing to link to, so the link cost the layout nothing.
 	bare := slices.Clone(rows)
-	bare[0].url = ""
+	bare[0].url, bare[2].commentsURL = "", ""
 	plain := mrTable("PROJ-9", bare, 0)
-	strip := strings.NewReplacer("\x1b]8;;"+rows[0].url+"\x1b\\", "", "\x1b]8;;\x1b\\", "")
+	strip := strings.NewReplacer("\x1b]8;;"+rows[0].url+"\x1b\\", "", "\x1b]8;;"+rows[2].commentsURL+"\x1b\\", "", "\x1b]8;;\x1b\\", "")
 	for i := range linked {
 		if got := strip.Replace(linked[i]); got != plain[i] {
 			t.Errorf("line %d = %q with links, %q without: the link took up room", i, got, plain[i])
@@ -456,14 +492,14 @@ func TestMrTableIsMarkdownOffATerminal(t *testing.T) {
 	const long = "fix the flux capacitor, which had been running backwards since the rewrite"
 	rows := []mrRow{
 		{ref: "acme/…/api!2596", url: "https://gitlab.example.com/acme/tools/backend/api/-/merge_requests/2596", title: "add a | to the table", status: "merged", env: "prod"},
-		{ref: "acme/…/deploy!280", title: long, status: "needs approval", pipeline: "failed: e2e"},
+		{ref: "acme/…/deploy!280", title: long, status: "needs approval", pipeline: "failed: e2e", comments: "1 open", commentsURL: "https://gitlab.example.com/x#note_5"},
 	}
 
 	want := []string{
-		"| MR | STATUS | PIPELINE | ENV | TITLE |",
-		"| --- | --- | --- | --- | --- |",
-		`| [acme/…/api!2596](` + rows[0].url + `) | merged |  | prod | add a \| to the table |`,
-		"| acme/…/deploy!280 | needs approval | failed: e2e |  | " + long + " |",
+		"| MR | STATUS | PIPELINE | COMMENTS | ENV | TITLE |",
+		"| --- | --- | --- | --- | --- | --- |",
+		`| [acme/…/api!2596](` + rows[0].url + `) | merged |  |  | prod | add a \| to the table |`,
+		"| acme/…/deploy!280 | needs approval | failed: e2e | [1 open](" + rows[1].commentsURL + ") |  | " + long + " |",
 	}
 	if got := mrTable("PROJ-1234", rows, 0); !slices.Equal(got, want) {
 		t.Errorf("markdown mrTable =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
