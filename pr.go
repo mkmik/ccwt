@@ -136,7 +136,15 @@ func prStatus(p pr) string {
 		return "draft"
 	}
 	switch p.MergeState {
-	case "CLEAN", "HAS_HOOKS", "UNSTABLE": // unstable: failing checks nobody requires, which PIPELINE says
+	case "UNSTABLE":
+		// Checks nobody requires that haven't passed: failed ones, which
+		// PIPELINE names, or ones still going — and a merge then would beat
+		// them to it, so it says what gitlab says while its pipeline runs.
+		if prChecks(p) == "running" {
+			return "ci still running"
+		}
+		return "can be merged"
+	case "CLEAN", "HAS_HOOKS":
 		return "can be merged"
 	case "DIRTY":
 		return "conflict"
