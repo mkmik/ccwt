@@ -543,3 +543,21 @@ last_seen_version: v1.118.0
 		t.Errorf("configToken of no config = %q, want nothing", got)
 	}
 }
+
+// A rebase that stops on a conflict leaves HEAD detached, and rev-parse calls
+// the branch "HEAD" then. The pull request is still the branch's.
+func TestCheckedOutBranchMidRebase(t *testing.T) {
+	repo := initRepo(t)
+	git(t, "checkout", "-q", "-b", "feature")
+	os.WriteFile("f", []byte("feature\n"), 0o644)
+	git(t, "add", "f")
+	git(t, "commit", "-q", "-m", "feature")
+	git(t, "checkout", "-q", "main")
+	os.WriteFile("f", []byte("main\n"), 0o644)
+	git(t, "add", "f")
+	git(t, "commit", "-q", "-m", "main")
+	exec.Command("git", "rebase", "main", "feature").Run() // conflicts, and stops
+	if got := checkedOutBranch(repo); got != "feature" {
+		t.Errorf("checkedOutBranch() mid-rebase = %q, want %q", got, "feature")
+	}
+}
