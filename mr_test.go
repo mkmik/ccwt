@@ -302,6 +302,12 @@ func TestMrStatusSaysWhatBlocksTheMerge(t *testing.T) {
 // that is somebody else's to give — is picked out of it by name, and the rest
 // comes through as github spells it.
 func TestPrStatusSaysWhatBlocksTheMerge(t *testing.T) {
+	// Checks still going that nobody requires: github calls it unstable, and
+	// mergeable, but it would merge ahead of them.
+	var running pr
+	if err := json.Unmarshal([]byte(`{"state": "OPEN", "mergeStateStatus": "UNSTABLE", "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "PENDING"}}}]}}`), &running); err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		p    pr
 		want string
@@ -310,6 +316,7 @@ func TestPrStatusSaysWhatBlocksTheMerge(t *testing.T) {
 		{pr{State: "CLOSED", MergeState: "DIRTY"}, "closed"},
 		{pr{State: "OPEN", MergeState: "CLEAN"}, "can be merged"},
 		{pr{State: "OPEN", MergeState: "UNSTABLE"}, "can be merged"}, // failing checks nobody requires
+		{running, "ci still running"},
 		{pr{State: "OPEN", MergeState: "DIRTY"}, "conflict"},
 		{pr{State: "OPEN", MergeState: "BLOCKED", Review: "REVIEW_REQUIRED"}, "needs approval"},
 		{pr{State: "OPEN", MergeState: "BLOCKED", Review: "CHANGES_REQUESTED"}, "changes requested"},
