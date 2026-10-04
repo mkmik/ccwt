@@ -817,6 +817,53 @@ esac
 	}
 }
 
+// The seed prompt opens on its title line, and tab goes on down to the prompt.
+// The title names the session — the cli's --name — and the pane it runs in.
+func TestWsSeedTitleNamesTheSessionAndPane(t *testing.T) {
+	initRepo(t)
+	dir := t.TempDir()
+	log := filepath.Join(dir, "calls")
+	herdr := filepath.Join(dir, "herdr")
+	script := fmt.Sprintf(`#!/bin/sh
+echo "$@" >> %[1]q
+case "$1 $2" in
+"tab create") printf '%%s' '{"result":{"root_pane":{"pane_id":"w1:p2"}}}' ;;
+esac
+`, log)
+	if err := os.WriteFile(herdr, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_BIN_PATH", herdr)
+	t.Setenv("HERDR_WORKSPACE_ID", "w1")
+	t.Setenv("TMPDIR", dir)
+
+	u := ui{ws: true, entry: newEntry(listRow{}, "", 0), title: newEntry(listRow{}, "", 0)}
+	for k := range strings.SplitSeq("bob's bug", "") {
+		u.askTitle(k)
+	}
+	u.askTitle("\t")
+	if u.title.open || u.title.text != "bob's bug" {
+		t.Fatalf("after tab: title open %v, text %q; want the prompt taking the keys", u.title.open, u.title.text)
+	}
+	if pane := strings.Join(u.seedPane(80, 20), "\n"); !strings.Contains(pane, "─ title ") || !strings.Contains(pane, "bob's bug") {
+		t.Errorf("seed pane = %q, want the title box over the prompt", pane)
+	}
+	u.queue("f")
+	if msg := u.startSeed(); msg != "started" {
+		t.Fatalf("startSeed: %s", msg)
+	}
+	calls, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"pane rename w1:p2 bob's bug", `pane run w1:p2 claude --name 'bob'\''s bug' -- "$(cat `} {
+		if !strings.Contains(string(calls), want) {
+			t.Errorf("herdr calls = %q, want %q", calls, want)
+		}
+	}
+}
+
 // The workspace wears the list's own marks: a "✓" once the merge request
 // is in, the "☐" of work pushed and waiting on a reviewer until then, and
 // nothing at all where there is nothing to wait on — a merge request nobody

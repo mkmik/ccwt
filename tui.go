@@ -272,6 +272,12 @@ func (c *TuiCmd) Run() error {
 				u.model = newEntry(listRow{}, u.modelName, 0)
 			case u.entry.open && k == "\x07": // Ctrl-G: finish the prompt in $EDITOR
 				external()
+			// The seed prompt opens on its title line; ↵ or tab go on down to the
+			// prompt, and shift-tab comes back up.
+			case u.entry.open && u.ws && u.title.open:
+				u.askTitle(k)
+			case u.entry.open && u.ws && k == "\x1b[Z":
+				u.title.open = true
 			// The seed prompt starts its agent rather than queueing: a worktree,
 			// a tab and a herdr round trip, so through act, which says so while
 			// it happens.
@@ -436,7 +442,7 @@ func (c *TuiCmd) Run() error {
 			// typed there starts an agent in a tab of its own rather than
 			// waiting on anything.
 			case k == "n" && u.query == "" && u.ws:
-				u.entry = newEntry(listRow{}, "", 0)
+				u.entry, u.title = newEntry(listRow{}, "", 0), newEntry(listRow{}, "", 0)
 			case k == "n" && u.query == "":
 				if parent, err := u.queueParent(); err != nil {
 					u.msg = "queue: " + err.Error()
@@ -650,6 +656,11 @@ type ui struct {
 	// the name already in force — esc has to be able to put it back.
 	model     entry
 	modelName string
+
+	// The seed prompt's title line: what the agent's session and its pane are
+	// named. Open while it is the line taking the keys; its text outlives that,
+	// for the start to read.
+	title entry
 
 	// The directory the ws view is asking whether Claude Code may trust, while
 	// that question is up — see askTrust.
@@ -1630,7 +1641,11 @@ func (u *ui) frame() ([]string, error) {
 		return append(lines[:body], highlight(" ↵:set  esc:cancel ", cols)), nil
 	}
 	if u.entry.open {
-		for i, l := range entryPane(u.entry.text, u.entry.cur, u.entryTitle(), cols, body) {
+		pane := entryPane(u.entry.text, u.entry.cur, u.entryTitle(), cols, body)
+		if u.ws {
+			pane = u.seedPane(cols, body)
+		}
+		for i, l := range pane {
 			if l != "" && i < body {
 				lines[i] = l
 			}
@@ -1640,7 +1655,10 @@ func (u *ui) frame() ([]string, error) {
 			keys = " ↵:save  ctrl-g:$EDITOR  esc:cancel "
 		}
 		if u.ws {
-			keys = " ↵:start  ctrl-o:model  ctrl-g:$EDITOR  esc:cancel "
+			keys = " ↵:start  shift-tab:title  ctrl-o:model  ctrl-g:$EDITOR  esc:cancel "
+		}
+		if u.ws && u.title.open {
+			keys = " ↵/tab:prompt  ctrl-o:model  esc:cancel "
 		}
 		// The bar is the only line left to say why the editor didn't open.
 		return append(lines[:body], highlight(keys+u.msg, cols)), nil
@@ -1989,6 +2007,7 @@ func entryPane(text string, cur int, title string, cols, rows int) []string {
 	row := paneRow(pad, inner)
 
 	lines, at, col := wrapEdit(text, max(inner-2, 1), min(max(cur, 0), len(text)))
+	caret := cur >= 0 // a negative caret is a box not taking the keys: no caret drawn
 
 	// The window follows the caret rather than the end of the text: a prompt
 	// too tall for the box is exactly the one worth rewriting the middle of.
@@ -2020,7 +2039,7 @@ func entryPane(text string, cur int, title string, cols, rows int) []string {
 	//
 	// The offset is into the line as it will be printed: the margin, the border,
 	// and the space the text is inset by.
-	if i := at - top; i >= 0 && i < len(body) {
+	if i := at - top; caret && i >= 0 && i < len(body) {
 		body[i] = invert(body[i], len(pad)+2+col)
 	}
 
@@ -3194,7 +3213,7 @@ func (u *ui) startPending() string {
 	}
 	// The agent's tab before the tui: a `ccwt ws` that finds itself alone in
 	// the workspace opens on the seed prompt, asking for what is already running.
-	if err := seed(ws, path, "", prompt); err != nil {
+	if err := seed(ws, path, "", "", prompt); err != nil {
 		return "start failed: " + err.Error()
 	}
 	if err := runWs(pane); err != nil {
