@@ -553,8 +553,45 @@ func wsDone() string {
 // say what it is for. A workspace with tabs already in it gets the table.
 func (u *ui) askSeed() {
 	if tabs, err := herdrTabs(); err == nil && len(tabs) <= 1 {
-		u.entry = newEntry(listRow{}, "", 0)
+		u.entry, u.title = newEntry(listRow{}, "", 0), newEntry(listRow{}, "", 0)
 	}
+}
+
+// askTitle feeds one keystroke to the seed prompt's title line: ↵ or tab go on
+// down to the prompt, escape abandons the lot, and the rest is the line editor.
+func (u *ui) askTitle(k string) {
+	switch k {
+	case "\r", "\t", "\x1b[27;2;13~":
+		u.title.open = false
+	case "\x1b", "\x03":
+		u.entry, u.title = entry{}, entry{}
+	default:
+		u.title.text, u.title.cur = lineEdit(u.title.text, u.title.cur, k)
+	}
+}
+
+// seedPane is the seed prompt's box with its title line in a box of its own
+// above it. Only the line taking the keys shows a caret.
+func (u *ui) seedPane(cols, rows int) []string {
+	cur := u.entry.cur
+	if u.title.open {
+		cur = -1
+	}
+	pane := entryPane(u.entry.text, cur, u.entryTitle(), cols, max(rows-3, 1))
+	w := min(max(cols*3/5, 24), cols)
+	inner := max(w-2, 1)
+	pad := strings.Repeat(" ", max(cols-w, 0)/2)
+	// One line of it, the one with the caret on: a title is a few words.
+	lines, at, col := wrapEdit(u.title.text, max(inner-2, 1), u.title.cur)
+	line := paneRow(pad, inner)(" " + lines[at])
+	if u.title.open {
+		line = invert(line, len(pad)+2+col)
+	}
+	top := 0
+	for top < len(pane) && pane[top] == "" {
+		top++
+	}
+	return slices.Concat(pane[:top], paneBox(pad, inner, "title", []string{line}), pane[top:])
 }
 
 // startSeed is ↵ on the seed prompt: start the agent, and close the box only
@@ -570,10 +607,11 @@ func (u *ui) startSeed() string {
 	if err != nil {
 		return "start failed: " + err.Error()
 	}
-	if err := seed(os.Getenv("HERDR_WORKSPACE_ID"), cwd, u.modelName, u.entry.expanded()); err != nil {
+	name := strings.Join(strings.Fields(u.title.text), " ")
+	if err := seed(os.Getenv("HERDR_WORKSPACE_ID"), cwd, u.modelName, name, u.entry.expanded()); err != nil {
 		return "start failed: " + err.Error()
 	}
-	u.entry = entry{}
+	u.entry, u.title = entry{}, entry{}
 	return "started"
 }
 
@@ -606,19 +644,27 @@ func (u *ui) askModel(k string) {
 // would be the same name every time, and herdr names an unlabelled tab after
 // what runs in it, which is the agent saying what it is doing.
 //
+// The title line, when anything is typed in it, names both the session (the
+// cli's --name) and the pane, so the agent reads the same in herdr as in its
+// own resume list. The pane's label is cosmetic: a rename herdr refuses doesn't
+// stop the agent starting.
+//
 // The model is whatever ctrl-o last set, if anything, appended as a flag rather than woven
 // into task_command: the command is the config's, the same for every agent, and
 // the model is this one's.
 //
 // The pane comes out of the create's own answer: with every tab in the one
 // directory, there is nothing else that tells the new pane from the tui's own.
-func seed(ws, cwd, model, prompt string) error {
+func seed(ws, cwd, model, name, prompt string) error {
 	argv, err := taskCommand()
 	if err != nil {
 		return err
 	}
 	if model != "" {
 		argv = append(argv, "--model", shellQuote(model))
+	}
+	if name != "" {
+		argv = append(argv, "--name", shellQuote(name))
 	}
 	out, err := exec.Command(herdrBin(), "tab", "create", "--workspace", ws,
 		"--cwd", cwd, "--no-focus").CombinedOutput()
@@ -636,6 +682,9 @@ func seed(ws, cwd, model, prompt string) error {
 	pane := resp.Result.Pane.ID
 	if pane == "" {
 		return errors.New("no pane in the new tab to run the agent in")
+	}
+	if name != "" {
+		_ = exec.Command(herdrBin(), "pane", "rename", pane, name).Run()
 	}
 	arg, err := promptArg(prompt)
 	if err != nil {
