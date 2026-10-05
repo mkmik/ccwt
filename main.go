@@ -265,7 +265,7 @@ func emitOSC7(path string) {
 // delete unsaved work must not read a stale answer.
 func removeBlocked(root, name string, keepBranch bool) error {
 	worktreePath := filepath.Join(root, ".claude", "worktrees", name)
-	branch, err := branchName(name)
+	branch, err := worktreeBranch(root, name)
 	if err != nil {
 		return err
 	}
@@ -293,6 +293,22 @@ func removeBlocked(root, name string, keepBranch bool) error {
 		return fmt.Errorf("%s has an agent working in it: let it finish, or re-run with -D to remove it anyway", name)
 	}
 	return nil
+}
+
+// worktreeBranch is the branch the worktree called name has checked out — the
+// one `ccwt list` puts its ✓ against — falling back to the one `ccwt new` made
+// for it when there's none to read (HEAD detached, the directory gone). Not
+// branchName alone: a worktree switched onto another branch, pushed and merged
+// under that name, would be judged by the stale branch it started on.
+func worktreeBranch(root, name string) (string, error) {
+	path := filepath.Join(root, ".claude", "worktrees", name)
+	wts, _ := gitutil.ListWorktrees(root)
+	for _, wt := range wts {
+		if wt.Path == path && wt.Branch != "" {
+			return wt.Branch, nil
+		}
+	}
+	return branchName(name)
 }
 
 type RemoveCmd struct {
@@ -326,7 +342,7 @@ func (c *RemoveCmd) remove(root string) error {
 	}
 
 	worktreePath := filepath.Join(root, ".claude", "worktrees", name)
-	branch, err := branchName(name)
+	branch, err := worktreeBranch(root, name)
 	if err != nil {
 		return err
 	}
