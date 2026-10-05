@@ -18,8 +18,7 @@ import (
 // A snapshot, like the worklog's: what was open when the pane came up.
 type opener struct {
 	all      []string // what's on offer
-	filter   string   // `/`'s: a substring of the path, case ignored
-	typing   bool     // the filter is taking the keystrokes
+	filter   string   // what's been typed: a substring of the path, case ignored
 	sel, top int      // into shown()
 	first, n int      // the screen line the first row came out on, and how many were drawn
 	clicked  time.Time
@@ -53,20 +52,9 @@ func (o *opener) shown() []string {
 }
 
 // key is the picker's turn at a keystroke: the project picked, if one was, and
-// whether the picker is done — picked from, or closed.
+// whether the picker is done — picked from, or closed. Typing filters straight
+// away, so ↵ is all it takes to open the one on top.
 func (o *opener) key(k string) (string, bool) {
-	if o.typing {
-		switch k {
-		case "\r", "\n":
-			o.typing = false
-		case "\x1b":
-			o.typing, o.filter = false, ""
-		default:
-			o.filter = typeKey(o.filter, k)
-		}
-		o.sel = 0
-		return "", false
-	}
 	shown := o.shown()
 	switch k {
 	case "\x1b": // the filter first, as the list's esc drops its pattern
@@ -74,21 +62,25 @@ func (o *opener) key(k string) (string, bool) {
 			return "", true
 		}
 		o.filter, o.sel = "", 0
-	case "/":
-		o.typing = true
-	case "\x1b[A", "k":
+	case "\x1b[A":
 		o.sel--
-	case "\x1b[B", "j":
+	case "\x1b[B":
 		o.sel++
-	case "\r", "\n", " ":
+	case "\r", "\n":
 		if o.sel < len(shown) {
 			return shown[o.sel], true
 		}
 	default:
 		// A click selects, a second one opens: a workspace is a lot to make
 		// on a stray click.
+		if mouseRow(k) == 0 {
+			if f := typeKey(o.filter, k); f != o.filter {
+				o.filter, o.sel = f, 0
+			}
+			break
+		}
 		i := mouseRow(k) - o.first
-		if mouseRow(k) == 0 || i < 0 || i >= o.n {
+		if i < 0 || i >= o.n {
 			break
 		}
 		i += o.top
@@ -112,11 +104,7 @@ func (o *opener) pane(cols, rows int) ([]string, string) {
 	o.sel = min(max(o.sel, 0), max(len(shown)-1, 0))
 	o.top = max(min(max(o.top, o.sel-fits+1), o.sel), 0)
 
-	head := ""
-	if o.typing || o.filter != "" {
-		head = "/" + o.filter
-	}
-	body := []string{row(" " + head)}
+	body := []string{row(" > " + o.filter)}
 	o.n = min(fits, len(shown)-o.top)
 	for i, p := range shown[o.top : o.top+o.n] {
 		l := row(" " + shortenHome(p))
@@ -131,9 +119,9 @@ func (o *opener) pane(cols, rows int) ([]string, string) {
 	lines := paneBox(pad, inner, "open", body)
 	margin := min(2, max(rows-len(lines), 0)/2)
 	o.first = margin + 3 // the margin, the top rule and the filter, and a mouse counts from 1
-	keys := " ↑↓:select  ↵:open  /:filter  esc:close "
-	if o.typing {
-		keys = " ↵:done  esc:clear "
+	keys := " type:filter  ↑↓:select  ↵:open  esc:close "
+	if o.filter != "" {
+		keys = " type:filter  ↑↓:select  ↵:open  esc:clear "
 	}
 	return append(make([]string, margin), lines...), keys
 }
