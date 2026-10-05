@@ -273,7 +273,10 @@ func (c *TuiCmd) Run() error {
 			case u.entry.open && k == "\x07": // Ctrl-G: finish the prompt in $EDITOR
 				external()
 			// The seed prompt opens on its title line; ↵ or tab go on down to the
-			// prompt, and shift-tab comes back up.
+			// prompt, and shift-tab comes back up. A click picks a box too: the
+			// title, or anything below it.
+			case u.entry.open && u.ws && u.titleRow > 0 && mouseRow(k) >= u.titleRow:
+				u.title.open = mouseRow(k) < u.titleRow+3
 			case u.entry.open && u.ws && u.title.open:
 				u.askTitle(k)
 			case u.entry.open && u.ws && k == "\x1b[Z":
@@ -657,10 +660,13 @@ type ui struct {
 	model     entry
 	modelName string
 
-	// The seed prompt's title line: what the agent's session and its pane are
+	// The seed prompt's title line: what the agent's session and the workspace are
 	// named. Open while it is the line taking the keys; its text outlives that,
 	// for the start to read.
 	title entry
+	// titleRow is the screen row, counted the way a mouse report does, of the
+	// title box's top rule as last drawn: a click there or below picks the box.
+	titleRow int
 
 	// The directory the ws view is asking whether Claude Code may trust, while
 	// that question is up — see askTrust.

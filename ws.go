@@ -591,6 +591,7 @@ func (u *ui) seedPane(cols, rows int) []string {
 	for top < len(pane) && pane[top] == "" {
 		top++
 	}
+	u.titleRow = top + 1 // +1: a mouse counts from 1
 	return slices.Concat(pane[:top], paneBox(pad, inner, "title", []string{line}), pane[top:])
 }
 
@@ -644,10 +645,10 @@ func (u *ui) askModel(k string) {
 // would be the same name every time, and herdr names an unlabelled tab after
 // what runs in it, which is the agent saying what it is doing.
 //
-// The title line, when anything is typed in it, names both the session (the
-// cli's --name) and the pane, so the agent reads the same in herdr as in its
-// own resume list. The pane's label is cosmetic: a rename herdr refuses doesn't
-// stop the agent starting.
+// The title line, when anything is typed in it, names the session (the cli's
+// --name) and the workspace, so the agent reads the same in herdr as
+// in its own resume list. The label is cosmetic: a rename herdr refuses
+// doesn't stop the agent starting.
 //
 // The model is whatever ctrl-o last set, if anything, appended as a flag rather than woven
 // into task_command: the command is the config's, the same for every agent, and
@@ -684,7 +685,7 @@ func seed(ws, cwd, model, name, prompt string) error {
 		return errors.New("no pane in the new tab to run the agent in")
 	}
 	if name != "" {
-		_ = exec.Command(herdrBin(), "pane", "rename", pane, name).Run()
+		_ = exec.Command(herdrBin(), "workspace", "rename", ws, name).Run()
 	}
 	arg, err := promptArg(prompt)
 	if err != nil {
