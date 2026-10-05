@@ -73,7 +73,8 @@ func markCwdSeen() {
 
 // seenProjects is the repos ccwt has been used in and nobody hid, oldest first:
 // only the ones still a main checkout there, since a row outlives its directory
-// and a section git can't read is no use to anyone.
+// and a section git can't read is no use to anyone. A HEAD, not just a .git:
+// a /tmp cleaner reaps the files and leaves the directories behind.
 func seenProjects() ([]string, error) { return seenPaths("first, path") }
 
 // recentProjects is the same repos, most recently used first: the order `o`
@@ -99,7 +100,7 @@ func seenPaths(order string) ([]string, error) {
 		if err := rows.Scan(&p); err != nil {
 			return nil, err
 		}
-		if fi, err := os.Stat(filepath.Join(p, ".git")); err == nil && fi.IsDir() {
+		if fi, err := os.Stat(filepath.Join(p, ".git", "HEAD")); err == nil && fi.Mode().IsRegular() {
 			paths = append(paths, p)
 		}
 	}
