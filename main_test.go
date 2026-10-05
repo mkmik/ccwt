@@ -319,6 +319,26 @@ func TestRemoveUnmerged(t *testing.T) {
 	}
 }
 
+// TestRemoveSwitchedBranch: a worktree switched off the branch `new` made for
+// it is judged by the branch it has checked out — the one list's ✓ is about —
+// and the stale one it started on is left alone.
+func TestRemoveSwitchedBranch(t *testing.T) {
+	initRepo(t)
+	path := capture(t, &NewWorktreeBranchCmd{Name: "switched", Path: true})
+	commitWork(t, path, "stale")
+	git(t, "-C", path, "switch", "-c", "landed", "main")
+
+	if err := (&RemoveCmd{Name: "switched"}).Run(); err != nil {
+		t.Fatalf("removing a worktree on a merged branch: %v", err)
+	}
+	if gitutil.BranchExists("", "landed") {
+		t.Error("the checked-out branch survived the removal")
+	}
+	if !gitutil.BranchExists("", "worktree-switched") {
+		t.Error("the unmerged branch it started on was deleted")
+	}
+}
+
 // TestRemoveSquashMerged: a branch contained in main, whose stale
 // origin/<branch> still points at the pre-squash commits, must still be
 // removable. `git branch -d` asks "merged into the upstream?" rather than
