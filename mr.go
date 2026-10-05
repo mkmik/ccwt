@@ -219,22 +219,33 @@ func branchMR() (string, error) {
 	return hits[0].WebURL, nil
 }
 
-// checkedOutBranch is dir's branch, and still the branch while a rebase has
-// HEAD detached: rev-parse says "HEAD" then, and the branch being rebased is
-// only written down in the rebase's head-name. Asked for a branch called
-// HEAD, the forge says there is no review for it.
+// checkedOutBranch is dir's branch as origin knows it: the branch it tracks
+// there, when it tracks one, since a worktree's branch is often pushed under
+// another name (`git push -u origin HEAD:getmsg`) and the review is that
+// one's. It is still the branch while a rebase has HEAD detached: rev-parse
+// says "HEAD" then, and the branch being rebased is only written down in the
+// rebase's head-name. Asked for a branch called HEAD, the forge says there is
+// no review for it.
 func checkedOutBranch(dir string) string {
 	branch := gitLine(dir, "rev-parse", "--abbrev-ref", "HEAD")
-	if branch != "HEAD" {
-		return branch
-	}
-	for _, f := range []string{"rebase-merge/head-name", "rebase-apply/head-name"} {
-		path := gitLine(dir, "rev-parse", "--path-format=absolute", "--git-path", f)
-		if b, err := os.ReadFile(path); err == nil && path != "" {
-			return strings.TrimPrefix(strings.TrimSpace(string(b)), "refs/heads/")
+	if branch == "HEAD" {
+		branch = ""
+		for _, f := range []string{"rebase-merge/head-name", "rebase-apply/head-name"} {
+			path := gitLine(dir, "rev-parse", "--path-format=absolute", "--git-path", f)
+			if b, err := os.ReadFile(path); err == nil && path != "" {
+				branch = strings.TrimPrefix(strings.TrimSpace(string(b)), "refs/heads/")
+				break
+			}
 		}
 	}
-	return ""
+	if branch == "" {
+		return ""
+	}
+	up := gitLine(dir, "for-each-ref", "--format=%(upstream:remotename) %(upstream:lstrip=3)", "refs/heads/"+branch)
+	if pushed, ok := strings.CutPrefix(up, "origin "); ok && pushed != "" {
+		return pushed
+	}
+	return branch
 }
 
 // mrRow is one merge request as the table shows it. One merge request is a

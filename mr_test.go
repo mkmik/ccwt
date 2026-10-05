@@ -568,3 +568,17 @@ func TestCheckedOutBranchMidRebase(t *testing.T) {
 		t.Errorf("checkedOutBranch() mid-rebase = %q, want %q", got, "feature")
 	}
 }
+
+// A worktree's branch pushed under another name has its review under that
+// name, and that's the one the forge is asked about.
+func TestCheckedOutBranchPushedUnderAnotherName(t *testing.T) {
+	repo := initRepo(t)
+	git(t, "checkout", "-q", "-b", "worktree-wild")
+	git(t, "remote", "add", "origin", "https://github.com/example/repo")
+	git(t, "update-ref", "refs/remotes/origin/getmsg", "HEAD")
+	git(t, "config", "branch.worktree-wild.remote", "origin")
+	git(t, "config", "branch.worktree-wild.merge", "refs/heads/getmsg")
+	if got := checkedOutBranch(repo); got != "getmsg" {
+		t.Errorf("checkedOutBranch() = %q, want %q", got, "getmsg")
+	}
+}
