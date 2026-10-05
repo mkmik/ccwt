@@ -2311,14 +2311,15 @@ func TestProjectRootsFromConfig(t *testing.T) {
 	}
 
 	// The repos ccwt has been used in come after, oldest first: not one the
-	// config already has, nor one that isn't a checkout there any more.
-	one, three := filepath.Join(home, "src", "one"), filepath.Join(home, "src", "three")
-	for _, d := range []string{one, three} {
-		if err := os.MkdirAll(filepath.Join(d, ".git"), 0o755); err != nil {
-			t.Fatal(err)
-		}
+	// config already has, nor one that isn't a checkout there any more — gone,
+	// or reaped down to its directories.
+	one, three, reaped := filepath.Join(home, "src", "one"), filepath.Join(home, "src", "three"), filepath.Join(home, "reaped")
+	gitInit(t, one)
+	gitInit(t, three)
+	if err := os.MkdirAll(filepath.Join(reaped, ".git", "hooks"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	for i, p := range []string{filepath.Join(home, "gone"), three, one} {
+	for i, p := range []string{filepath.Join(home, "gone"), reaped, three, one} {
 		if err := markSeen(p, "", time.Unix(int64(i), 0)); err != nil {
 			t.Fatal(err)
 		}

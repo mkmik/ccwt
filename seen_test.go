@@ -13,9 +13,7 @@ import (
 func TestHideProject(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	p := t.TempDir()
-	if err := os.Mkdir(filepath.Join(p, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	gitInit(t, p)
 	if err := markSeen(p, "", time.Unix(1000, 0)); err != nil {
 		t.Fatal(err)
 	}
@@ -84,5 +82,16 @@ func TestMarkSeen(t *testing.T) {
 		if got := [4]any{project, first, last, uses}; got != want {
 			t.Errorf("%s: got %v, want %v", path, got, want)
 		}
+	}
+}
+
+// gitInit makes dir look enough like a main checkout for seenPaths to keep it.
+func gitInit(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

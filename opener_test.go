@@ -21,9 +21,7 @@ func TestOpenerOffersWhatHerdrHasNot(t *testing.T) {
 	base := t.TempDir()
 	repo := func(name string, at int64) string {
 		p := filepath.Join(base, name)
-		if err := os.MkdirAll(filepath.Join(p, ".git"), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		gitInit(t, p)
 		if err := markSeen(p, "", time.Unix(at, 0)); err != nil {
 			t.Fatal(err)
 		}
