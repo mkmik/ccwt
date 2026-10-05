@@ -8,15 +8,17 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
 
-// TestOpenerOffersWhatHerdrHasNot: `o` offers the seen projects most recently
-// used first, less the hidden ones and those herdr has a workspace on; typing
-// narrows them; picking one makes a workspace there with ccwt in a `prj` tab,
-// or takes over one herdr had there without knowing its repo.
-func TestOpenerOffersWhatHerdrHasNot(t *testing.T) {
+// TestOpenerOffersSeenProjects: `o` offers the seen projects most recently
+// used first, less the hidden ones, marking those herdr has a workspace on;
+// typing narrows them; picking an open one switches to its workspace, picking
+// another makes a workspace there with ccwt in a `prj` tab, or takes over one
+// herdr had there without knowing its repo.
+func TestOpenerOffersSeenProjects(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	base := t.TempDir()
 	repo := func(name string, at int64) string {
@@ -31,16 +33,20 @@ func TestOpenerOffersWhatHerdrHasNot(t *testing.T) {
 	if err := hideProject(hidden); err != nil {
 		t.Fatal(err)
 	}
-	orig := herdrLabels
-	herdrLabels = func() (map[string]string, map[string]int, []int) { return nil, map[string]int{open: 0}, nil }
-	t.Cleanup(func() { herdrLabels = orig })
+	orig := herdrRepoWS
+	herdrRepoWS = func() map[string]string { return map[string]string{open: "w3"} }
+	t.Cleanup(func() { herdrRepoWS = orig })
 
 	o, err := newOpener()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{recent, old}; !slices.Equal(o.shown(), want) {
+	if want := []string{open, recent, old}; !slices.Equal(o.shown(), want) {
 		t.Fatalf("offered %v, want %v", o.shown(), want)
+	}
+	if lines, _ := o.pane(300, 24); !strings.Contains(strings.Join(lines, "\n"), "● "+shortenHome(open)) ||
+		!strings.Contains(strings.Join(lines, "\n"), "○ "+shortenHome(recent)) {
+		t.Errorf("pane doesn't mark open ● and closed ○:\n%s", strings.Join(lines, "\n"))
 	}
 	for _, k := range []string{"R", "E", "C"} {
 		o.key(k)
@@ -101,6 +107,15 @@ func TestOpenerOffersWhatHerdrHasNot(t *testing.T) {
 	if string(out) != ran {
 		t.Errorf("herdr ran:\n%s\nwant:\n%s", out, ran)
 	}
+
+	// One herdr has a workspace on is switched to, not opened.
+	if msg := o.open(open); msg != "switched to open" {
+		t.Errorf("open(open) said %q", msg)
+	}
+	if out, _ := os.ReadFile(log); !strings.HasSuffix(string(out), "workspace focus w3\n") {
+		t.Errorf("herdr ran:\n%s\nwant workspace focus w3 last", out)
+	}
+	ran += "workspace focus w3\n"
 
 	// A workspace herdr already had there keeps its own shell and tab name.
 	if msg := openProject(recent); msg != "opened recent" {

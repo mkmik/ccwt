@@ -296,9 +296,10 @@ func (c *TuiCmd) Run() error {
 				return nil
 			case u.opener != nil:
 				if p, done := u.opener.key(k); done {
+					o := u.opener
 					u.opener = nil
 					if p != "" {
-						if err := act("opening "+filepath.Base(p)+"…", func() string { return openProject(p) }); err != nil {
+						if err := act("opening "+filepath.Base(p)+"…", func() string { return o.open(p) }); err != nil {
 							return err
 						}
 					}

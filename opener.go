@@ -6,37 +6,73 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 )
 
 // opener is `o` under -g: a pane over the list offering the repos ccwt has
-// been used in that herdr has no workspace on, and that nobody hid, most
-// recently used first — the ones to pick from when it's time to open one again.
+// been used in and that nobody hid, most recently used first — ● those herdr
+// has a workspace on, which picking switches to, ○ the ones to open again.
 //
 // A snapshot, like the worklog's: what was open when the pane came up.
 type opener struct {
-	all      []string // what's on offer
+	all      []string          // what's on offer
+	ws       map[string]string // the workspace herdr has on each open one
 	filter   string   // what's been typed: a substring of the path, case ignored
 	sel, top int      // into shown()
 	first, n int      // the screen line the first row came out on, and how many were drawn
 	clicked  time.Time
 }
 
-// newOpener looks at what there is to offer: the seen projects, less those
-// herdr has a workspace on — the main checkout or any worktree of it, the same
-// test that puts a repo's section among the open ones in -g's list.
+// newOpener looks at what there is to offer: the seen projects, and which of
+// them herdr has a workspace on.
 func newOpener() (*opener, error) {
 	recent, err := recentProjects()
 	if err != nil {
 		return nil, err
 	}
-	_, order, _ := herdrLabels()
-	return &opener{all: slices.DeleteFunc(recent, func(p string) bool {
-		_, open := order[p]
-		return open
-	})}, nil
+	return &opener{all: recent, ws: herdrRepoWS()}, nil
+}
+
+// open is what picking p does: switch to herdr's workspace on it, or open one.
+func (o *opener) open(p string) string {
+	id, ok := o.ws[p]
+	if !ok {
+		return openProject(p)
+	}
+	if err := herdrFocusWS(id); err != nil {
+		return err.Error()
+	}
+	return "switched to " + filepath.Base(p)
+}
+
+// herdrRepoWS is the first workspace in herdr's sidebar on each repo — the
+// main checkout or any worktree of it, the same test that puts a repo's section
+// among the open ones in -g's list — keyed by the repo's root.
+//
+// ponytail: package var so tests can fake the herdr answer.
+var herdrRepoWS = func() map[string]string {
+	out, err := herdrAsk("workspace.list", nil, "workspace", "list")
+	var resp struct {
+		Result struct {
+			Workspaces []struct {
+				ID       string `json:"workspace_id"`
+				Worktree struct {
+					Repo string `json:"repo_root"`
+				} `json:"worktree"`
+			} `json:"workspaces"`
+		} `json:"result"`
+	}
+	if err != nil || json.Unmarshal(out, &resp) != nil {
+		return nil
+	}
+	ws := map[string]string{}
+	for _, w := range resp.Result.Workspaces {
+		if _, ok := ws[w.Worktree.Repo]; !ok && w.Worktree.Repo != "" {
+			ws[w.Worktree.Repo] = w.ID
+		}
+	}
+	return ws
 }
 
 // shown is what the filter leaves of it.
@@ -107,7 +143,11 @@ func (o *opener) pane(cols, rows int) ([]string, string) {
 	body := []string{row(" > " + o.filter)}
 	o.n = min(fits, len(shown)-o.top)
 	for i, p := range shown[o.top : o.top+o.n] {
-		l := row(" " + shortenHome(p))
+		mark := "○"
+		if _, ok := o.ws[p]; ok {
+			mark = "●"
+		}
+		l := row(" " + mark + " " + shortenHome(p))
 		if o.top+i == o.sel {
 			l = band(l)
 		}
