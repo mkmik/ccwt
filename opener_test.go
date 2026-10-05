@@ -13,7 +13,7 @@ import (
 )
 
 // TestOpenerOffersWhatHerdrHasNot: `o` offers the seen projects most recently
-// used first, less the hidden ones and those herdr has a workspace on; `/`
+// used first, less the hidden ones and those herdr has a workspace on; typing
 // narrows them; picking one makes a workspace there with ccwt in a `prj` tab,
 // or takes over one herdr had there without knowing its repo.
 func TestOpenerOffersWhatHerdrHasNot(t *testing.T) {
@@ -42,11 +42,11 @@ func TestOpenerOffersWhatHerdrHasNot(t *testing.T) {
 	if want := []string{recent, old}; !slices.Equal(o.shown(), want) {
 		t.Fatalf("offered %v, want %v", o.shown(), want)
 	}
-	for _, k := range []string{"/", "R", "E", "C", "\r"} {
+	for _, k := range []string{"R", "E", "C"} {
 		o.key(k)
 	}
 	if got := o.shown(); !slices.Equal(got, []string{recent}) {
-		t.Errorf("/REC leaves %v, want [%s]", got, recent)
+		t.Errorf("REC leaves %v, want [%s]", got, recent)
 	}
 	if p, done := o.key("\r"); p != recent || !done {
 		t.Errorf("↵ picked (%q, %v), want (%q, true)", p, done, recent)

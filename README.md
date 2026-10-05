@@ -541,7 +541,7 @@ The known projects are every repo `ccwt` has been run in, in any of its worktree
 order it first was — kept in `$XDG_STATE_HOME/ccwt/tasks.db`, and left out once the repo is
 no longer there. "hide" in the `☰` menu, on a project's section header, leaves one out for
 good, however much `ccwt` goes on being run there. Under Herdr, `o` lists the known projects
-Herdr has no workspace on, most recently used first — `/` filters them, `↑↓` or a click
+Herdr has no workspace on, most recently used first — typing filters them, `↑↓` or a click
 selects, `↵` or a second click opens one: a new workspace in the repo, with `ccwt` running in
 its first tab, named `prj`. A repo it hasn't been run in yet, or one to put at the top, goes in
 `$XDG_CONFIG_HOME/ccwt/config.toml` (`~/.config/ccwt/config.toml` when that variable isn't
