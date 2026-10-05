@@ -818,8 +818,8 @@ esac
 }
 
 // The seed prompt opens on its title line, and tab goes on down to the prompt.
-// The title names the session — the cli's --name — and the pane it runs in.
-func TestWsSeedTitleNamesTheSessionAndPane(t *testing.T) {
+// The title names the session — the cli's --name — and the workspace.
+func TestWsSeedTitleNamesTheSessionAndWorkspace(t *testing.T) {
 	initRepo(t)
 	dir := t.TempDir()
 	log := filepath.Join(dir, "calls")
@@ -849,6 +849,9 @@ esac
 	if pane := strings.Join(u.seedPane(80, 20), "\n"); !strings.Contains(pane, "─ title ") || !strings.Contains(pane, "bob's bug") {
 		t.Errorf("seed pane = %q, want the title box over the prompt", pane)
 	}
+	if !strings.Contains(u.seedPane(80, 20)[u.titleRow-1], "─ title ") {
+		t.Errorf("titleRow %d is not the title box's top rule", u.titleRow)
+	}
 	u.queue("f")
 	if msg := u.startSeed(); msg != "started" {
 		t.Fatalf("startSeed: %s", msg)
@@ -857,7 +860,7 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"pane rename w1:p2 bob's bug", `pane run w1:p2 claude --name 'bob'\''s bug' -- "$(cat `} {
+	for _, want := range []string{"workspace rename w1 bob's bug", `pane run w1:p2 claude --name 'bob'\''s bug' -- "$(cat `} {
 		if !strings.Contains(string(calls), want) {
 			t.Errorf("herdr calls = %q, want %q", calls, want)
 		}
