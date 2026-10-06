@@ -29,6 +29,7 @@ type Task struct {
 	Worktree string // path of the worktree it waits on, "" when it waits on a task
 	Parent   int64  // id of the task it waits on, 0 when it waits on a worktree
 	Prompt   string
+	Title    string // what the session and its workspace are to be called, "" for the cli's own
 	Created  time.Time
 }
 
@@ -56,6 +57,7 @@ const taskSchema = `CREATE TABLE IF NOT EXISTS task (
 	worktree TEXT    NOT NULL,
 	parent   INTEGER REFERENCES task(id) ON DELETE CASCADE,
 	prompt   TEXT    NOT NULL,
+	title    TEXT    NOT NULL DEFAULT '',
 	created  INTEGER NOT NULL,
 	deleted  INTEGER NOT NULL DEFAULT 0
 ) STRICT`
@@ -106,6 +108,7 @@ func openTasks() (*sql.DB, error) {
 			// column gets it here, one made by the schema above rejects the
 			// statement as a duplicate column, and either way we're done.
 			_, _ = db.Exec(`ALTER TABLE task ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0`)
+			_, _ = db.Exec(`ALTER TABLE task ADD COLUMN title TEXT NOT NULL DEFAULT ''`)
 			// The worklog shares the file: one thing that outlives the process,
 			// one place to keep it, and the pragmas above cover both tables.
 			if _, err = db.Exec(worklogSchema + ";" + seenSchema); err != nil {
@@ -140,7 +143,7 @@ func loadTasks() ([]Task, error) {
 		return nil, err
 	}
 	defer db.Close()
-	rows, err := db.Query(`SELECT id, project, worktree, COALESCE(parent, 0), prompt, created FROM task WHERE deleted = 0 ORDER BY id`)
+	rows, err := db.Query(`SELECT id, project, worktree, COALESCE(parent, 0), prompt, title, created FROM task WHERE deleted = 0 ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +152,7 @@ func loadTasks() ([]Task, error) {
 	for rows.Next() {
 		var t Task
 		var created int64
-		if err := rows.Scan(&t.ID, &t.Project, &t.Worktree, &t.Parent, &t.Prompt, &created); err != nil {
+		if err := rows.Scan(&t.ID, &t.Project, &t.Worktree, &t.Parent, &t.Prompt, &t.Title, &created); err != nil {
 			return nil, err
 		}
 		t.Created = time.Unix(created, 0)
@@ -208,21 +211,29 @@ func (tt taskTree) pending(project string, live map[string]bool) []Task {
 
 // taskCells is a queued prompt as a row of the table: the tree connector and
 // "<queued>" in NAME, the only column with room for structure, so a row with no
-// worktree of its own says why rather than leaving the column blank — and the
-// prompt itself in TOPIC
+// worktree of its own says why rather than leaving the column blank — and its
+// title, or the prompt itself when it has none, in TOPIC
 // — where a worktree shows what its session or its last commit was about, which
 // is the same question. AGE says how long it has been waiting.
 func taskCells(t Task, gutter string, depth int) []string {
 	name := gutter + gutter + strings.Repeat("  ", depth) + taskGlyph + " " + queuedName
-	return []string{name, "", humanAge(time.Since(t.Created)), "", t.Prompt}
+	return []string{name, "", humanAge(time.Since(t.Created)), "", cmp.Or(t.Title, t.Prompt)}
+}
+
+// taskDetails is a queued prompt's cells as the details pane, the edit box and
+// a start read them: the prompt in full in TOPIC whatever the row shows, and
+// the title after the columns, where only those three look.
+func taskDetails(cells []string, t Task) []string {
+	cells[4] = t.Prompt
+	return append(cells, t.Title)
 }
 
 // addTask queues prompt behind the given row: behind another queued prompt when
 // that's what's selected — a "<new>" row included, so a chain can go on growing
 // after the worktree it started under is gone — and behind a worktree
 // otherwise.
-func addTask(parent listRow, prompt string) error {
-	t := Task{Project: parent.project, Prompt: prompt}
+func addTask(parent listRow, title, prompt string) error {
+	t := Task{Project: parent.project, Prompt: prompt, Title: title}
 	if parent.task > 0 {
 		t.Parent = parent.task
 	} else {
@@ -237,20 +248,20 @@ func addTask(parent listRow, prompt string) error {
 	if t.Parent != 0 {
 		pid = t.Parent
 	}
-	_, err = db.Exec(`INSERT INTO task (project, worktree, parent, prompt, created) VALUES (?, ?, ?, ?, ?)`,
-		t.Project, t.Worktree, pid, t.Prompt, time.Now().Unix())
+	_, err = db.Exec(`INSERT INTO task (project, worktree, parent, prompt, title, created) VALUES (?, ?, ?, ?, ?, ?)`,
+		t.Project, t.Worktree, pid, t.Prompt, t.Title, time.Now().Unix())
 	return err
 }
 
 // updateTask rewrites a queued prompt in place. Its place in the chain doesn't
 // move: what waits on it still waits on it, whatever it now says.
-func updateTask(id int64, prompt string) error {
+func updateTask(id int64, title, prompt string) error {
 	db, err := openTasks()
 	if err != nil {
 		return err
 	}
 	defer db.Close()
-	_, err = db.Exec(`UPDATE task SET prompt = ? WHERE id = ?`, prompt, id)
+	_, err = db.Exec(`UPDATE task SET prompt = ?, title = ? WHERE id = ?`, prompt, title, id)
 	return err
 }
 

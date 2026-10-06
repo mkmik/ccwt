@@ -272,14 +272,14 @@ func (c *TuiCmd) Run() error {
 				u.model = newEntry(listRow{}, u.modelName, 0)
 			case u.entry.open && k == "\x07": // Ctrl-G: finish the prompt in $EDITOR
 				external()
-			// The seed prompt opens on its title line; ↵ or tab go on down to the
-			// prompt, and shift-tab comes back up. A click picks a box too: the
-			// title, or anything below it.
-			case u.entry.open && u.ws && u.titleRow > 0 && mouseRow(k) >= u.titleRow:
+			// The seed prompt and the queue prompt open on their title line; ↵ or
+			// tab go on down to the prompt, and shift-tab comes back up. A click
+			// picks a box too: the title, or anything below it.
+			case u.entry.open && u.titleRow > 0 && mouseRow(k) >= u.titleRow:
 				u.title.open = mouseRow(k) < u.titleRow+3
-			case u.entry.open && u.ws && u.title.open:
+			case u.entry.open && u.title.open:
 				u.askTitle(k)
-			case u.entry.open && u.ws && k == "\x1b[Z":
+			case u.entry.open && k == "\x1b[Z":
 				u.title.open = true
 			// The seed prompt starts its agent rather than queueing: a worktree,
 			// a tab and a herdr round trip, so through act, which says so while
@@ -371,8 +371,11 @@ func (c *TuiCmd) Run() error {
 				// The pane is where a long prompt is legible in full, so it's
 				// where rewriting one belongs. The edit box takes the pane's
 				// place rather than stacking on it: one modal at a time.
+				// It opens on the prompt, the title above it as it was queued.
 				case k == "e" && u.sel.task > 0:
 					u.entry = newEntry(u.sel, u.detail[4], u.sel.task)
+					u.title = newEntry(listRow{}, u.detail[5], 0)
+					u.title.open = false
 					u.detail = nil
 				}
 			case k == "q", k == "\x03": // \x03 = Ctrl-C, which raw mode delivers as a keystroke
@@ -451,7 +454,7 @@ func (c *TuiCmd) Run() error {
 				if parent, err := u.queueParent(); err != nil {
 					u.msg = "queue: " + err.Error()
 				} else {
-					u.entry = newEntry(parent, "", 0)
+					u.entry, u.title = newEntry(parent, "", 0), newEntry(listRow{}, "", 0)
 				}
 			case k == "n":
 				u.seek(u.dir)
@@ -935,19 +938,20 @@ func (u *ui) queue(k string) {
 			return
 		}
 		err, done := error(nil), "queued"
+		title := strings.Join(strings.Fields(u.title.text), " ")
 		if u.entry.id != 0 {
-			err, done = updateTask(u.entry.id, u.entry.expanded()), "saved"
+			err, done = updateTask(u.entry.id, title, u.entry.expanded()), "saved"
 		} else {
-			err = addTask(u.entry.parent, u.entry.expanded())
+			err = addTask(u.entry.parent, title, u.entry.expanded())
 		}
 		if err != nil {
 			u.msg = done + " failed: " + err.Error()
 			return
 		}
-		u.entry, u.msg = entry{}, done
+		u.entry, u.title, u.msg = entry{}, entry{}, done
 		u.stale()
 	case "\x1b", "\x03":
-		u.entry = entry{}
+		u.entry, u.title = entry{}, entry{}
 	default:
 		if p, ok := pasted(k); ok && (utf8.RuneCountInString(p) > 800 || strings.Count(p, "\n") > 2) {
 			u.entry.pastes = append(u.entry.pastes, p)
@@ -1648,18 +1652,18 @@ func (u *ui) frame() ([]string, error) {
 		return append(lines[:body], highlight(" ↵:set  esc:cancel ", cols)), nil
 	}
 	if u.entry.open {
-		pane := entryPane(u.entry.text, u.entry.cur, u.entryTitle(), cols, body)
-		if u.ws {
-			pane = u.seedPane(cols, body)
-		}
+		pane := u.seedPane(cols, body)
 		for i, l := range pane {
 			if l != "" && i < body {
 				lines[i] = l
 			}
 		}
-		keys := " ↵:queue  ctrl-g:$EDITOR  esc:cancel "
+		keys := " ↵:queue  shift-tab:title  ctrl-g:$EDITOR  esc:cancel "
 		if u.entry.id != 0 {
-			keys = " ↵:save  ctrl-g:$EDITOR  esc:cancel "
+			keys = " ↵:save  shift-tab:title  ctrl-g:$EDITOR  esc:cancel "
+		}
+		if u.title.open {
+			keys = " ↵/tab:prompt  esc:cancel "
 		}
 		if u.ws {
 			keys = " ↵:start  shift-tab:title  ctrl-o:model  ctrl-g:$EDITOR  esc:cancel "
@@ -3198,13 +3202,14 @@ func runWs(pane string) error {
 //
 // The prompt comes from the row's cells rather than a re-read of the database:
 // it is on screen, and it is the same value the details pane and the edit box
-// take.
+// take. So does its title, which names the session and the workspace as the
+// seed prompt's does.
 func (u *ui) startPending() string {
 	cells := u.cells[u.sel]
-	if len(cells) < 5 {
+	if len(cells) < 6 {
 		return "start failed: no prompt on that row"
 	}
-	prompt := cells[4]
+	prompt, title := cells[4], cells[5]
 	root, err := u.root()
 	if err != nil {
 		return "start failed: " + err.Error()
@@ -3220,7 +3225,7 @@ func (u *ui) startPending() string {
 	}
 	// The agent's tab before the tui: a `ccwt ws` that finds itself alone in
 	// the workspace opens on the seed prompt, asking for what is already running.
-	if err := seed(ws, path, "", "", prompt); err != nil {
+	if err := seed(ws, path, "", title, prompt); err != nil {
 		return "start failed: " + err.Error()
 	}
 	if err := runWs(pane); err != nil {
