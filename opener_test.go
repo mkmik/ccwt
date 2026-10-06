@@ -54,8 +54,16 @@ func TestOpenerOffersSeenProjects(t *testing.T) {
 	if got := o.shown(); !slices.Equal(got, []string{recent}) {
 		t.Errorf("REC leaves %v, want [%s]", got, recent)
 	}
-	if p, done := o.key("\r"); p != recent || !done {
-		t.Errorf("↵ picked (%q, %v), want (%q, true)", p, done, recent)
+	if do, p := o.key("p"); do != "" || p != "" {
+		t.Errorf("p before a row is picked did %q to %q, want it typed", do, p)
+	}
+	o.key("\x7f")
+	o.key("\x1b[B")
+	if do, p := o.key("P"); do != "copy" || p != recent {
+		t.Errorf("P on a picked row did (%q, %q), want (copy, %q)", do, p, recent)
+	}
+	if do, p := o.key("\r"); do != "open" || p != recent {
+		t.Errorf("↵ picked (%q, %q), want (open, %q)", do, p, recent)
 	}
 
 	t.Chdir(t.TempDir()) // a unix socket's path has to be short

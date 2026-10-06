@@ -18,9 +18,10 @@ import (
 type opener struct {
 	all      []string          // what's on offer
 	ws       map[string]string // the workspace herdr has on each open one
-	filter   string   // what's been typed: a substring of the path, case ignored
-	sel, top int      // into shown()
-	first, n int      // the screen line the first row came out on, and how many were drawn
+	filter   string            // what's been typed: a substring of the path, case ignored
+	sel, top int               // into shown()
+	picked   bool              // sel was moved to by hand, so p and P are about it, not the filter
+	first, n int               // the screen line the first row came out on, and how many were drawn
 	clicked  time.Time
 }
 
@@ -87,46 +88,48 @@ func (o *opener) shown() []string {
 	return s
 }
 
-// key is the picker's turn at a keystroke: the project picked, if one was, and
-// whether the picker is done — picked from, or closed. Typing filters straight
-// away, so ↵ is all it takes to open the one on top.
-func (o *opener) key(k string) (string, bool) {
+// key is the picker's turn at a keystroke: what to do — "open" or "close",
+// which are the picker done, "pull" or "copy", which leave it up — and the
+// project to do it to. Typing filters straight away, so ↵ is all it takes to
+// open the one on top; once ↑↓ or a click has picked a row, p pulls it and P
+// copies its path instead, and anything else typed goes back to the filter.
+func (o *opener) key(k string) (string, string) {
 	shown := o.shown()
-	switch k {
-	case "\x1b": // the filter first, as the list's esc drops its pattern
+	switch {
+	case k == "\x1b": // the filter first, as the list's esc drops its pattern
 		if o.filter == "" {
-			return "", true
+			return "close", ""
 		}
-		o.filter, o.sel = "", 0
-	case "\x1b[A":
-		o.sel--
-	case "\x1b[B":
-		o.sel++
-	case "\r", "\n":
+		o.filter, o.sel, o.picked = "", 0, false
+	case k == "\x1b[A":
+		o.sel, o.picked = max(o.sel-1, 0), true
+	case k == "\x1b[B":
+		o.sel, o.picked = min(o.sel+1, max(len(shown)-1, 0)), true
+	case k == "\r", k == "\n":
 		if o.sel < len(shown) {
-			return shown[o.sel], true
+			return "open", shown[o.sel]
 		}
+	case o.picked && (k == "p" || k == "P") && o.sel < len(shown):
+		return map[string]string{"p": "pull", "P": "copy"}[k], shown[o.sel]
+	case mouseRow(k) == 0:
+		if f := typeKey(o.filter, k); f != o.filter {
+			o.filter, o.sel, o.picked = f, 0, false
+		}
+	// A click selects, a second one opens: a workspace is a lot to make on a
+	// stray click.
 	default:
-		// A click selects, a second one opens: a workspace is a lot to make
-		// on a stray click.
-		if mouseRow(k) == 0 {
-			if f := typeKey(o.filter, k); f != o.filter {
-				o.filter, o.sel = f, 0
-			}
-			break
-		}
 		i := mouseRow(k) - o.first
 		if i < 0 || i >= o.n {
 			break
 		}
 		i += o.top
 		double := i == o.sel && time.Since(o.clicked) < doubleClick
-		o.sel, o.clicked = i, time.Now()
+		o.sel, o.clicked, o.picked = i, time.Now(), true
 		if double {
-			return shown[i], true
+			return "open", shown[i]
 		}
 	}
-	return "", false
+	return "", ""
 }
 
 // pane draws the picker as the worklog is drawn — a box over the list, rows
@@ -162,6 +165,9 @@ func (o *opener) pane(cols, rows int) ([]string, string) {
 	keys := " type:filter  ↑↓:select  ↵:open  esc:close "
 	if o.filter != "" {
 		keys = " type:filter  ↑↓:select  ↵:open  esc:clear "
+	}
+	if o.picked && len(shown) > 0 {
+		keys = " ↑↓:select  ↵:open  p:pull  P:copy path  type:filter "
 	}
 	return append(make([]string, margin), lines...), keys
 }

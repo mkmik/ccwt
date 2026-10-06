@@ -295,15 +295,25 @@ func (c *TuiCmd) Run() error {
 			case u.opener != nil && k == "\x03":
 				return nil
 			case u.opener != nil:
-				if p, done := u.opener.key(k); done {
+				switch do, p := u.opener.key(k); do {
+				case "close":
+					u.opener = nil
+					u.stale()
+				case "open":
 					o := u.opener
 					u.opener = nil
-					if p != "" {
-						if err := act("opening "+filepath.Base(p)+"…", func() string { return o.open(p) }); err != nil {
-							return err
-						}
+					if err := act("opening "+filepath.Base(p)+"…", func() string { return o.open(p) }); err != nil {
+						return err
 					}
-					u.stale()
+				case "pull":
+					if err := act("pulling "+filepath.Base(p)+"…", func() string { return gitPull(p) }); err != nil {
+						return err
+					}
+				case "copy":
+					copyClip(p)
+					u.msg = "copied to clipboard: " + p
+				default:
+					u.msg = ""
 				}
 			// A removal's page sits on top of the worklog pane that opened it, so
 			// it takes the keys first: esc goes back to the log, and the rest of
@@ -417,7 +427,7 @@ func (c *TuiCmd) Run() error {
 				if o, err := newOpener(); err != nil {
 					u.msg = "open: " + err.Error()
 				} else {
-					u.opener = o
+					u.opener, u.msg = o, ""
 				}
 			case k == "c" && underHerdr() && !u.ws:
 				if err := act("creating…", u.newWorkspace); err != nil {
@@ -1683,7 +1693,7 @@ func (u *ui) frame() ([]string, error) {
 				lines[i] = l
 			}
 		}
-		return append(lines[:body], highlight(keys, cols)), nil
+		return append(lines[:body], highlight(keys+u.msg, cols)), nil
 	}
 
 	// The menu is a modal of the same kind, over the same standing list — the
