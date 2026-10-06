@@ -548,7 +548,7 @@ order it first was — kept in `$XDG_STATE_HOME/ccwt/tasks.db`, and left out onc
 no longer there. "hide" in the `☰` menu, on a project's section header, leaves one out for
 good, however much `ccwt` goes on being run there. Under Herdr, `o` lists the known projects,
 most recently used first, `●` those Herdr has a workspace on and `○` the rest — typing filters
-them, `↑↓` or a click selects, `↵` or a second click switches to an open one's workspace, or
+them, `↑↓` or a click selects — after which `p` runs `git pull` in it and `P` copies its path — `↵` or a second click switches to an open one's workspace, or
 opens a closed one: a new workspace in the repo, with `ccwt` running in its first tab, named
 `prj`. A repo it hasn't been run in yet, or one to put at the top, goes in
 `$XDG_CONFIG_HOME/ccwt/config.toml` (`~/.config/ccwt/config.toml` when that variable isn't
