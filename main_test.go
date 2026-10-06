@@ -2672,11 +2672,20 @@ esac
 
 	var u ui
 	rows, _ := renderRows(t)
-	u.entry = newEntry(rows[0], "", 0)
+	// The box opens on its title line, and tab goes on down to the prompt.
+	u.entry, u.title = newEntry(rows[0], "", 0), newEntry(listRow{}, "", 0)
+	for _, k := range splitKeys("docs pass\t") {
+		if u.title.open {
+			u.askTitle(k)
+		}
+	}
 	// An apostrophe in the prompt, since what reaches the pane is a shell line:
 	// the whole prompt has to arrive as one argument, quotes and all.
 	typeInto(&u, "then update Bob's docs")
-	rows, _ = renderRows(t)
+	rows, body := renderRows(t)
+	if !strings.Contains(body, "docs pass") || strings.Contains(body, "Bob's docs") {
+		t.Errorf("a queued prompt with a title should show the title:\n%s", body)
+	}
 	u.entry = newEntry(rows[1], "", 0)
 	typeInto(&u, "and then cut a release")
 
@@ -2703,8 +2712,8 @@ esac
 	if !strings.Contains(string(calls), "tab create --workspace w1 --cwd ") {
 		t.Errorf("herdr calls = %q, want a tab for the agent in the new workspace", calls)
 	}
-	if !strings.Contains(string(calls), `pane run w1:p2 claude -- "$(cat `) {
-		t.Errorf("herdr calls = %q, want the cli run in the new tab on the file the prompt went into", calls)
+	if !strings.Contains(string(calls), `pane run w1:p2 claude --name 'docs pass' -- "$(cat `) {
+		t.Errorf("herdr calls = %q, want the cli run in the new tab, named for the title, on the file the prompt went into", calls)
 	}
 	exe, err := os.Executable()
 	if err != nil {
@@ -2713,11 +2722,14 @@ esac
 	if !strings.Contains(string(calls), "pane run w1:p1 "+exe+" ws") {
 		t.Errorf("herdr calls = %q, want `ccwt ws` run in the workspace's first pane", calls)
 	}
+	if !strings.Contains(string(calls), "workspace rename w1 docs pass") {
+		t.Errorf("herdr calls = %q, want the workspace named for the title", calls)
+	}
 	if got := seededPrompt(t, string(calls)); got != "then update Bob's docs" {
 		t.Errorf("the agent would be started on %q, want the whole prompt, apostrophe and all", got)
 	}
 
-	rows, body := renderRows(t)
+	rows, body = renderRows(t)
 	if len(rows) != 2 || !rows[0].worktree() || rows[1].task <= 0 {
 		t.Fatalf("rows after starting = %v, want the new worktree and the rest of the chain under it", rows)
 	}
@@ -3057,7 +3069,7 @@ func TestQueueTakesConcurrentWriters(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range 8 {
 		wg.Go(func() { // its own connection, as a separate process would have
-			if err := addTask(wt, fmt.Sprintf("prompt %d", i)); err != nil {
+			if err := addTask(wt, "", fmt.Sprintf("prompt %d", i)); err != nil {
 				t.Errorf("queueing prompt %d: %v", i, err)
 			}
 		})

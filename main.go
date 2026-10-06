@@ -1043,7 +1043,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 		cells := taskCells(t, gutter, depth)
 		add(id, strip, cells)
 		cells[0] = name
-		details[id] = cells
+		details[id] = taskDetails(cells, t)
 		for _, k := range queue.kids[t.ID] {
 			emitTask(name, k, depth+1)
 		}
@@ -1078,10 +1078,10 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 			// worktree of that project, waiting to be made, which is what the
 			// removed one's path says for the rest of them.
 			id := listRow{project: project, path: cmp.Or(t.Worktree, project), task: t.ID}
-			cells := []string{gutter + gutter + newName, "", humanAge(time.Since(t.Created)), "", t.Prompt}
+			cells := []string{gutter + gutter + newName, "", humanAge(time.Since(t.Created)), "", cmp.Or(t.Title, t.Prompt)}
 			add(id, strip, cells)
 			cells[0] = newName
-			details[id] = cells
+			details[id] = taskDetails(cells, t)
 			for _, k := range queue.kids[t.ID] {
 				emitTask(newName, k, 0)
 			}

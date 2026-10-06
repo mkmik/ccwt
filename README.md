@@ -374,6 +374,12 @@ one of the ones still showing around it. `↵` records it, `esc` throws it away.
 another queued prompt the box's top rule names that prompt instead, since a chain can have
 several links and the worktree's name wouldn't say which one you're extending.
 
+Above it is a one-line title box, as on `ccwt ws`'s seed prompt. The box opens there:
+`↵` or `tab` takes you down to the prompt, and `shift-tab` takes you back up. Leaving it
+empty is fine. A queued prompt with a title shows the title in TOPIC, and the details pane
+and `e` still have the prompt in full. When the prompt starts, its title becomes the
+agent's `--name` and the workspace's label.
+
 Once recorded it's a row of the list:
 
 ```

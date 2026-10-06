@@ -570,8 +570,8 @@ func (u *ui) askTitle(k string) {
 	}
 }
 
-// seedPane is the seed prompt's box with its title line in a box of its own
-// above it. Only the line taking the keys shows a caret.
+// seedPane is the seed prompt's box — or the queue prompt's — with its title
+// line in a box of its own above it. Only the line taking the keys shows a caret.
 func (u *ui) seedPane(cols, rows int) []string {
 	cur := u.entry.cur
 	if u.title.open {
