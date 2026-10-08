@@ -48,7 +48,7 @@ func TestHideProject(t *testing.T) {
 		{listRow{project: p}, false, false},
 		{listRow{project: p, path: p + "/w"}, true, false},
 	} {
-		if got := slices.Contains(menuActions(c.sel, false, c.global), hide); got != c.want {
+		if got := slices.Contains(menuActions(c.sel, false, c.global, false), hide); got != c.want {
 			t.Errorf("menu for %+v, global %v, offers hide = %v, want %v", c.sel, c.global, got, c.want)
 		}
 	}
