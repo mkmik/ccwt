@@ -619,7 +619,7 @@ func (c *ListCmd) Run() error {
 	if tty {
 		width, _, _ = term.GetSize(int(os.Stdout.Fd()))
 	}
-	_, _, err = renderList(os.Stdout, tty, width, projects, nil, nil, !c.NoHeaders, c.Sort, false)
+	_, _, err = renderList(os.Stdout, tty, width, projects, nil, nil, !c.NoHeaders, c.Sort, false, false)
 	return err
 }
 
@@ -754,7 +754,11 @@ var (
 // agentDots), and blank on the rest. Only the tui asks: green is a turn nobody
 // has read since, and a table drawn once has nobody to remember what has been
 // read — it would call every settled agent unread.
-func renderList(out io.Writer, tty bool, width int, projects []string, collapsed, shown map[string]bool, headers bool, sort string, dots bool) ([]listRow, map[listRow][]string, error) {
+//
+// agents leaves out the worktrees no agent is running in — herdr's, or a
+// Claude Code session's — and the "<new>" rows, which have none yet: the tui's
+// `a`.
+func renderList(out io.Writer, tty bool, width int, projects []string, collapsed, shown map[string]bool, headers bool, sort string, dots, agents bool) ([]listRow, map[listRow][]string, error) {
 	global := projects != nil
 	if !global {
 		// "" is the current directory, which is how git reads "the repo we're in".
@@ -805,12 +809,12 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 		wg.Go(func() { cur, _, _ = gitutil.CurrentClaudeWorktree() })
 	}
 	// Needed by the second round rather than after it, so it goes in the first.
-	var agents []herdrAgent
+	var herdr []herdrAgent
 	var labels map[string]string
 	var herdrOrder map[string]int
 	var herdrSeps []int
 	if tty {
-		wg.Go(func() { agents = herdrAgents() })
+		wg.Go(func() { herdr = herdrAgents() })
 		if underHerdr() {
 			wg.Go(func() { labels, herdrOrder, herdrSeps = herdrLabels() })
 		}
@@ -839,7 +843,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	if err := errors.Join(errs...); err != nil {
 		return nil, nil, err
 	}
-	busy := herdrBusy(agents)
+	busy := herdrBusy(herdr)
 
 	// One flat list of worktrees, each still knowing which project it came from.
 	type ref struct {
@@ -946,6 +950,13 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 			rows[i].claude = "yes"
 		}
 	}
+	if agents {
+		rows = slices.DeleteFunc(rows, func(r row) bool {
+			return r.claude != "yes" && !slices.ContainsFunc(herdr, func(a herdrAgent) bool {
+				return under(a.Cwd, r.path) || under(a.Foreground, r.path)
+			})
+		})
+	}
 
 	// Stable: worktrees sharing a timestamp keep `git worktree list` order
 	// rather than shuffling between runs. Newest-first, which is the order you
@@ -968,7 +979,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	var dot func(path string) string
 	strip := ""
 	if dots && underHerdr() {
-		dot, strip = agentDots(agents), gutter
+		dot, strip = agentDots(herdr), gutter
 	}
 	// Everything above builds the whole row; pick is where the hidden columns
 	// go, so a column's absence can't change anything but the printing.
@@ -1072,6 +1083,9 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	// since that is what opening the row does. Deleting the work is not the same
 	// as cancelling what was queued behind it.
 	emitPending := func(project string) {
+		if agents {
+			return
+		}
 		for _, t := range queue.pending(project, live) {
 			// A prompt queued with nothing selected never had a worktree to wait
 			// on, so the project stands in as the row's path: the row is a

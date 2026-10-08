@@ -476,6 +476,11 @@ func (c *TuiCmd) Run() error {
 			case k == "P":
 				u.ps = !u.ps
 				u.psView()
+			// `a` narrows the list to the worktrees an agent is running in, and
+			// back. Not in the ws view, which has nothing but agents' tabs.
+			case k == "a" && !u.ps && !u.ws:
+				u.agents = !u.agents
+				u.body = nil
 			// esc backs out of what the list is holding onto, outermost thing
 			// last: the pattern, and the selection with it — which is how the
 			// per-row keys, and the bar that lists them, go away again — and
@@ -647,6 +652,7 @@ type ui struct {
 	collapsed map[string]bool // project root -> section folded shut
 	shown     map[string]bool // project root -> its "…" open; "" is -g's for whole repos
 	sort      string          // --sort, or "" for the config's order
+	agents    bool            // `a`: only the worktrees an agent is running in
 	msg       string
 
 	search        // the pattern in force, which n and N walk and the frame picks out
@@ -796,7 +802,7 @@ func (u *ui) menuFor() []action {
 	if u.ws {
 		return wsActions(u.sel, u.query != "")
 	}
-	return menuActions(u.sel, u.query != "", u.projects != nil)
+	return menuActions(u.sel, u.query != "", u.projects != nil, u.agents)
 }
 
 // navQuiet is how long a keystroke keeps the interval tick off the list. The
@@ -1511,7 +1517,7 @@ func (u *ui) frame() ([]string, error) {
 			u.cols, u.div, u.cells = cols, nil, nil
 		} else {
 			var buf bytes.Buffer
-			listRows, cells, err := renderList(&buf, true, cols, u.projects, u.collapsed, u.shown, true, u.sort, true)
+			listRows, cells, err := renderList(&buf, true, cols, u.projects, u.collapsed, u.shown, true, u.sort, true, u.agents)
 			if err != nil {
 				return nil, err
 			}
@@ -1714,7 +1720,7 @@ func (u *ui) frame() ([]string, error) {
 	// the key hints have nothing to say about a line you're typing into.
 	// The restart notice outlasts the transient messages but yields to them
 	// while one is up: they're a second old, and it will still be true after.
-	bar := statusBar(cols, cmp.Or(u.msg, u.restart), u.sel, u.divergence(), u.query != "", u.projects != nil)
+	bar := statusBar(cols, cmp.Or(u.msg, u.restart), u.sel, u.divergence(), u.query != "", u.projects != nil, u.agents)
 	// The ps view has its own keys: the list's are about worktrees, and the
 	// only thing to do with a process is go to where it's running.
 	if u.ps {
@@ -2706,8 +2712,8 @@ func keyLen(s string) int {
 // either a transient message (the result of a pull) or div, how far the branch
 // has drifted from its upstream, cut or padded to exactly the terminal width.
 // Which keys apply is actions()' business.
-func statusBar(cols int, msg string, sel listRow, div string, searching, global bool) string {
-	return keyBar(cols, msg, div, actions(sel, searching, global))
+func statusBar(cols int, msg string, sel listRow, div string, searching, global, agents bool) string {
+	return keyBar(cols, msg, div, actions(sel, searching, global, agents))
 }
 
 // keyBar is the bar itself: the hamburger, the keys in force, and then what
@@ -2794,8 +2800,8 @@ const hideKey = "\x00hide"
 // and has no key at all — a path is fetched to paste somewhere else, which is
 // already a hand off the keyboard. "hide" is keyless too, and only there on a
 // section header under -g: the one place a project is what's selected.
-func menuActions(sel listRow, searching, global bool) []action {
-	as := append(actions(sel, searching, global), action{"G", "gc"}, action{"P", "ps"},
+func menuActions(sel listRow, searching, global, agents bool) []action {
+	as := append(actions(sel, searching, global, agents), action{"G", "gc"}, action{"P", "ps"},
 		action{copyDirKey, "copy dir"})
 	if global && sel.section() {
 		as = append(as, action{hideKey, "hide"})
@@ -2832,10 +2838,15 @@ func psActions(sel listRow) []action {
 //
 // searching says a pattern is in force, which is the one thing here that changes
 // what a key does rather than just whether it applies: `n` walks the matches
-// then, and queues a prompt the rest of the time.
-func actions(sel listRow, searching, global bool) []action {
+// then, and queues a prompt the rest of the time. agents says `a` has the list
+// down to the worktrees with an agent in them, so the key says it brings the
+// rest back.
+func actions(sel listRow, searching, global, agents bool) []action {
 	herdr := underHerdr()
-	as := []action{{"q", "quit"}, {"p", "pull"}, {"g", "git"}, {"/", "search"}, {"l", "log"}}
+	as := []action{{"q", "quit"}, {"p", "pull"}, {"g", "git"}, {"/", "search"}, {"l", "log"}, {"a", "agents"}}
+	if agents {
+		as[len(as)-1].label = "all"
+	}
 	// `n` queues behind whatever is selected, or as a "<new>" row of its own when
 	// that's nothing — which under -g takes a project selected to say whose, so
 	// there it's the one state the key has nothing to do in.

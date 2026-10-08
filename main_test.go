@@ -892,7 +892,7 @@ func TestListFollowsHerdrOrder(t *testing.T) {
 	// c has no workspace, so the tui folds it behind a "…", and shows it
 	// once that is opened.
 	tui := func(shown map[string]bool) (got []string, rows []listRow) {
-		rows, _, err := renderList(io.Discard, true, 0, nil, nil, shown, false, "", true)
+		rows, _, err := renderList(io.Discard, true, 0, nil, nil, shown, false, "", true, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -923,6 +923,36 @@ func TestListFollowsHerdrOrder(t *testing.T) {
 	}
 }
 
+// TestListOnlyAgents: the tui's `a` keeps the worktrees an agent is running
+// in, idle ones included, and drops the rest — "<new>" rows with them.
+func TestListOnlyAgents(t *testing.T) {
+	root := gitLine(initRepo(t), "rev-parse", "--show-toplevel")
+	capture(t, &NewWorktreeBranchCmd{Name: "quiet"})
+	idle := capture(t, &NewWorktreeBranchCmd{Name: "idle", Path: true})
+	if err := addTask(listRow{project: root}, "", "later"); err != nil {
+		t.Fatal(err)
+	}
+
+	defer func(orig func() []herdrAgent) { herdrAgents = orig }(herdrAgents)
+	herdrAgents = func() []herdrAgent { return []herdrAgent{{Status: "idle", Cwd: idle}} }
+	names := func(agents bool) (got []string) {
+		rows, _, err := renderList(io.Discard, true, 0, nil, nil, nil, false, "", false, agents)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range rows {
+			got = append(got, filepath.Base(r.path))
+		}
+		return got
+	}
+	if got := names(false); len(got) != 3 {
+		t.Fatalf("all = %q, want both worktrees and the <new>", got)
+	}
+	if got := names(true); !slices.Equal(got, []string{"idle"}) {
+		t.Errorf("agents only = %q, want [idle]", got)
+	}
+}
+
 // TestListDividesLikeHerdr: under -g, a herdr workspace named "------…" draws a
 // divider between the sections either side of it in the sidebar — not ahead of
 // the first, where it is a heading, and not by where a worktree sits in herdr's
@@ -941,7 +971,7 @@ func TestListDividesLikeHerdr(t *testing.T) {
 		return nil, map[string]int{work: 1, personal: 3, wt: 4}, []int{0, 2}
 	}
 	t.Setenv("HERDR_ENV", "1")
-	rows, _, err := renderList(io.Discard, true, 0, []string{work, personal}, nil, nil, false, "", true)
+	rows, _, err := renderList(io.Discard, true, 0, []string{work, personal}, nil, nil, false, "", true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1197,7 +1227,7 @@ func TestStatusBarIsExactlyOneLineWide(t *testing.T) {
 	for _, msg := range []string{"", "ok", strings.Repeat("x", 200)} {
 		for _, sel := range []listRow{{}, {path: "some-worktree"}, {project: "some-project"}, {task: 1}} {
 			for _, searching := range []bool{false, true} {
-				bar := statusBar(40, msg, sel, "main  in sync", searching, false)
+				bar := statusBar(40, msg, sel, "main  in sync", searching, false, false)
 				bar = strings.TrimSuffix(strings.TrimPrefix(bar, "\x1b[7m"), "\x1b[0m")
 				if got := screenWidth(bar); got != 40 {
 					t.Errorf("statusBar(40, %.10q, %v) is %d cols wide, want 40", msg, sel, got)
@@ -1210,12 +1240,12 @@ func TestStatusBarIsExactlyOneLineWide(t *testing.T) {
 // The version sits in the bar's far corner when the line leaves room for it,
 // and is dropped rather than pushing the keys off a narrow one.
 func TestStatusBarEndsWithTheVersion(t *testing.T) {
-	bar := statusBar(200, "", listRow{path: "some-worktree"}, "", false, false)
+	bar := statusBar(200, "", listRow{path: "some-worktree"}, "", false, false, false)
 	bar = strings.TrimSuffix(strings.TrimPrefix(bar, "\x1b[7m"), "\x1b[0m")
 	if want := getVersion() + " "; !strings.HasSuffix(bar, want) {
 		t.Errorf("statusBar(200) ends %q, want it to end with the version %q", bar[max(len(bar)-20, 0):], want)
 	}
-	if narrow := statusBar(20, "", listRow{path: "some-worktree"}, "", false, false); strings.Contains(narrow, getVersion()) {
+	if narrow := statusBar(20, "", listRow{path: "some-worktree"}, "", false, false, false); strings.Contains(narrow, getVersion()) {
 		t.Errorf("statusBar(20) = %q, want no version on a bar with no room for it", narrow)
 	}
 }
@@ -1228,7 +1258,7 @@ func TestStatusBarShowsHerdrActionsOnlyUnderHerdr(t *testing.T) {
 		want bool
 	}{{"", false}, {"1", true}} {
 		t.Setenv("HERDR_ENV", tc.env)
-		bar := statusBar(200, "", listRow{path: "some-worktree"}, "", false, false)
+		bar := statusBar(200, "", listRow{path: "some-worktree"}, "", false, false, false)
 		for _, key := range []string{"x:new", "c:new+ws", "space:open"} {
 			if strings.Contains(bar, key) != tc.want {
 				t.Errorf("HERDR_ENV=%q: %q in the bar = %v, want %v", tc.env, key, !tc.want, tc.want)
@@ -1245,10 +1275,10 @@ func TestStatusBarShowsHerdrActionsOnlyUnderHerdr(t *testing.T) {
 // has to keep up.
 func TestStatusBarSaysWhichNIsInForce(t *testing.T) {
 	sel := listRow{path: "some-worktree"}
-	if bar := statusBar(200, "", sel, "", false, false); !strings.Contains(bar, "n:queue") || strings.Contains(bar, "n:next") {
+	if bar := statusBar(200, "", sel, "", false, false, false); !strings.Contains(bar, "n:queue") || strings.Contains(bar, "n:next") {
 		t.Errorf("with no pattern the bar is %q, want n:queue on it", bar)
 	}
-	if bar := statusBar(200, "", sel, "", true, false); !strings.Contains(bar, "n:next") || strings.Contains(bar, "n:queue") {
+	if bar := statusBar(200, "", sel, "", true, false, false); !strings.Contains(bar, "n:next") || strings.Contains(bar, "n:queue") {
 		t.Errorf("with a pattern in force the bar is %q, want n:next on it", bar)
 	}
 }
@@ -1257,13 +1287,13 @@ func TestStatusBarSaysWhichNIsInForce(t *testing.T) {
 // offers it there too. The exception is -g with nothing selected, where the key
 // has no project to make the worktree in and so nothing to do.
 func TestStatusBarOffersTheQueueKeyWithNothingSelected(t *testing.T) {
-	if bar := statusBar(200, "", listRow{}, "", false, false); !strings.Contains(bar, "n:queue") {
+	if bar := statusBar(200, "", listRow{}, "", false, false, false); !strings.Contains(bar, "n:queue") {
 		t.Errorf("with nothing selected the bar is %q, want n:queue on it", bar)
 	}
-	if bar := statusBar(200, "", listRow{}, "", false, true); strings.Contains(bar, "n:queue") {
+	if bar := statusBar(200, "", listRow{}, "", false, true, false); strings.Contains(bar, "n:queue") {
 		t.Errorf("under -g with nothing selected the bar is %q, want no n:queue on it", bar)
 	}
-	if bar := statusBar(200, "", listRow{project: "some-project"}, "", false, true); !strings.Contains(bar, "n:queue") {
+	if bar := statusBar(200, "", listRow{project: "some-project"}, "", false, true, false); !strings.Contains(bar, "n:queue") {
 		t.Errorf("under -g on a section header the bar is %q, want n:queue on it", bar)
 	}
 }
@@ -1933,7 +1963,7 @@ func TestListFitsTerminalWidth(t *testing.T) {
 
 	for _, width := range []int{20, 50, 60, 80, 100, 200} {
 		var buf bytes.Buffer
-		if _, _, err := renderList(&buf, true, width, nil, nil, nil, true, "", false); err != nil {
+		if _, _, err := renderList(&buf, true, width, nil, nil, nil, true, "", false, false); err != nil {
 			t.Fatal(err)
 		}
 		// Every column bottoms out at minCol, so a terminal narrower than that
@@ -2065,7 +2095,7 @@ func TestConfigColumns(t *testing.T) {
 
 	writeConfig("columns = [\"topic\", \"name\"]\n")
 	var buf bytes.Buffer
-	if _, _, err := renderList(&buf, false, 0, nil, nil, nil, true, "", false); err != nil {
+	if _, _, err := renderList(&buf, false, 0, nil, nil, nil, true, "", false, false); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -2083,7 +2113,7 @@ func TestConfigColumns(t *testing.T) {
 	// rename still names it that.
 	writeConfig("columns = [\"claude\"]\n")
 	buf.Reset()
-	if _, _, err := renderList(&buf, false, 0, nil, nil, nil, true, "", false); err != nil {
+	if _, _, err := renderList(&buf, false, 0, nil, nil, nil, true, "", false, false); err != nil {
 		t.Fatalf("columns = [\"claude\"]: %v", err)
 	}
 	if head, _, _ := strings.Cut(buf.String(), "\n"); !strings.HasPrefix(head, "AGENT") {
@@ -2091,7 +2121,7 @@ func TestConfigColumns(t *testing.T) {
 	}
 
 	writeConfig("columns = [\"nmae\"]\n")
-	if _, _, err := renderList(&buf, false, 0, nil, nil, nil, true, "", false); err == nil || !strings.Contains(err.Error(), "nmae") {
+	if _, _, err := renderList(&buf, false, 0, nil, nil, nil, true, "", false, false); err == nil || !strings.Contains(err.Error(), "nmae") {
 		t.Errorf("unknown column: err = %v, want one naming it", err)
 	}
 }
@@ -2187,7 +2217,7 @@ func TestGlobalListSpansProjects(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	got, _, err := renderList(&buf, false, 0, roots, nil, nil, true, "", false)
+	got, _, err := renderList(&buf, false, 0, roots, nil, nil, true, "", false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2209,7 +2239,7 @@ func TestGlobalListSpansProjects(t *testing.T) {
 	// Folded shut, a project keeps its header — turned around, and still saying
 	// how much is underneath — and contributes no rows at all.
 	buf.Reset()
-	got, _, err = renderList(&buf, false, 0, roots, map[string]bool{gitRoots[0]: true}, nil, true, "", false)
+	got, _, err = renderList(&buf, false, 0, roots, map[string]bool{gitRoots[0]: true}, nil, true, "", false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2264,7 +2294,7 @@ func TestGlobalListOutsideAnyRepo(t *testing.T) {
 	// tty: the markers are the only thing that ever looked at the current
 	// directory, so the complaint only shows up with them turned on.
 	var buf bytes.Buffer
-	_, _, err = renderList(&buf, true, 0, []string{root}, nil, nil, true, "", false)
+	_, _, err = renderList(&buf, true, 0, []string{root}, nil, nil, true, "", false, false)
 	w.Close()
 	if err != nil {
 		t.Fatal(err)
@@ -2434,7 +2464,7 @@ func TestDefaultCommandIsTui(t *testing.T) {
 func renderRows(t *testing.T) ([]listRow, string) {
 	t.Helper()
 	var buf bytes.Buffer
-	rows, _, err := renderList(&buf, false, 0, nil, nil, nil, false, "", false)
+	rows, _, err := renderList(&buf, false, 0, nil, nil, nil, false, "", false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2694,7 +2724,7 @@ esac
 	}
 	// What the tui has when a key is pressed: the rows of the last frame and
 	// their cells, which is where startPending reads the prompt from.
-	rows, cells, err := renderList(io.Discard, false, 0, nil, nil, nil, false, "", false)
+	rows, cells, err := renderList(io.Discard, false, 0, nil, nil, nil, false, "", false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2836,7 +2866,7 @@ func TestALongPasteGoesInAsAMarker(t *testing.T) {
 	if u.msg != "queued" {
 		t.Fatalf("queueing: %s", u.msg)
 	}
-	rows, cells, err := renderList(io.Discard, false, 0, nil, nil, nil, false, "", false)
+	rows, cells, err := renderList(io.Discard, false, 0, nil, nil, nil, false, "", false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3289,7 +3319,7 @@ func TestHamburgerMenuPicksTheSameKeysTheBarLists(t *testing.T) {
 	defer func(old func() (int, int)) { termSize = old }(termSize)
 	termSize = func() (int, int) { return 120, 40 }
 
-	u := ui{menu: actions(listRow{}, false, false), menuSel: 0} // what a click on the ☰ does
+	u := ui{menu: actions(listRow{}, false, false, false), menuSel: 0} // what a click on the ☰ does
 	lines, err := u.frame()
 	if err != nil {
 		t.Fatal(err)
@@ -3317,7 +3347,7 @@ func TestHamburgerMenuPicksTheSameKeysTheBarLists(t *testing.T) {
 	}
 
 	// The arrows walk it and ↵ picks, for a hand that went back to the keyboard.
-	u.menu, u.menuSel = actions(listRow{}, false, false), 0
+	u.menu, u.menuSel = actions(listRow{}, false, false, false), 0
 	u.menuPick("\x1b[B")
 	if got := u.menuPick("\r"); got != "p" {
 		t.Errorf("↓ then ↵ = %q, want the second entry's key p", got)
@@ -3331,7 +3361,7 @@ func TestHamburgerMenuPicksTheSameKeysTheBarLists(t *testing.T) {
 		{"\x03", "\x03"}, // Ctrl-C, which nothing may swallow
 		{"d", "d"},
 	} {
-		u.menu, u.menuSel = actions(listRow{}, false, false), 0
+		u.menu, u.menuSel = actions(listRow{}, false, false, false), 0
 		if got := u.menuPick(tc.key); got != tc.want || u.menu != nil {
 			t.Errorf("%q with the menu up = %q, want %q and the menu shut", tc.key, got, tc.want)
 		}
@@ -3340,7 +3370,7 @@ func TestHamburgerMenuPicksTheSameKeysTheBarLists(t *testing.T) {
 	// The click that opened the menu still has a release to come, and a wheel
 	// has ticks: neither is a pick, and neither may shut what just opened.
 	for _, k := range []string{"\x1b[<0;1;40m", "\x1b[<64;1;20M"} {
-		u.menu, u.menuSel = actions(listRow{}, false, false), 0
+		u.menu, u.menuSel = actions(listRow{}, false, false, false), 0
 		if got := u.menuPick(k); got != "" || u.menu == nil {
 			t.Errorf("%q with the menu up = %q (menu shut: %v), want it left alone", k, got, u.menu == nil)
 		}
@@ -3356,10 +3386,10 @@ func TestMenuOnlyGc(t *testing.T) {
 	ahead := capture(t, &NewWorktreeBranchCmd{Name: "ahead", Path: true})
 	commitWork(t, ahead, "ahead")
 
-	if bar := statusBar(200, "", listRow{}, "", false, false); strings.Contains(bar, "G:gc") {
+	if bar := statusBar(200, "", listRow{}, "", false, false, false); strings.Contains(bar, "G:gc") {
 		t.Errorf("the bar lists gc: %q", bar)
 	}
-	menu := menuActions(listRow{}, false, false)
+	menu := menuActions(listRow{}, false, false, false)
 	if !slices.Contains(menu, action{"G", "gc"}) {
 		t.Errorf("the menu doesn't offer gc: %v", menu)
 	}
@@ -3388,10 +3418,10 @@ func TestMenuOnlyCopyDir(t *testing.T) {
 	defer func(old func() (int, int)) { termSize = old }(termSize)
 	termSize = func() (int, int) { return 120, 40 }
 
-	if bar := statusBar(200, "", listRow{}, "", false, false); strings.Contains(bar, "copy dir") {
+	if bar := statusBar(200, "", listRow{}, "", false, false, false); strings.Contains(bar, "copy dir") {
 		t.Errorf("the bar lists copy dir: %q", bar)
 	}
-	menu := menuActions(listRow{}, false, false)
+	menu := menuActions(listRow{}, false, false, false)
 	if !slices.Contains(menu, action{copyDirKey, "copy dir"}) {
 		t.Errorf("the menu doesn't offer copy dir: %v", menu)
 	}
