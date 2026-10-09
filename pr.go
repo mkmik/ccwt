@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"slices"
 	"strings"
@@ -404,7 +403,7 @@ func prDeployedTo(host string, p pr, envs []env, ask bool) string {
 // into v. gh says what went wrong the way glab does when it has no json to say
 // it in — a line on stderr — so cliError reads it for both.
 func ghAPI(host string, v any, args ...string) error {
-	out, err := exec.Command("gh", append([]string{"api", "--hostname", host}, args...)...).Output()
+	out, err := cliOutput("gh", append([]string{"api", "--hostname", host}, args...)...)
 	if err != nil {
 		return errors.New(cliError(out, err))
 	}
