@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"cmp"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -909,7 +910,20 @@ func hyperlink(url, text string) string {
 // what a `glab api` per call, a process each, was paying — was most of the
 // wait. The timeout is the one a process didn't need: a request that never
 // answers would otherwise leave the spinner turning for good.
-var gitlab = &http.Client{Timeout: 30 * time.Second}
+var gitlab = &http.Client{Timeout: apiTimeout}
+
+// apiTimeout is how long one forge call gets, over http or as a `glab api` or
+// `gh api` process. The process needs it as much as the request: the ws view
+// starts no new lookup while one is still out, so a cli hung on a dropped vpn
+// or a laptop's sleep would leave it showing that answer for good.
+const apiTimeout = 30 * time.Second
+
+// cliOutput runs glab or gh with args, killed when apiTimeout runs out.
+func cliOutput(name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), apiTimeout)
+	defer cancel()
+	return exec.CommandContext(ctx, name, args...).Output()
+}
 
 // glabAPI asks one gitlab api path and decodes the answer into v. The host is
 // named only when the url said which gitlab it is: left out, it's the one
@@ -1044,7 +1058,7 @@ func glabRun(host, path string, v any) error {
 	if host != "" {
 		args = append(args, "--hostname", host)
 	}
-	out, err := exec.Command("glab", append(args, path)...).Output()
+	out, err := cliOutput("glab", append(args, path)...)
 	if err != nil {
 		return fmt.Errorf("glab api %s: %s", path, cliError(out, err))
 	}
