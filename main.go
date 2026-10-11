@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"cmp"
 	"encoding/json"
@@ -1588,44 +1589,36 @@ func transcriptSummary(worktreePath, path, stamp string) string {
 // only lines that mention away_summary are parsed looking for a recap (the
 // check below still decides), and the hunt for the first prompt stops as soon
 // as it finds one, a handful of lines in.
+//
+// And the file is streamed rather than read whole: the list summarizes every
+// row at once, and a few live sessions' worth of transcripts held in memory
+// together is what made a long-running tui weigh hundreds of megabytes.
 func summarizeTranscript(path string) string {
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return ""
 	}
+	defer f.Close()
 
 	var recap, first string
-	for line := range strings.SplitSeq(string(data), "\n") {
-		if strings.Contains(line, "away_summary") {
-			var e struct {
-				Type    string `json:"type"`
-				Subtype string `json:"subtype"`
-				Content string `json:"content"`
+	br := bufio.NewReaderSize(f, 1<<20)
+	for {
+		line, err := br.ReadSlice('\n')
+		// ponytail: a line past the buffer is a tool result, never a recap or a
+		// typed prompt, so it is skipped rather than grown into; a bigger buffer
+		// if a megabyte paste as the first prompt ever matters.
+		if err == bufio.ErrBufferFull {
+			for err == bufio.ErrBufferFull {
+				_, err = br.ReadSlice('\n')
 			}
-			if json.Unmarshal([]byte(line), &e) == nil && e.Type == "system" && e.Subtype == "away_summary" {
-				recap = e.Content
+			if err != nil {
+				break
 			}
 			continue
 		}
-		if first != "" {
-			continue
-		}
-		var e struct {
-			Type    string `json:"type"`
-			IsMeta  bool   `json:"isMeta"`
-			Message struct {
-				Content json.RawMessage `json:"content"`
-			} `json:"message"`
-		}
-		if json.Unmarshal([]byte(line), &e) != nil || e.Type != "user" || e.IsMeta {
-			continue
-		}
-		// A typed prompt is a bare JSON string. Everything else the session
-		// feeds back as a "user" turn — tool results, pasted attachments —
-		// arrives as an array, and slash commands as a "<command-name>…" blob.
-		var text string
-		if json.Unmarshal(e.Message.Content, &text) == nil && !strings.HasPrefix(text, "<") {
-			first = text
+		summarizeLine(line, &recap, &first)
+		if err != nil {
+			break
 		}
 	}
 	if recap == "" {
@@ -1635,6 +1628,42 @@ func summarizeTranscript(path string) string {
 	// prompt can be paragraphs of text — either way a table cell gets one line.
 	recap = strings.Join(strings.Fields(recap), " ")
 	return strings.TrimSpace(strings.TrimSuffix(recap, "(disable recaps in /config)"))
+}
+
+// summarizeLine is summarizeTranscript's look at one line: the recap it is, or
+// the first prompt it is while there hasn't been one yet.
+func summarizeLine(line []byte, recap, first *string) {
+	if bytes.Contains(line, []byte("away_summary")) {
+		var e struct {
+			Type    string `json:"type"`
+			Subtype string `json:"subtype"`
+			Content string `json:"content"`
+		}
+		if json.Unmarshal(line, &e) == nil && e.Type == "system" && e.Subtype == "away_summary" {
+			*recap = e.Content
+		}
+		return
+	}
+	if *first != "" {
+		return
+	}
+	var e struct {
+		Type    string `json:"type"`
+		IsMeta  bool   `json:"isMeta"`
+		Message struct {
+			Content json.RawMessage `json:"content"`
+		} `json:"message"`
+	}
+	if json.Unmarshal(line, &e) != nil || e.Type != "user" || e.IsMeta {
+		return
+	}
+	// A typed prompt is a bare JSON string. Everything else the session
+	// feeds back as a "user" turn — tool results, pasted attachments —
+	// arrives as an array, and slash commands as a "<command-name>…" blob.
+	var text string
+	if json.Unmarshal(e.Message.Content, &text) == nil && !strings.HasPrefix(text, "<") {
+		*first = text
+	}
 }
 
 // transcriptLines is a whole session transcript as something to read: what was
