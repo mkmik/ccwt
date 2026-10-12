@@ -95,3 +95,41 @@ to, in `HERDR_SOCKET_PATH`.
   back to its shell says nothing at all (a probe session, herdr 0.9.1). So
   whatever watches for a process — the list's corner — keeps a slow look going
   alongside its events.
+
+# One ccwt for every pane — the idea, not yet a plan
+
+Every pane runs a whole ccwt: 44 of them on 2026-10-12 (19 lists, 23 ws views,
+one `-g`), ~18 MB of physical footprint each, ~760 MB together. Heap profiles
+of all of them, live, said the data isn't what costs: `ccwt -g` covers every
+configured repo in one process at 39 MB. Each instance pays instead for
+
+- 2.9 MB of Go runtime: what a Go binary that only sleeps weighs (`sleep` is 1.0)
+- 5.3 MB for linking modernc sqlite, before a database is opened: libc's init
+  tables, `netdb.init` among them
+- ~10 MB of its own heap, ~3 MB of it live. GOGC 25 or 10, and even
+  `debug.FreeOSMemory` every second, moved the total by under 3%
+
+## Stages, if it earns its keep
+
+- [ ] 1. The tuis stop linking sqlite: the queue read behind a `ccwt` subprocess
+  or a plain file. ~5 MB an instance, ~230 MB at today's count
+- [ ] 2. A daemon gathers: one process does the git, transcript, herdr and MR
+  rounds for every repo and workspace, and the tuis subscribe to it over a unix
+  socket rather than each asking for itself. Also cuts the cpu: `-g` repeats
+  every list's rounds, and every ws view repeats its worktree's merged check
+- [ ] 3. Thin clients: the pane runs a small `ccwt` that hands its tty over the
+  socket (`SCM_RIGHTS`), and the daemon draws on it. ~1 MB a client in C or
+  Rust, ~3 MB in Go; with the daemon at ~40–50 MB, ~90–180 MB in all
+
+## Things stage 3 has to answer
+
+- `$EDITOR`, and anything else that reads the tty, has to run in the client:
+  a child of the daemon isn't in the tty's foreground process group, and a read
+  from it stops it with SIGTTIN
+- SIGWINCH and ^C go to the client, which forwards them
+- `herdrRunsCcwt` knows a tui by its process name, so the client is `ccwt` too
+- an upgrade re-execs the daemon, and the clients, still holding their ttys,
+  reconnect and hand them over again. That is also the answer to one hung
+  daemon freezing every pane
+- per-session state: the drawing code reads 42 package vars, 25 `os.Getenv`s,
+  4 `os.Getwd`s, and prints to stdout. A refactor, not a rewrite
