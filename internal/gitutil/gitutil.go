@@ -324,31 +324,34 @@ func Merged(dir, branch string) bool {
 // squashed reports whether some commit on ref since it forked from branch
 // carries branch's whole diff, by patch-id: what a squash merge leaves behind,
 // whatever main did on top of it afterwards. An edited squash reads as not
-// merged, the safe side.
+// merged, the safe side. An empty diff has no patch-id, so a branch with no
+// work of its own reads as not merged here too.
 func squashed(dir, branch, ref string) bool {
 	mb, err := git(dir, "merge-base", branch, ref).Output()
 	if err != nil {
 		return false
 	}
 	base := strings.TrimSpace(string(mb))
-	diff, err := git(dir, "diff", base, branch).Output()
-	if err != nil || len(diff) == 0 {
+	want := patchIDs(dir, git(dir, "diff", base, branch))
+	if len(want) != 1 {
 		return false
 	}
-	want := patchIDs(dir, diff)
-	log, err := git(dir, "log", "-p", base+".."+ref).Output()
-	if err != nil || len(want) != 1 {
-		return false
-	}
-	return slices.Contains(patchIDs(dir, log), want[0])
+	return slices.Contains(patchIDs(dir, git(dir, "log", "-p", base+".."+ref)), want[0])
 }
 
-// patchIDs runs patches through `git patch-id --stable`, one id per patch.
-func patchIDs(dir string, patches []byte) []string {
+// patchIDs runs src's patches through `git patch-id --stable`, one id per
+// patch. src's stdout is handed to patch-id as its stdin, a pipe between the
+// two that ccwt never reads: `git log -p` of main since an old branch forked
+// runs to tens of megabytes, and a tui used to hold all of it every round.
+func patchIDs(dir string, src *exec.Cmd) []string {
+	patches, err := src.StdoutPipe()
+	if err != nil || src.Start() != nil {
+		return nil
+	}
 	cmd := git(dir, "patch-id", "--stable")
-	cmd.Stdin = bytes.NewReader(patches)
+	cmd.Stdin = patches
 	out, err := cmd.Output()
-	if err != nil {
+	if src.Wait() != nil || err != nil {
 		return nil
 	}
 	var ids []string
