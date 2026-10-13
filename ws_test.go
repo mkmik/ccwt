@@ -867,6 +867,77 @@ esac
 	}
 }
 
+// The effort scale sits over the title without the keys: shift-tab from the
+// title reaches it, the arrows move along it from high, a click picks the level
+// under it, and what it is left on goes to the harness as --effort.
+func TestWsSeedRunsAtTheEffortTheScaleIsOn(t *testing.T) {
+	initRepo(t)
+	dir := t.TempDir()
+	log := filepath.Join(dir, "calls")
+	herdr := filepath.Join(dir, "herdr")
+	script := fmt.Sprintf(`#!/bin/sh
+echo "$@" >> %[1]q
+case "$1 $2" in
+"tab create") printf '%%s' '{"result":{"root_pane":{"pane_id":"w1:p2"}}}' ;;
+esac
+`, log)
+	if err := os.WriteFile(herdr, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_ENV", "1")
+	t.Setenv("HERDR_BIN_PATH", herdr)
+	t.Setenv("HERDR_WORKSPACE_ID", "w1")
+	t.Setenv("TMPDIR", dir)
+
+	if len(effortScale) != 42 {
+		t.Fatalf("the scale is %d wide, want Claude Code's 42", len(effortScale))
+	}
+	for i, e := range efforts {
+		if at := strings.Index(effortScale, e.name); effortMarks[i] < at || effortMarks[i] >= at+len(e.name) {
+			t.Errorf("the ▲ for %s at %d is not over its label at %d", e.name, effortMarks[i], at)
+		}
+	}
+
+	u := ui{ws: true, entry: newEntry(listRow{}, "fix Bob's bug", 0), title: newEntry(listRow{}, "", 0)}
+	pane := u.seedPane(80, 24)
+	if u.effortFocus || !strings.Contains(pane[u.effortRow-1], "─ effort ") || !strings.Contains(pane[u.titleRow-1], "─ title ") {
+		t.Fatalf("seed pane = %q, want the effort box over the title, the title taking the keys", pane)
+	}
+	u.askTitle("\x1b[Z")
+	if !u.effortFocus || u.title.open {
+		t.Fatal("shift-tab on the title didn't reach the effort scale")
+	}
+	for _, k := range []string{"\x1b[C", "\x1b[C", "\x1b[C"} { // high, xhigh, max
+		u.askEffort(k)
+	}
+	if u.effort != "max" {
+		t.Errorf("after three →: %q, want max", u.effort)
+	}
+	u.askEffort("\x7f")
+	if u.effort != "" {
+		t.Errorf("after ⌫: %q, want the default back", u.effort)
+	}
+	u.seedPane(80, 24)
+	u.clickEffort(fmt.Sprintf("\x1b[<0;%d;%dM", u.effortCol+strings.Index(effortScale, "medium")+2, u.effortRow+3))
+	if u.effort != "medium" {
+		t.Errorf("after a click on medium: %q", u.effort)
+	}
+	u.askEffort("\t")
+	if u.effortFocus || !u.title.open {
+		t.Fatal("tab on the effort scale didn't go on to the title")
+	}
+	if msg := u.startSeed(); msg != "started" {
+		t.Fatalf("startSeed: %s", msg)
+	}
+	calls, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `pane run w1:p2 claude --effort medium -- "$(cat `; !strings.Contains(string(calls), want) {
+		t.Errorf("herdr calls = %q, want %q", calls, want)
+	}
+}
+
 // The workspace wears the list's own marks: a "✓" once the merge request
 // is in, the "☐" of work pushed and waiting on a reviewer until then, and
 // nothing at all where there is nothing to wait on — a merge request nobody
