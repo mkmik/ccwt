@@ -292,8 +292,12 @@ func (c *TuiCmd) Run() error {
 			// The seed prompt and the queue prompt open on their title line; ↵ or
 			// tab go on down to the prompt, and shift-tab comes back up. A click
 			// picks a box too: the title, or anything below it.
+			case u.entry.open && u.effortRow > 0 && mouseRow(k) >= u.effortRow && mouseRow(k) < u.titleRow:
+				u.clickEffort(k)
 			case u.entry.open && u.titleRow > 0 && mouseRow(k) >= u.titleRow:
-				u.title.open = mouseRow(k) < u.titleRow+3
+				u.title.open, u.effortFocus = mouseRow(k) < u.titleRow+3, false
+			case u.entry.open && u.effortFocus:
+				u.askEffort(k)
 			case u.entry.open && u.title.open:
 				u.askTitle(k)
 			case u.entry.open && k == "\x1b[Z":
@@ -704,6 +708,13 @@ type ui struct {
 	// titleRow is the screen row, counted the way a mouse report does, of the
 	// title box's top rule as last drawn: a click there or below picks the box.
 	titleRow int
+
+	// The seed prompt's --effort, "" for the harness's default, and whether its
+	// scale, above the title, is what the arrows move. effortRow is that box's
+	// top rule and effortCol the column "low" starts in, as titleRow counts.
+	effort               string
+	effortFocus          bool
+	effortRow, effortCol int
 
 	// The directory the ws view is asking whether Claude Code may trust, while
 	// that question is up — see askTrust.
@@ -1702,7 +1713,10 @@ func (u *ui) frame() ([]string, error) {
 			keys = " ↵:start  shift-tab:title  ctrl-o:model  ctrl-g:$EDITOR  esc:cancel "
 		}
 		if u.ws && u.title.open {
-			keys = " ↵/tab:prompt  ctrl-o:model  esc:cancel "
+			keys = " ↵/tab:prompt  shift-tab:effort  ctrl-o:model  esc:cancel "
+		}
+		if u.ws && u.effortFocus {
+			keys = " ←→:effort  ⌫:default  ↵/tab:title  esc:cancel "
 		}
 		// The bar is the only line left to say why the editor didn't open.
 		return append(lines[:body], highlight(keys+u.msg, cols)), nil
@@ -3263,7 +3277,7 @@ func (u *ui) startPending() string {
 	}
 	// The agent's tab before the tui: a `ccwt ws` that finds itself alone in
 	// the workspace opens on the seed prompt, asking for what is already running.
-	if err := seed(ws, path, "", title, prompt); err != nil {
+	if err := seed(ws, path, "", "", title, prompt); err != nil {
 		return "start failed: " + err.Error()
 	}
 	if err := runWs(pane); err != nil {

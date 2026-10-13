@@ -558,11 +558,14 @@ func (u *ui) askSeed() {
 }
 
 // askTitle feeds one keystroke to the seed prompt's title line: ↵ or tab go on
-// down to the prompt, escape abandons the lot, and the rest is the line editor.
+// down to the prompt, shift-tab up to the effort scale, escape abandons the
+// lot, and the rest is the line editor.
 func (u *ui) askTitle(k string) {
 	switch k {
 	case "\r", "\t", "\x1b[27;2;13~":
 		u.title.open = false
+	case "\x1b[Z":
+		u.title.open, u.effortFocus = !u.ws, u.ws
 	case "\x1b", "\x03":
 		u.entry, u.title = entry{}, entry{}
 	default:
@@ -570,14 +573,121 @@ func (u *ui) askTitle(k string) {
 	}
 }
 
+// efforts are the cli's --effort levels, lowest first, with the colour Claude
+// Code's own scale picks each one out in.
+var efforts = []struct{ name, sgr string }{
+	{"low", "33"}, {"medium", "32"}, {"high", "34"}, {"xhigh", "35"}, {"max", "1;31"},
+}
+
+// effortScale is Claude Code's effort slider, drawn as its /model draws it: 42
+// columns, the ▲ under each level at these offsets, and the levels spaced
+// out beneath. Nothing is chosen at -1, the harness's default.
+const effortScale = "low     medium     high     xhigh      max"
+
+var effortMarks = []int{1, 10, 20, 30, 40}
+
+// askEffort feeds one keystroke to the effort scale: the arrows move along it
+// — the first press from the default lands on high, the middle — backspace goes
+// back to the default, and ↵, tab or ↓ go on to the title.
+func (u *ui) askEffort(k string) {
+	i := slices.IndexFunc(efforts, func(e struct{ name, sgr string }) bool { return e.name == u.effort })
+	switch k {
+	case "\x1b[D", "\x1b[C", "h", "l":
+		switch {
+		case i < 0:
+			i = 2
+		case k == "\x1b[D" || k == "h":
+			i = max(i-1, 0)
+		default:
+			i = min(i+1, len(efforts)-1)
+		}
+		u.effort = efforts[i].name
+	case "\x7f", "\b":
+		u.effort = ""
+	case "\r", "\t", "\x1b[B", "\x1b[27;2;13~":
+		u.effortFocus, u.title.open = false, true
+	case "\x1b", "\x03":
+		u.entry, u.title, u.effortFocus = entry{}, entry{}, false
+	}
+}
+
+// clickEffort is a click on the effort box: it takes the keys, and a click on
+// the track or the levels picks the level nearest it.
+func (u *ui) clickEffort(k string) {
+	u.effortFocus, u.title.open = true, false
+	col, row := mouseAt(k)
+	if row-u.effortRow < 2 {
+		return
+	}
+	best := 0
+	for i, m := range effortMarks {
+		if abs(col-u.effortCol-m) < abs(col-u.effortCol-effortMarks[best]) {
+			best = i
+		}
+	}
+	u.effort = efforts[best].name
+}
+
+func abs(n int) int { return max(n, -n) }
+
+// effortPane is the effort box: Faster to Smarter, the track with the ▲ on the
+// chosen level, the levels under it, dim but for that one. With the keys, the
+// chosen level is inverted, the caret the other boxes show.
+func (u *ui) effortPane(pad string, inner int) []string {
+	lead := max((inner-len(effortScale))/2, 1)
+	u.effortCol = len(pad) + 2 + lead // +1 past the │, +1: a mouse counts from 1
+	row := paneRow(pad, inner)
+	sp := strings.Repeat(" ", lead)
+	i := slices.IndexFunc(efforts, func(e struct{ name, sgr string }) bool { return e.name == u.effort })
+	track := []rune(strings.Repeat("─", len(effortScale)))
+	if i >= 0 {
+		track[effortMarks[i]] = '▲'
+	}
+	head := row(sp + "Faster" + strings.Repeat(" ", len(effortScale)-13) + "Smarter")
+	line := row(sp + string(track))
+	labels := row(sp + effortScale)
+	// The colours go in after the padding is counted: paneRow counts runes, and
+	// an escape is runes that take no room.
+	at := len([]rune(pad)) + 1 + lead
+	paint := func(l string, from, to int, sgr string) string {
+		r := []rune(l)
+		return string(r[:from]) + "\x1b[" + sgr + "m" + string(r[from:to]) + "\x1b[0m" + string(r[to:])
+	}
+	if i >= 0 {
+		m := at + effortMarks[i]
+		line = paint(paint(line, m+1, at+len(effortScale), "2"), m, m+1, "1")
+		line = paint(line, at, m, "2")
+		from := at + strings.Index(effortScale, efforts[i].name)
+		to := from + len(efforts[i].name)
+		sgr := efforts[i].sgr
+		if u.effortFocus {
+			sgr += ";7"
+		}
+		labels = paint(paint(paint(labels, to, at+len(effortScale), "2"), from, to, sgr), at, from, "2")
+	} else {
+		line = paint(line, at, at+len(effortScale), "2")
+		labels = paint(labels, at, at+len(effortScale), "2")
+	}
+	title := "effort"
+	if u.effortFocus {
+		title = "effort ← →"
+	}
+	return paneBox(pad, inner, title, []string{head, line, labels})
+}
+
 // seedPane is the seed prompt's box — or the queue prompt's — with its title
-// line in a box of its own above it. Only the line taking the keys shows a caret.
+// line in a box of its own above it, and in the ws view the effort scale above
+// that. Only the box taking the keys shows a caret.
 func (u *ui) seedPane(cols, rows int) []string {
 	cur := u.entry.cur
-	if u.title.open {
+	if u.title.open || u.effortFocus {
 		cur = -1
 	}
-	pane := entryPane(u.entry.text, cur, u.entryTitle(), cols, max(rows-3, 1))
+	above := 3
+	if u.ws {
+		above += 5
+	}
+	pane := entryPane(u.entry.text, cur, u.entryTitle(), cols, max(rows-above, 1))
 	w := min(max(cols*3/5, 24), cols)
 	inner := max(w-2, 1)
 	pad := strings.Repeat(" ", max(cols-w, 0)/2)
@@ -591,8 +701,14 @@ func (u *ui) seedPane(cols, rows int) []string {
 	for top < len(pane) && pane[top] == "" {
 		top++
 	}
-	u.titleRow = top + 1 // +1: a mouse counts from 1
-	return slices.Concat(pane[:top], paneBox(pad, inner, "title", []string{line}), pane[top:])
+	var effort []string
+	u.effortRow = 0
+	if u.ws {
+		effort = u.effortPane(pad, inner)
+		u.effortRow = top + 1
+	}
+	u.titleRow = top + len(effort) + 1 // +1: a mouse counts from 1
+	return slices.Concat(pane[:top], effort, paneBox(pad, inner, "title", []string{line}), pane[top:])
 }
 
 // startSeed is ↵ on the seed prompt: start the agent, and close the box only
@@ -609,7 +725,7 @@ func (u *ui) startSeed() string {
 		return "start failed: " + err.Error()
 	}
 	name := strings.Join(strings.Fields(u.title.text), " ")
-	if err := seed(os.Getenv("HERDR_WORKSPACE_ID"), cwd, u.modelName, name, u.entry.expanded()); err != nil {
+	if err := seed(os.Getenv("HERDR_WORKSPACE_ID"), cwd, u.modelName, u.effort, name, u.entry.expanded()); err != nil {
 		return "start failed: " + err.Error()
 	}
 	u.entry, u.title = entry{}, entry{}
@@ -652,17 +768,20 @@ func (u *ui) askModel(k string) {
 //
 // The model is whatever ctrl-o last set, if anything, appended as a flag rather than woven
 // into task_command: the command is the config's, the same for every agent, and
-// the model is this one's.
+// the model is this one's. The effort the scale was left on goes the same way.
 //
 // The pane comes out of the create's own answer: with every tab in the one
 // directory, there is nothing else that tells the new pane from the tui's own.
-func seed(ws, cwd, model, name, prompt string) error {
+func seed(ws, cwd, model, effort, name, prompt string) error {
 	argv, err := taskCommand()
 	if err != nil {
 		return err
 	}
 	if model != "" {
 		argv = append(argv, "--model", shellQuote(model))
+	}
+	if effort != "" {
+		argv = append(argv, "--effort", effort)
 	}
 	if name != "" {
 		argv = append(argv, "--name", shellQuote(name))
