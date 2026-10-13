@@ -112,7 +112,8 @@ configured repo in one process at 39 MB. Each instance pays instead for
 ## Stages, if it earns its keep
 
 - [ ] 1. The tuis stop linking sqlite: the queue read behind a `ccwt` subprocess
-  or a plain file. ~5 MB an instance, ~230 MB at today's count
+  or a plain file. ~2 MB of footprint an instance (a ws view built without
+  the driver: 11.3 MB against 13.4), ~90 MB at today's count
 - [ ] 2. A daemon gathers: one process does the git, transcript, herdr and MR
   rounds for every repo and workspace, and the tuis subscribe to it over a unix
   socket rather than each asking for itself. Also cuts the cpu: `-g` repeats
