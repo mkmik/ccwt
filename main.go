@@ -1593,42 +1593,90 @@ func transcriptSummary(worktreePath, path, stamp string) string {
 // And the file is streamed rather than read whole: the list summarizes every
 // row at once, and a few live sessions' worth of transcripts held in memory
 // together is what made a long-running tui weigh hundreds of megabytes.
+//
+// Nor is it read from the top more than once: a transcript only ever grows, and
+// a live session's grows between every refresh, so each scan picks up where the
+// last one stopped (transcriptScans) and reads just what was appended since —
+// into a buffer no bigger than that, rather than a fresh megabyte every round.
 func summarizeTranscript(path string) string {
 	f, err := os.Open(path)
 	if err != nil {
 		return ""
 	}
 	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return ""
+	}
 
-	var recap, first string
-	br := bufio.NewReaderSize(f, 1<<20)
+	transcriptScans.Lock()
+	s := transcriptScans.m[path]
+	transcriptScans.Unlock()
+	if fi.Size() < s.off { // not the file we scanned: start over
+		s = transcriptScan{}
+	}
+	if _, err := f.Seek(s.off, io.SeekStart); err != nil {
+		return ""
+	}
+	// Only up to the size just taken: a line still being written past it would
+	// otherwise overflow a buffer sized to what came before it, and be skipped.
+	left := fi.Size() - s.off
+	br := bufio.NewReaderSize(io.LimitReader(f, left), int(min(left+1, 1<<20)))
+	var partial []byte // a last line with no newline yet: answered, not kept
 	for {
 		line, err := br.ReadSlice('\n')
 		// ponytail: a line past the buffer is a tool result, never a recap or a
 		// typed prompt, so it is skipped rather than grown into; a bigger buffer
 		// if a megabyte paste as the first prompt ever matters.
 		if err == bufio.ErrBufferFull {
+			n := int64(len(line))
 			for err == bufio.ErrBufferFull {
-				_, err = br.ReadSlice('\n')
+				line, err = br.ReadSlice('\n')
+				n += int64(len(line))
 			}
 			if err != nil {
 				break
 			}
+			s.off += n
 			continue
 		}
-		summarizeLine(line, &recap, &first)
 		if err != nil {
+			partial = line
 			break
 		}
+		summarizeLine(line, &s.recap, &s.first)
+		s.off += int64(len(line))
 	}
-	if recap == "" {
-		recap = first
+	transcriptScans.Lock()
+	transcriptScans.m[path] = s
+	transcriptScans.Unlock()
+
+	if len(partial) > 0 {
+		summarizeLine(partial, &s.recap, &s.first)
 	}
+	recap := cmp.Or(s.recap, s.first)
 	// Flatten: a recap carries the UI's own nudge on the end, and a first
 	// prompt can be paragraphs of text — either way a table cell gets one line.
 	recap = strings.Join(strings.Fields(recap), " ")
 	return strings.TrimSpace(strings.TrimSuffix(recap, "(disable recaps in /config)"))
 }
+
+// transcriptScan is how far summarizeTranscript has read into one transcript,
+// and what it had found by then.
+type transcriptScan struct {
+	off          int64 // just past the last whole line read
+	recap, first string
+}
+
+// transcriptScans holds a transcriptScan per transcript path.
+//
+// ponytail: never pruned — an entry per session the tui has ever summarized,
+// a few hundred bytes each; sweep the ones newestTranscript no longer names if
+// a tui that lives for weeks ever makes that add up.
+var transcriptScans = struct {
+	sync.Mutex
+	m map[string]transcriptScan
+}{m: map[string]transcriptScan{}}
 
 // summarizeLine is summarizeTranscript's look at one line: the recap it is, or
 // the first prompt it is while there hasn't been one yet.

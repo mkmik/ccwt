@@ -2197,6 +2197,31 @@ func TestSummarizeTranscript(t *testing.T) {
 			}
 		})
 	}
+
+	// A live session's transcript grows between scans, each picking up where
+	// the last stopped — including a line caught half-written.
+	t.Run("grows", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "session.jsonl")
+		f, err := os.Create(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		for _, step := range []struct{ write, want string }{
+			{attachment + "\n" + prompt + "\n", "Proposal add --path to new"},
+			{recap1[:20], "Proposal add --path to new"},
+			{recap1[20:] + "\n" + toolResult + "\n", "Goal was the first thing."},
+			{recap2, "Goal was the last thing."}, // no newline yet, but whole
+			{"\n" + slash + "\n", "Goal was the last thing."},
+		} {
+			if _, err := f.WriteString(step.write); err != nil {
+				t.Fatal(err)
+			}
+			if got := summarizeTranscript(path); got != step.want {
+				t.Errorf("after %q: summarizeTranscript() = %q, want %q", step.write, got, step.want)
+			}
+		}
+	})
 }
 
 // -g spans the configured projects: each gets a section of its own, holding its
