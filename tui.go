@@ -3012,9 +3012,20 @@ var fetchLock sync.Mutex
 // gitPull runs a pull in dir and boils its chatter down to the one line the bar
 // has room for: on success the first line says what happened ("Already up to
 // date.", "Updating a1b2..c3d4"), on failure the last line is git's reason.
+//
+// The background fetch has usually brought the upstream in already — it's what
+// put the ↓ in the bar — so while the branch is behind what was fetched, the
+// pull is a fast-forward to it, with no network in the way. Only once there is
+// nothing fetched left to catch up on (or the branch has diverged from it) does
+// `p` go and ask the remote.
 func gitPull(dir string) string {
 	if dir == "" {
 		return "no worktree selected"
+	}
+	if n := gitLine(dir, "rev-list", "--count", "HEAD..@{u}"); n != "" && n != "0" {
+		if err := exec.Command("git", "-C", dir, "merge", "-q", "--ff-only", "@{u}").Run(); err == nil {
+			return "pull: fast-forwarded " + n + " commits to what was fetched (p again to fetch)"
+		}
 	}
 	cmd := exec.Command("git", "pull")
 	cmd.Dir = dir
