@@ -370,6 +370,10 @@ const wsBadgeTTL = 5 * mrWindow
 // once the merge request is in: a "✓" reads as "done with, remove it", and
 // removing it would lose them.
 //
+// While it waits, the box says what its pipeline is doing, since that is
+// what decides whether the wait is on you: filled while it runs, crossed out
+// once it failed. The sidebar has no colour to say it with, so the shape does.
+//
 // herdr has no icon for a client to set, so it goes as display-only workspace
 // metadata under an `mr` token, which the spaces panel draws for whoever has
 // asked for it in their config:
@@ -398,6 +402,12 @@ func wsBadge(look *mrLook) {
 		case "closed", "locked": // nothing left to wait on, and nothing landed: no badge beats either mark
 		default:
 			glyph = reviewGlyph
+			switch r := look.rows[0].pipeline; {
+			case r == "running":
+				glyph = "■"
+			case strings.HasPrefix(r, "failed"):
+				glyph = "☒"
+			}
 		}
 	}
 	// A workspace with nothing to say loses the token rather than keeping the
