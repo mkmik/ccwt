@@ -939,7 +939,8 @@ esac
 }
 
 // The workspace wears the list's own marks: a "✓" once the merge request
-// is in, the "☐" of work pushed and waiting on a reviewer until then, and
+// is in, the "☐" of work pushed and waiting on a reviewer until then — filled
+// while its pipeline runs and crossed out once it failed — and
 // nothing at all where there is nothing to wait on — a merge request nobody
 // opened yet, or one that was closed without landing. A merge request that is
 // in over uncommitted changes gets the list's "±" for them instead of the "✓".
@@ -960,13 +961,15 @@ func TestWsBadgeSaysWhereTheMergeRequestStands(t *testing.T) {
 	const call = "workspace report-metadata w1 --source ccwt "
 	ttl := " --ttl-ms " + fmt.Sprint(wsBadgeTTL.Milliseconds())
 	var want []string
-	for _, tc := range []struct{ status, token string }{
-		{"merged", "--token mr=✓" + ttl},
-		{"needs approval", "--token mr=☐" + ttl},
-		{"can be merged", "--token mr=☐" + ttl},
-		{"closed", "--clear-token mr"},
+	for _, tc := range []struct{ status, pipeline, token string }{
+		{"merged", "", "--token mr=✓" + ttl},
+		{"needs approval", "", "--token mr=☐" + ttl},
+		{"can be merged", "green", "--token mr=☐" + ttl},
+		{"needs approval", "running", "--token mr=■" + ttl},
+		{"needs approval", "failed: lint", "--token mr=☒" + ttl},
+		{"closed", "", "--clear-token mr"},
 	} {
-		wsBadge(&mrLook{rows: []mrRow{{status: tc.status}}})
+		wsBadge(&mrLook{rows: []mrRow{{status: tc.status, pipeline: tc.pipeline}}})
 		want = append(want, call+tc.token)
 	}
 	wsBadge(&mrLook{}) // never pushed: the workspace every one of these starts as
