@@ -341,6 +341,11 @@ func TestPrRowIsReadOffTheApi(t *testing.T) {
 		"number": 42, "title": "a widget", "url": "https://github.com/acme/api/pull/42",
 		"state": "OPEN", "isDraft": false, "isInMergeQueue": false,
 		"mergeStateStatus": "BLOCKED", "reviewDecision": "REVIEW_REQUIRED",
+		"latestOpinionatedReviews": {"nodes": [
+			{"state": "APPROVED", "author": {"login": "alice"}},
+			{"state": "CHANGES_REQUESTED", "author": {"login": "bob"}},
+			{"state": "APPROVED", "author": {"login": "carol"}}
+		]},
 		"mergeCommit": null, "repository": {"nameWithOwner": "acme/api"},
 		"reviewThreads": {"nodes": [
 			{"isResolved": true, "comments": {"nodes": [{"url": "https://github.com/acme/api/pull/42#discussion_r1"}]}},
@@ -359,7 +364,7 @@ func TestPrRowIsReadOffTheApi(t *testing.T) {
 	if err := json.Unmarshal([]byte(answer), &p); err != nil {
 		t.Fatal(err)
 	}
-	want := mrRow{ref: "acme/api#42", url: "https://github.com/acme/api/pull/42", title: "a widget", status: "needs approval", pipeline: "failed: lint, ci/jenkins", comments: "2 open", commentsURL: "https://github.com/acme/api/pull/42#discussion_r2", env: "prod"}
+	want := mrRow{ref: "acme/api#42", url: "https://github.com/acme/api/pull/42", title: "a widget", status: "needs approval", approved: "alice, carol", pipeline: "failed: lint, ci/jenkins", comments: "2 open", commentsURL: "https://github.com/acme/api/pull/42#discussion_r2", env: "prod"}
 	if got := p.row("prod"); got != want {
 		t.Errorf("row = %+v, want %+v", got, want)
 	}
@@ -386,7 +391,7 @@ func TestMrTableIsARowPerMergeRequest(t *testing.T) {
 	stdoutIsTTY = func() bool { return true } // the columns table; markdown has its own test
 	rows := []mrRow{
 		{ref: "acme/tools/backend/api!2596", url: "https://gitlab.example.com/acme/tools/backend/api/-/merge_requests/2596", title: "add a widget to the dashboard", status: "merged"},
-		{ref: "acme/tools/backend/api!2670", title: "fix the flux capacitor", status: "needs approval", pipeline: "failed: e2e", comments: "3 open", env: "staging, production"},
+		{ref: "acme/tools/backend/api!2670", title: "fix the flux capacitor", status: "needs approval", approved: "alice", pipeline: "failed: e2e", comments: "3 open", env: "staging, production"},
 	}
 	lines := mrTable("PROJ-1234", rows, 0)
 	if len(lines) != 3 || !strings.HasPrefix(lines[0], "MR") || !strings.Contains(lines[0], "PIPELINE") {
@@ -403,6 +408,9 @@ func TestMrTableIsARowPerMergeRequest(t *testing.T) {
 	}
 	if !strings.Contains(lines[2], "needs approval") || !strings.Contains(lines[2], "failed: e2e") || !strings.Contains(lines[2], "3 open") {
 		t.Errorf("line 2 = %q, want the status and the failing job on it", lines[2])
+	}
+	if !strings.Contains(lines[0], "APPROVED") || !strings.Contains(lines[2], "alice") {
+		t.Errorf("header %q and line 2 %q, want who approved it named", lines[0], lines[2])
 	}
 	if !strings.Contains(lines[0], "ENV") || !strings.Contains(lines[2], "staging, production") {
 		t.Errorf("header %q and line 2 %q, want the environments running it named", lines[0], lines[2])
