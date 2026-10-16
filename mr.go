@@ -152,12 +152,16 @@ func lookThing(thing string, askEnvs bool) ([]mrRow, error) {
 		// is any use without the other.
 		var envs []env
 		var open []int
+		var approved string
 		var wg sync.WaitGroup
 		wg.Go(func() {
 			envs = environments(host, project, askEnvs)
 		})
 		wg.Go(func() {
 			open = openThreads(host, project, iid)
+		})
+		wg.Go(func() {
+			approved = approvers(host, project, iid)
 		})
 		got, err := fetchMR(host, project, iid)
 		wg.Wait()
@@ -166,7 +170,9 @@ func lookThing(thing string, askEnvs bool) ([]mrRow, error) {
 		}
 		// One of these two asks anything: a merge request that has landed
 		// reports no pipeline, and one that hasn't is running nowhere.
-		return []mrRow{got.row(pipelineNote(host, got), open, deployedTo(host, project, got, envs, askEnvs))}, nil
+		row := got.row(pipelineNote(host, got), open, deployedTo(host, project, got, envs, askEnvs))
+		row.approved = approved
+		return []mrRow{row}, nil
 	}
 	if m := prURL.FindStringSubmatch(thing); m != nil {
 		return lookPR(m[1], m[2], m[0], askEnvs)
@@ -256,7 +262,7 @@ func checkedOutBranch(dir string) string {
 // The url isn't a column — it's what the ref column links to, as commentsURL,
 // the first of the open threads, is what COMMENTS links to.
 type mrRow struct {
-	ref, url, title, status, pipeline, comments, commentsURL, env string
+	ref, url, title, status, approved, pipeline, comments, commentsURL, env string
 }
 
 // mr is what the api says about a merge request, cut down to what the row
@@ -415,6 +421,7 @@ func ticketMRs(key string, askEnvs bool) ([]mrRow, error) {
 				open = openThreads("", project, m.IID)
 			}
 			rows[i] = m.row(pipelineNote("", m), open, deployedTo("", project, m, envs[slices.Index(projects, hits[i].ProjectID)], askEnvs))
+			rows[i].approved = approvers("", project, m.IID)
 		})
 	}
 	wg.Wait()
@@ -628,6 +635,38 @@ func openThreads(host, project string, iid int) []int {
 	return open
 }
 
+// approvers is the APPROVED cell: who has approved the merge request, by
+// username, as gitlab lists them — bar a group or project access token's
+// bot, whose username is a hash and whose name ("ci[bot]") is what says who it
+// is. It is asked of a settled one too — who let it in is still worth knowing
+// once it's in.
+//
+// A lookup that fails is nobody, as openThreads's is.
+func approvers(host, project string, iid int) string {
+	var got struct {
+		By []struct {
+			User struct {
+				Username string `json:"username"`
+				Name     string `json:"name"`
+			} `json:"user"`
+		} `json:"approved_by"`
+	}
+	if err := glabAPI(host, fmt.Sprintf("projects/%s/merge_requests/%d/approvals", project, iid), &got); err != nil {
+		return ""
+	}
+	names := make([]string, len(got.By))
+	for i, a := range got.By {
+		names[i] = a.User.Username
+		if tokenBot.MatchString(a.User.Username) {
+			names[i] = a.User.Name
+		}
+	}
+	return strings.Join(names, ", ")
+}
+
+// tokenBot is the username gitlab makes up for an access token's bot user.
+var tokenBot = regexp.MustCompile(`^(group|project)_\d+_bot_`)
+
 // openNote is the COMMENTS cell for that many open threads: nothing at all
 // for none.
 func openNote(open int) string {
@@ -784,24 +823,26 @@ func mrCells(rows []mrRow) ([][]string, []column) {
 	cols := []column{
 		{name: "MR", cut: elide, max: 44},
 		{name: "STATUS"},
+		{name: "APPROVED", cut: truncate, max: 30},
 		{name: "PIPELINE", cut: truncate, pipe: 60}, // room for the failed jobs, which jobsNote has already bounded
 		{name: "COMMENTS"},
 		{name: "ENV", cut: truncate, max: 30},
 		{name: "TITLE", cut: truncate, pipe: 50},
 	}
-	table := [][]string{{"MR", "STATUS", "PIPELINE", "COMMENTS", "ENV", "TITLE"}}
+	table := [][]string{{"MR", "STATUS", "APPROVED", "PIPELINE", "COMMENTS", "ENV", "TITLE"}}
 	for _, r := range rows {
-		table = append(table, []string{r.ref, r.status, r.pipeline, r.comments, r.env, r.title})
+		table = append(table, []string{r.ref, r.status, r.approved, r.pipeline, r.comments, r.env, r.title})
 	}
 	// Merge requests that are all in already have nothing to put under
-	// PIPELINE, and a review with nothing left open nothing under COMMENTS;
+	// PIPELINE, a review with nothing left open nothing under COMMENTS, and
+	// one nobody has approved nothing under APPROVED;
 	// a column of blanks under a header is just the header, so it goes — as
 	// PROJECT does when the worklog is one project's. Right to left, so the
 	// one going doesn't move the other.
 	//
 	// ENV stays whether anything fills it or not: a project that deploys
 	// nowhere is a thing to see rather than a column to hide.
-	for _, col := range []int{3, 2} {
+	for _, col := range []int{4, 3, 2} {
 		if slices.ContainsFunc(table[1:], func(row []string) bool { return row[col] != "" }) {
 			continue
 		}

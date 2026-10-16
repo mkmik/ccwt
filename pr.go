@@ -47,6 +47,7 @@ func onGitHub(host string) bool {
 const prFields = `
 fragment pr on PullRequest {
 	number title url state isDraft isInMergeQueue mergeStateStatus reviewDecision
+	latestOpinionatedReviews(first: 100) { nodes { state author { login } } }
 	reviewThreads(first: 100) { nodes { isResolved comments(first: 1) { nodes { url } } } }
 	mergeCommit { oid }
 	repository { nameWithOwner }
@@ -69,7 +70,15 @@ type pr struct {
 	InMergeQueue bool   `json:"isInMergeQueue"`
 	MergeState   string `json:"mergeStateStatus"`
 	Review       string `json:"reviewDecision"`
-	Threads      struct {
+	Reviews      struct {
+		Nodes []struct {
+			State  string `json:"state"`
+			Author struct {
+				Login string `json:"login"`
+			} `json:"author"`
+		} `json:"nodes"`
+	} `json:"latestOpinionatedReviews"`
+	Threads struct {
 		Nodes []struct {
 			Resolved bool `json:"isResolved"`
 			Comments struct {
@@ -115,6 +124,7 @@ func (p pr) row(env string) mrRow {
 		url:         p.URL,
 		title:       p.Title,
 		status:      prStatus(p),
+		approved:    prApprovers(p),
 		pipeline:    prChecks(p),
 		env:         env,
 	}
@@ -156,6 +166,19 @@ func prStatus(p pr) string {
 		}
 	}
 	return cmp.Or(words(strings.ToLower(p.MergeState)), "unknown")
+}
+
+// prApprovers is approvers for a pull request: whoever's latest say on it was
+// an approval, which is what github counts — one who approved and then asked
+// for changes hasn't approved it.
+func prApprovers(p pr) string {
+	var names []string
+	for _, r := range p.Reviews.Nodes {
+		if r.State == "APPROVED" {
+			names = append(names, r.Author.Login)
+		}
+	}
+	return strings.Join(names, ", ")
 }
 
 // prChecks is pipelineNote for a pull request: what the checks on its last
