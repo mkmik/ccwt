@@ -328,8 +328,12 @@ func wsMR(width int) []string {
 	defer wsMRLook.Unlock()
 	if stamp := window(mrWindow); wsMRLook.stamp != stamp && !wsMRLook.running {
 		wsMRLook.stamp, wsMRLook.running = stamp, true
+		was := lookMerged(wsMRLook.look)
 		go func() {
 			look := branchLook()
+			if lookMerged(look) && !was {
+				landed()
+			}
 			wsBadge(look)
 			wsMRLook.Lock()
 			defer wsMRLook.Unlock()
@@ -337,6 +341,22 @@ func wsMR(width int) []string {
 		}()
 	}
 	return mrSection(wsMRLook.look, width)
+}
+
+func lookMerged(look *mrLook) bool {
+	return look != nil && len(look.rows) > 0 && look.rows[0].status == "merged"
+}
+
+// landed is the forge's "merged" passed on to everything else that asks the
+// same question of git on its own clock: origin/main is fetched now rather than
+// at the next background round, and the cached answers drawn from the old one
+// are dropped — so `r` turns up within a frame of the ✓, not a minute or so
+// after it. Each of them still asks git, and a refusal still comes from git:
+// the forge saying merged makes nothing removable on its own.
+func landed() {
+	fetchOrigin(context.Background(), ".")
+	removableCache.forget()
+	mergedCache.forget()
 }
 
 // branchLook is one round of it: the merge request of the branch the workspace
