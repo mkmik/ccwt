@@ -391,8 +391,10 @@ const wsBadgeTTL = 5 * mrWindow
 // removing it would lose them.
 //
 // While it waits, the box says what its pipeline is doing, since that is
-// what decides whether the wait is on you: filled while it runs, crossed out
-// once it failed. The sidebar has no colour to say it with, so the shape does.
+// what decides whether the wait is on you: a box in a box while it runs,
+// crossed out once it failed, and filled while it rides a merge train (or
+// GitHub's merge queue), where the pipeline is the train's and nothing is on you
+// either way. The sidebar has no colour to say it with, so the shape does.
 //
 // herdr has no icon for a client to set, so it goes as display-only workspace
 // metadata under an `mr` token, which the spaces panel draws for whoever has
@@ -422,10 +424,12 @@ func wsBadge(look *mrLook) {
 		case "closed", "locked": // nothing left to wait on, and nothing landed: no badge beats either mark
 		default:
 			glyph = reviewGlyph
-			switch r := look.rows[0].pipeline; {
-			case r == "running":
+			switch r := look.rows[0]; {
+			case r.status == "merge train" || r.status == "merge queue":
 				glyph = "■"
-			case strings.HasPrefix(r, "failed"):
+			case r.pipeline == "running":
+				glyph = "▣"
+			case strings.HasPrefix(r.pipeline, "failed"):
 				glyph = "☒"
 			}
 		}
