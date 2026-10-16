@@ -709,6 +709,14 @@ func (c *cached[T]) get(key, stamp string, f func() T) T {
 	return v
 }
 
+// forget drops every answer, so the next get asks again whatever the window —
+// for when something outside the clock says the answers have just gone stale.
+func (c *cached[T]) forget() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.m = nil
+}
+
 // window names the current stretch of d, so that everything asked within one
 // stretch shares an answer. Rows are all built in the same round, so they all
 // land in the same stretch and refresh together.

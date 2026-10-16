@@ -2984,11 +2984,7 @@ func fetchMain(ctx context.Context, every time.Duration, dirs []string) {
 		// refspec a clone already has, git updates the remote-tracking branch
 		// on its own, and without forcing it past a rewritten history.
 		for _, dir := range dirs {
-			cmd := exec.CommandContext(ctx, "git", "fetch", "--quiet", "origin", "main")
-			cmd.Dir = dir
-			fetchLock.Lock()
-			_ = cmd.Run()
-			fetchLock.Unlock()
+			fetchOrigin(ctx, dir)
 		}
 		select {
 		case <-ctx.Done():
@@ -2996,6 +2992,17 @@ func fetchMain(ctx context.Context, every time.Duration, dirs []string) {
 		case <-time.After(every):
 		}
 	}
+}
+
+// fetchOrigin is one round of fetchMain's, for one repo — also what the ws view
+// runs out of turn when the forge says the branch has landed, rather than wait
+// out the minute for origin/main to hear the same news.
+func fetchOrigin(ctx context.Context, dir string) {
+	cmd := exec.CommandContext(ctx, "git", "fetch", "--quiet", "origin", "main")
+	cmd.Dir = dir
+	fetchLock.Lock()
+	_ = cmd.Run()
+	fetchLock.Unlock()
 }
 
 // fetchLock keeps fetchMain out of gitPull's way. Both move
