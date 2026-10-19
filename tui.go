@@ -313,8 +313,17 @@ func (c *TuiCmd) Run() error {
 				u.queue(k)
 			case u.typing:
 				u.edit(k)
-			case u.opener != nil && k == "\x03":
+			case u.opener != nil && k == "\x03", u.todo != nil && k == "\x03":
 				return nil
+			case u.todo != nil:
+				switch do, url := u.todo.key(k); do {
+				case "close":
+					u.todo = nil
+					u.stale()
+				case "seed":
+					u.todo = nil
+					u.seedTodo(url)
+				}
 			case u.opener != nil:
 				switch do, p := u.opener.key(k); do {
 				case "close":
@@ -462,6 +471,13 @@ func (c *TuiCmd) Run() error {
 				u.prompt(1)
 			case k == "?":
 				u.prompt(-1)
+			// `T` in the ws view is todography's next work, to seed an agent with.
+			case k == "T" && u.ws:
+				if t, err := newTodoPicker(); err != nil {
+					u.msg = "todography: " + err.Error()
+				} else {
+					u.todo, u.msg = t, ""
+				}
 			// `n` is what to do next: queue a prompt behind the selected row —
 			// a worktree, or another prompt.
 			//
@@ -767,6 +783,9 @@ type ui struct {
 	// `o`'s picker under -g, nil when it's shut.
 	opener *opener
 
+	// `T`'s picker in the ws view, nil when it's shut.
+	todo *todoPicker
+
 	// The hamburger's menu: the actions it was opened on, which of them is
 	// selected, and the screen line the first one came out on — what turns a
 	// click into the entry it landed on, as logFirst does for the worklog. nil
@@ -811,7 +830,7 @@ func (u *ui) stale() {
 // quiet reports that the list is all there is on screen: no pane, box or menu
 // over it. What stale may refresh behind, and what a restart may take down.
 func (u *ui) quiet() bool {
-	return u.detail == nil && !u.entry.open && !u.logOpen && u.menu == nil && u.page == nil && u.trust == "" && u.opener == nil
+	return u.detail == nil && !u.entry.open && !u.logOpen && u.menu == nil && u.page == nil && u.trust == "" && u.opener == nil && u.todo == nil
 }
 
 // psView is the switch between the two lists: what's in the window is a
@@ -1725,6 +1744,16 @@ func (u *ui) frame() ([]string, error) {
 	// `o`'s picker is another, and another list of rows to pick from.
 	if u.opener != nil {
 		pane, keys := u.opener.pane(cols, body)
+		for i, l := range pane {
+			if l != "" && i < body {
+				lines[i] = l
+			}
+		}
+		return append(lines[:body], highlight(keys+u.msg, cols)), nil
+	}
+
+	if u.todo != nil {
+		pane, keys := u.todo.pane(cols, body)
 		for i, l := range pane {
 			if l != "" && i < body {
 				lines[i] = l

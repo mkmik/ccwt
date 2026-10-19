@@ -527,7 +527,7 @@ func wsActions(sel listRow, searching bool) []action {
 	if searching {
 		as = append(as, action{"n", "next"}, action{"N", "prev"})
 	} else {
-		as = append(as, action{"n", "agent"})
+		as = append(as, action{"n", "agent"}, action{"T", "todo"})
 	}
 	if sel.tab != "" {
 		as = append(as, action{" ", "go"}, action{"g", "git"})
@@ -1233,4 +1233,93 @@ func wsDownPane(names []string, global bool, cols, rows int) []string {
 		body = append(body, row(" "+n))
 	}
 	return paneBox("", inner, title, body)
+}
+
+// todoPicker is `T` in the ws view: `todography next`, the map's wanted work
+// whose needs are met, in a pane over the table — one row per item, the
+// milestone headings left out. `c` on a row opens the seed prompt on its url,
+// for an agent to be started on once there's more said about it.
+//
+// A snapshot, like the opener's: what was next when the pane came up.
+type todoPicker struct {
+	rows     []string // todography's lines, the url first on each
+	sel, top int
+	first, n int // the screen line the first row came out on, and how many were drawn
+}
+
+// newTodoPicker runs `todography next` where the tui is standing, which is
+// where todography looks for its map.
+func newTodoPicker() (*todoPicker, error) {
+	out, err := exec.Command("todography", "next").CombinedOutput()
+	if err != nil {
+		return nil, errors.New(lastLine(out, err))
+	}
+	return &todoPicker{rows: todoRows(string(out))}, nil
+}
+
+// todoRows is the items of todography's listing: the indented lines, each
+// starting with its t8y: url.
+func todoRows(out string) []string {
+	var rows []string
+	for l := range strings.Lines(out) {
+		if l = strings.TrimSpace(l); strings.HasPrefix(l, "t8y:") {
+			rows = append(rows, l)
+		}
+	}
+	return rows
+}
+
+// key is the picker's turn at a keystroke: "close", or "seed" and the url of
+// the row `c` was pressed on.
+func (t *todoPicker) key(k string) (string, string) {
+	switch k {
+	case "\x1b", "T":
+		return "close", ""
+	case "\x1b[A", "k":
+		t.sel = max(t.sel-1, 0)
+	case "\x1b[B", "j":
+		t.sel = min(t.sel+1, max(len(t.rows)-1, 0))
+	case "c":
+		if t.sel < len(t.rows) {
+			return "seed", strings.Fields(t.rows[t.sel])[0]
+		}
+	default:
+		if i := mouseRow(k) - t.first; i >= 0 && i < t.n {
+			t.sel = t.top + i
+		}
+	}
+	return "", ""
+}
+
+// pane draws the picker as the opener is drawn, and says what the bar under
+// it is to read.
+func (t *todoPicker) pane(cols, rows int) ([]string, string) {
+	pad, inner := paneWidth(cols)
+	row := paneRow(pad, inner)
+	fits := max(rows-2, 1) // the two rules
+	t.top = max(min(max(t.top, t.sel-fits+1), t.sel), 0)
+	t.n = min(fits, len(t.rows)-t.top)
+	var body []string
+	for i, r := range t.rows[t.top : t.top+t.n] {
+		l := row(" " + r)
+		if t.top+i == t.sel {
+			l = band(l)
+		}
+		body = append(body, l)
+	}
+	if len(t.rows) == 0 {
+		body = append(body, row(" nothing next"))
+	}
+	lines := paneBox(pad, inner, "todography next", body)
+	margin := min(2, max(rows-len(lines), 0)/2)
+	t.first = margin + 2 // the margin and the top rule, and a mouse counts from 1
+	return append(make([]string, margin), lines...), " ↑↓:select  c:agent  esc:close "
+}
+
+// seedTodo is `c` in the todo picker: the seed prompt, open on url with the
+// title the url less its scheme, and the caret at the end of the prompt — the
+// agent waits for ↵, so there's room to say more first.
+func (u *ui) seedTodo(url string) {
+	u.entry, u.title = newEntry(listRow{}, url, 0), newEntry(listRow{}, strings.TrimPrefix(url, "t8y:"), 0)
+	u.title.open = false
 }
