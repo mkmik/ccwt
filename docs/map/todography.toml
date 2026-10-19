@@ -1,0 +1,47 @@
+# ccwt's map of itself. `todography lint` checks it; `todography build` draws
+# it; `T` in `ccwt ws` seeds an agent from `todography next`.
+title = "ccwt"
+
+[[band]]
+id = "surfaces"
+title = "What you use"
+
+[[band]]
+id = "engine"
+title = "What it works out"
+
+[[band]]
+id = "outside"
+title = "What it talks to"
+
+[[band]]
+id = "ship"
+title = "How it ships"
+
+[[band]]
+id = "deps"
+title = "What it stands on"
+
+[[kind]]
+id = "cli"
+summary = "A ccwt command"
+
+[[kind]]
+id = "ui"
+summary = "A view or part of the tui"
+
+[[kind]]
+id = "core"
+summary = "Logic inside ccwt that the commands and views share"
+
+[[kind]]
+id = "bridge"
+summary = "How ccwt talks to another tool"
+
+[[kind]]
+id = "infra"
+summary = "Repository machinery: CI, releases, docs"
+
+[[kind]]
+id = "dep"
+summary = "A program or Go module ccwt depends on"
