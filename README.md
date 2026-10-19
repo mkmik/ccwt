@@ -757,6 +757,11 @@ other tab yet opens straight on that box, since the first thing to do in a fresh
 say what it's for; `esc` puts it away. `g` shows the history of the worktree under the
 selected tab, and `/`, the mouse and the `☰` are the tui's own.
 
+`T` is what to seed an agent with, when the repo keeps a [todography](https://github.com/mkmik/todography)
+map: `todography next`, the wanted work whose needs are met, in a pane over the table. `c` on
+an item opens the seed prompt on its `t8y:` url, the title the url without the scheme, and
+leaves it there for you to say more before `↵` starts the agent.
+
 When the agents are Claude Code — `task_command` is `claude`, or unset — and Claude Code
 hasn't been told to trust the repository yet, `ccwt ws` asks that first, over everything
 else, the seed prompt included: an agent started in a tab nobody is looking at would

@@ -1233,3 +1233,24 @@ func TestRestartMakesOrReusesThePrjTab(t *testing.T) {
 		t.Errorf("ran %q, want %q", ran, w)
 	}
 }
+
+// `T` lists todography's next items, and `c` on one opens the seed prompt on
+// its url — the title without the scheme — and waits there for more to be said.
+func TestWsTodoSeedsThePromptWithTheURL(t *testing.T) {
+	out := "m0: Milestone 0\n" +
+		"  t8y:/dcl/cld#cdu-limits      todo     SET COMMAND reports every error\n" +
+		"  t8y:/dcl/control-flow#call   todo     CALL, SUBROUTINE\n"
+	u := ui{ws: true, todo: &todoPicker{rows: todoRows(out)}}
+	if len(u.todo.rows) != 2 {
+		t.Fatalf("rows = %q, want the two items and no heading", u.todo.rows)
+	}
+	u.todo.key("\x1b[B")
+	do, url := u.todo.key("c")
+	if do != "seed" || url != "t8y:/dcl/control-flow#call" {
+		t.Fatalf("c = %q %q, want seed on the second url", do, url)
+	}
+	u.seedTodo(url)
+	if !u.entry.open || u.entry.text != url || u.title.text != "/dcl/control-flow#call" || u.title.open {
+		t.Errorf("prompt %q (open %v), title %q (taking keys %v); want the url, and the title without t8y:", u.entry.text, u.entry.open, u.title.text, u.title.open)
+	}
+}
