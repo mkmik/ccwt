@@ -1249,7 +1249,7 @@ func TestWsTodoSeedsThePromptWithTheURL(t *testing.T) {
 	if do != "seed" || url != "t8y:/dcl/control-flow#call" {
 		t.Fatalf("c = %q %q, want seed on the second url", do, url)
 	}
-	u.seedTodo(url)
+	u.seedTodo(listRow{}, url)
 	if !u.entry.open || u.entry.text != url || u.title.text != "/dcl/control-flow#call" || u.title.open {
 		t.Errorf("prompt %q (open %v), title %q (taking keys %v); want the url, and the title without t8y:", u.entry.text, u.entry.open, u.title.text, u.title.open)
 	}

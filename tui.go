@@ -321,8 +321,9 @@ func (c *TuiCmd) Run() error {
 					u.todo = nil
 					u.stale()
 				case "seed":
+					parent := u.todo.parent
 					u.todo = nil
-					u.seedTodo(url)
+					u.seedTodo(parent, url)
 				}
 			case u.opener != nil:
 				switch do, p := u.opener.key(k); do {
@@ -471,12 +472,20 @@ func (c *TuiCmd) Run() error {
 				u.prompt(1)
 			case k == "?":
 				u.prompt(-1)
-			// `T` in the ws view is todography's next work, to seed an agent with.
-			case k == "T" && u.ws:
-				if t, err := newTodoPicker(); err != nil {
+			// `T` is todography's next work, to seed an agent with: in the ws
+			// view a tab's, and elsewhere a prompt queued as `n` queues one.
+			case k == "T" && u.query == "":
+				parent, err := listRow{}, error(nil)
+				if !u.ws {
+					parent, err = u.queueParent()
+				}
+				if err == nil {
+					u.todo, err = newTodoPicker(u.gitDir(), parent)
+				}
+				if err != nil {
 					u.msg = "todography: " + err.Error()
 				} else {
-					u.todo, u.msg = t, ""
+					u.msg = ""
 				}
 			// `n` is what to do next: queue a prompt behind the selected row —
 			// a worktree, or another prompt.
@@ -783,7 +792,7 @@ type ui struct {
 	// `o`'s picker under -g, nil when it's shut.
 	opener *opener
 
-	// `T`'s picker in the ws view, nil when it's shut.
+	// `T`'s picker, nil when it's shut.
 	todo *todoPicker
 
 	// The hamburger's menu: the actions it was opened on, which of them is
@@ -2910,7 +2919,7 @@ func actions(sel listRow, searching, global, agents bool) []action {
 	// `n` queues behind whatever is selected, or as a "<new>" row of its own when
 	// that's nothing — which under -g takes a project selected to say whose, so
 	// there it's the one state the key has nothing to do in.
-	queue := []action{{"n", "queue"}}
+	queue := []action{{"n", "queue"}, {"T", "todo"}}
 	if searching {
 		as = append(as, action{"n", "next"}, action{"N", "prev"})
 		queue = nil

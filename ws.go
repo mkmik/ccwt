@@ -1235,26 +1235,30 @@ func wsDownPane(names []string, global bool, cols, rows int) []string {
 	return paneBox("", inner, title, body)
 }
 
-// todoPicker is `T` in the ws view: `todography next`, the map's wanted work
-// whose needs are met, in a pane over the table — one row per item, the
-// milestone headings left out. `c` on a row opens the seed prompt on its url,
-// for an agent to be started on once there's more said about it.
+// todoPicker is `T`: `todography next`, the map's wanted work whose needs are
+// met, in a pane over the table — one row per item, the milestone headings left
+// out. `c` on a row opens the seed prompt on its url, for an agent to be started
+// on once there's more said about it — or, outside the ws view, the queue
+// prompt, hanging off parent as `n`'s would.
 //
 // A snapshot, like the opener's: what was next when the pane came up.
 type todoPicker struct {
 	rows     []string // todography's lines, the url first on each
+	parent   listRow
 	sel, top int
 	first, n int // the screen line the first row came out on, and how many were drawn
 }
 
-// newTodoPicker runs `todography next` where the tui is standing, which is
+// newTodoPicker runs `todography next` in dir, the project's checkout, which is
 // where todography looks for its map.
-func newTodoPicker() (*todoPicker, error) {
-	out, err := exec.Command("todography", "next").CombinedOutput()
+func newTodoPicker(dir string, parent listRow) (*todoPicker, error) {
+	cmd := exec.Command("todography", "next")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, errors.New(lastLine(out, err))
 	}
-	return &todoPicker{rows: todoRows(string(out))}, nil
+	return &todoPicker{rows: todoRows(string(out)), parent: parent}, nil
 }
 
 // todoRows is the items of todography's listing: the indented lines, each
@@ -1316,10 +1320,11 @@ func (t *todoPicker) pane(cols, rows int) ([]string, string) {
 	return append(make([]string, margin), lines...), " ↑↓:select  c:agent  esc:close "
 }
 
-// seedTodo is `c` in the todo picker: the seed prompt, open on url with the
-// title the url less its scheme, and the caret at the end of the prompt — the
-// agent waits for ↵, so there's room to say more first.
-func (u *ui) seedTodo(url string) {
-	u.entry, u.title = newEntry(listRow{}, url, 0), newEntry(listRow{}, strings.TrimPrefix(url, "t8y:"), 0)
+// seedTodo is `c` in the todo picker: the seed prompt — or the queue prompt,
+// hanging off parent — open on url with the title the url less its scheme, and
+// the caret at the end of the prompt. ↵ is still to come, so there's room to say
+// more first.
+func (u *ui) seedTodo(parent listRow, url string) {
+	u.entry, u.title = newEntry(parent, url, 0), newEntry(listRow{}, strings.TrimPrefix(url, "t8y:"), 0)
 	u.title.open = false
 }
