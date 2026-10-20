@@ -482,7 +482,9 @@ the key.
 `T` is where the prompt can come from when the repo keeps a [todography](https://github.com/mkmik/todography)
 map: `todography next`, the wanted work whose needs are met, in a pane over the list. `c` on
 an item opens the same box on its `t8y:` url, the title the url without the scheme, queued
-where `n` would have queued it; [`ccwt ws`](#herdr-integration-optional) has the same key for its seed prompt.
+where `n` would have queued it; [`ccwt ws`](#herdr-integration-optional) has the same key for its seed prompt. `/` in
+the pane narrows its items to those holding what you type, `↵` hands `c` back, and `esc`
+drops the filter before it closes the pane.
 
 The queue lives in `$XDG_STATE_HOME/ccwt/tasks.db` (`~/.local/state/ccwt/tasks.db` by
 default) — one SQLite database for every project, so a prompt queued in a project's own tui
@@ -765,7 +767,8 @@ selected tab, and `/`, the mouse and the `☰` are the tui's own.
 `T` is what to seed an agent with, when the repo keeps a [todography](https://github.com/mkmik/todography)
 map: `todography next`, the wanted work whose needs are met, in a pane over the table. `c` on
 an item opens the seed prompt on its `t8y:` url, the title the url without the scheme, and
-leaves it there for you to say more before `↵` starts the agent.
+leaves it there for you to say more before `↵` starts the agent. `/` narrows the items as
+it does in the tui's pane.
 
 When the agents are Claude Code — `task_command` is `claude`, or unset — and Claude Code
 hasn't been told to trust the repository yet, `ccwt ws` asks that first, over everything

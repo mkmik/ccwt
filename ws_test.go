@@ -1254,3 +1254,21 @@ func TestWsTodoSeedsThePromptWithTheURL(t *testing.T) {
 		t.Errorf("prompt %q (open %v), title %q (taking keys %v); want the url, and the title without t8y:", u.entry.text, u.entry.open, u.title.text, u.title.open)
 	}
 }
+
+// `/` in the todo picker narrows the rows as it's typed — `c` and `j` being
+// letters of the filter until ↵ — and esc drops the filter before it closes.
+func TestWsTodoFilters(t *testing.T) {
+	p := &todoPicker{rows: todoRows("  t8y:/a#x  todo  SET COMMAND\n  t8y:/b#y  todo  CALL, SUBROUTINE\n")}
+	for _, k := range []string{"/", "c", "a", "l", "l", "\r"} {
+		p.key(k)
+	}
+	if do, url := p.key("c"); do != "seed" || url != "t8y:/b#y" {
+		t.Fatalf("c after /call = %q %q, want seed on the CALL row", do, url)
+	}
+	if do, _ := p.key("\x1b"); do != "" || p.filter != "" || len(p.shown()) != 2 {
+		t.Fatalf("esc = %q, filter %q; want the filter dropped and the picker up", do, p.filter)
+	}
+	if do, _ := p.key("\x1b"); do != "close" {
+		t.Errorf("second esc = %q, want close", do)
+	}
+}
