@@ -2692,8 +2692,8 @@ func TestAPromptReachesTheCommandWholeThroughAShell(t *testing.T) {
 }
 
 // Opening a "<new>" row is what finally makes its worktree: a fresh one, a
-// workspace on it the way `c` makes one — `ccwt ws` in its first tab — the
-// prompt running in a tab of its own there, and the rest of the chain now
+// workspace on it the way `c` makes one — `ccwt ws` in its first tab — with the
+// prompt typed into that tui's seed prompt, not yet running, and the rest of the chain now
 // waiting on that worktree rather than on a prompt that has started.
 func TestStartingAPendingPromptMakesItsWorktree(t *testing.T) {
 	initRepo(t)
@@ -2764,24 +2764,26 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(calls), "tab create --workspace w1 --cwd ") {
-		t.Errorf("herdr calls = %q, want a tab for the agent in the new workspace", calls)
-	}
-	if !strings.Contains(string(calls), `pane run w1:p2 claude --name 'docs pass' -- "$(cat `) {
-		t.Errorf("herdr calls = %q, want the cli run in the new tab, named for the title, on the file the prompt went into", calls)
+	if strings.Contains(string(calls), "tab create") {
+		t.Errorf("herdr calls = %q, want no agent started before the seed prompt is confirmed", calls)
 	}
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(calls), "pane run w1:p1 "+exe+" ws") {
-		t.Errorf("herdr calls = %q, want `ccwt ws` run in the workspace's first pane", calls)
-	}
-	if !strings.Contains(string(calls), "workspace rename w1 docs pass") {
-		t.Errorf("herdr calls = %q, want the workspace named for the title", calls)
+	if !strings.Contains(string(calls), "pane run w1:p1 "+exe+` ws --prompt="$(cat `) ||
+		!strings.Contains(string(calls), `--title='docs pass'`) {
+		t.Errorf("herdr calls = %q, want `ccwt ws` run in the workspace's first pane, on the prompt and its title", calls)
 	}
 	if got := seededPrompt(t, string(calls)); got != "then update Bob's docs" {
-		t.Errorf("the agent would be started on %q, want the whole prompt, apostrophe and all", got)
+		t.Errorf("the seed prompt would open on %q, want the whole prompt, apostrophe and all", got)
+	}
+
+	// And that tui opens its seed prompt with both already typed in.
+	var w ui
+	w.askSeed("then update Bob's docs", "docs pass")
+	if !w.entry.open || w.entry.text != "then update Bob's docs" || w.title.text != "docs pass" {
+		t.Errorf("seed prompt = %+v, title %+v; want both pre-filled", w.entry, w.title)
 	}
 
 	rows, body = renderRows(t)

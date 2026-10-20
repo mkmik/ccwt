@@ -679,7 +679,7 @@ esac
 
 	u := ui{ws: true}
 	u.askTrust()
-	u.askSeed()
+	u.askSeed("", "")
 	if u.trust != root || !u.entry.open {
 		t.Fatalf("opened on trust %q and the seed prompt %v, want %q with the prompt under it", u.trust, u.entry.open, root)
 	}

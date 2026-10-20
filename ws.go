@@ -28,13 +28,15 @@ import (
 // keys do with one, changes.
 type WsCmd struct {
 	Interval time.Duration `default:"2s" help:"How often to re-read the workspace's tabs."`
+	Prompt   string        `help:"Open on the seed prompt with this already typed in it."`
+	Title    string        `help:"The seed prompt's title, already typed in."`
 }
 
 func (c *WsCmd) Run() error {
 	if !underHerdr() {
 		return errors.New("ws runs in a herdr workspace, and this isn't one (no HERDR_ENV)")
 	}
-	return (&TuiCmd{Interval: c.Interval, ws: true}).Run()
+	return (&TuiCmd{Interval: c.Interval, ws: true, seedPrompt: c.Prompt, seedTitle: c.Title}).Run()
 }
 
 // wsTab is one tab of the workspace as the ws view draws it: what `herdr tab
@@ -585,9 +587,13 @@ func wsDone() string {
 // askSeed is what `ccwt ws` opens with in a workspace that has no other tab
 // yet: the seed prompt, since the first thing to do in a fresh workspace is to
 // say what it is for. A workspace with tabs already in it gets the table.
-func (u *ui) askSeed() {
-	if tabs, err := herdrTabs(); err == nil && len(tabs) <= 1 {
-		u.entry, u.title = newEntry(listRow{}, "", 0), newEntry(listRow{}, "", 0)
+//
+// A prompt handed over — a "<new>" row's, see startPending — opens the box
+// whatever else is there, with it and its title already typed in, so the effort
+// can be picked and a line added before anything runs.
+func (u *ui) askSeed(prompt, title string) {
+	if tabs, err := herdrTabs(); prompt != "" || err == nil && len(tabs) <= 1 {
+		u.entry, u.title = newEntry(listRow{}, prompt, 0), newEntry(listRow{}, title, 0)
 	}
 }
 
