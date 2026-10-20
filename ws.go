@@ -1239,14 +1239,17 @@ func wsDownPane(names []string, global bool, cols, rows int) []string {
 // met, in a pane over the table — one row per item, the milestone headings left
 // out. `c` on a row opens the seed prompt on its url, for an agent to be started
 // on once there's more said about it — or, outside the ws view, the queue
-// prompt, hanging off parent as `n`'s would.
+// prompt, hanging off parent as `n`'s would. `/` narrows the rows to those
+// holding what's typed after it, as the opener's filter does.
 //
 // A snapshot, like the opener's: what was next when the pane came up.
 type todoPicker struct {
 	rows     []string // todography's lines, the url first on each
 	parent   listRow
-	sel, top int
-	first, n int // the screen line the first row came out on, and how many were drawn
+	filter   string // what `/` has been given: a substring of the line, case ignored
+	typing   bool   // `/` is taking keystrokes, until ↵ or esc
+	sel, top int    // into shown()
+	first, n int    // the screen line the first row came out on, and how many were drawn
 }
 
 // newTodoPicker runs `todography next` in dir, the project's checkout, which is
@@ -1273,19 +1276,44 @@ func todoRows(out string) []string {
 	return rows
 }
 
+// shown is what the filter leaves of the rows.
+func (t *todoPicker) shown() []string {
+	f := strings.ToLower(t.filter)
+	var s []string
+	for _, r := range t.rows {
+		if strings.Contains(strings.ToLower(r), f) {
+			s = append(s, r)
+		}
+	}
+	return s
+}
+
 // key is the picker's turn at a keystroke: "close", or "seed" and the url of
-// the row `c` was pressed on.
+// the row `c` was pressed on. While `/` is typing, letters go to the filter, ↵
+// hands the keys back and esc drops the filter; otherwise esc drops the filter
+// first and closes after.
 func (t *todoPicker) key(k string) (string, string) {
-	switch k {
-	case "\x1b", "T":
-		return "close", ""
-	case "\x1b[A", "k":
+	shown := t.shown()
+	switch {
+	case k == "\x1b[A", !t.typing && k == "k":
 		t.sel = max(t.sel-1, 0)
-	case "\x1b[B", "j":
-		t.sel = min(t.sel+1, max(len(t.rows)-1, 0))
-	case "c":
-		if t.sel < len(t.rows) {
-			return "seed", strings.Fields(t.rows[t.sel])[0]
+	case k == "\x1b[B", !t.typing && k == "j":
+		t.sel = min(t.sel+1, max(len(shown)-1, 0))
+	case k == "\x1b" && (t.typing || t.filter != ""):
+		t.filter, t.typing, t.sel = "", false, 0
+	case t.typing && (k == "\r" || k == "\n"):
+		t.typing = false
+	case t.typing && mouseRow(k) == 0:
+		if f := typeKey(t.filter, k); f != t.filter {
+			t.filter, t.sel = f, 0
+		}
+	case k == "\x1b", k == "T":
+		return "close", ""
+	case k == "/":
+		t.typing = true
+	case k == "c":
+		if t.sel < len(shown) {
+			return "seed", strings.Fields(shown[t.sel])[0]
 		}
 	default:
 		if i := mouseRow(k) - t.first; i >= 0 && i < t.n {
@@ -1295,29 +1323,45 @@ func (t *todoPicker) key(k string) (string, string) {
 	return "", ""
 }
 
-// pane draws the picker as the opener is drawn, and says what the bar under
-// it is to read.
+// pane draws the picker as the opener is drawn, the filter on a line of its own
+// above the rows once there is one, and says what the bar under it is to read.
 func (t *todoPicker) pane(cols, rows int) ([]string, string) {
 	pad, inner := paneWidth(cols)
 	row := paneRow(pad, inner)
-	fits := max(rows-2, 1) // the two rules
-	t.top = max(min(max(t.top, t.sel-fits+1), t.sel), 0)
-	t.n = min(fits, len(t.rows)-t.top)
+	shown := t.shown()
 	var body []string
-	for i, r := range t.rows[t.top : t.top+t.n] {
+	if t.typing || t.filter != "" {
+		body = append(body, row(" / "+t.filter))
+	}
+	head := len(body)
+	fits := max(rows-2-head, 1) // the two rules, and the filter
+	t.sel = min(max(t.sel, 0), max(len(shown)-1, 0))
+	t.top = max(min(max(t.top, t.sel-fits+1), t.sel), 0)
+	t.n = min(fits, len(shown)-t.top)
+	for i, r := range shown[t.top : t.top+t.n] {
 		l := row(" " + r)
 		if t.top+i == t.sel {
 			l = band(l)
 		}
 		body = append(body, l)
 	}
-	if len(t.rows) == 0 {
+	switch {
+	case len(t.rows) == 0:
 		body = append(body, row(" nothing next"))
+	case len(shown) == 0:
+		body = append(body, row(" nothing matches"))
 	}
 	lines := paneBox(pad, inner, "todography next", body)
 	margin := min(2, max(rows-len(lines), 0)/2)
-	t.first = margin + 2 // the margin and the top rule, and a mouse counts from 1
-	return append(make([]string, margin), lines...), " ↑↓:select  c:agent  esc:close "
+	t.first = margin + 2 + head // the margin, the top rule and the filter, and a mouse counts from 1
+	keys := " ↑↓:select  c:agent  /:filter  esc:close "
+	switch {
+	case t.typing:
+		keys = " type:filter  ↵:done  esc:clear "
+	case t.filter != "":
+		keys = " ↑↓:select  c:agent  /:filter  esc:clear "
+	}
+	return append(make([]string, margin), lines...), keys
 }
 
 // seedTodo is `c` in the todo picker: the seed prompt — or the queue prompt,
