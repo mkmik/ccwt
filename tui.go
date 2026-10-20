@@ -42,6 +42,8 @@ type TuiCmd struct {
 	Sort     string        `help:"Order the worktrees by \"freshness\" — the last commit or the last thing written to the newest Claude Code session there, whichever is younger — or by \"commit\" alone. Overrides sort in the config file (freshness when neither says)."`
 
 	ws bool // `ccwt ws`: the workspace's tabs instead of the repo's worktrees
+
+	seedPrompt, seedTitle string // `ccwt ws --prompt --title`: the seed prompt, pre-filled
 }
 
 func (c *TuiCmd) Run() error {
@@ -146,7 +148,7 @@ func (c *TuiCmd) Run() error {
 	u := ui{projects: projects, sort: c.Sort, stamp: selfStamp(), ws: c.ws}
 	if c.ws {
 		u.askTrust() // whether Claude Code may run its agents here, asked over all else
-		u.askSeed()  // a fresh workspace opens on the question of what it is for
+		u.askSeed(c.seedPrompt, c.seedTitle) // a fresh workspace opens on the question of what it is for
 	}
 	var last string
 	redraw := func() error {
@@ -3276,20 +3278,30 @@ func (u *ui) newWorkspace() string {
 	if pane == "" {
 		return msg
 	}
-	if err := runWs(pane); err != nil {
+	if err := runWs(pane, "", ""); err != nil {
 		return "opened, but " + err.Error()
 	}
 	return msg
 }
 
 // runWs starts `ccwt ws` in pane, the first one of a workspace that `c` or a
-// "<new>" row has just opened.
-func runWs(pane string) error {
+// "<new>" row has just opened — on the seed prompt with prompt and title in it,
+// when there is a prompt. The prompt travels in a file, as promptArg's do, and
+// as `--prompt=…` so one that opens on a dash isn't read as a flag.
+func runWs(pane, prompt, title string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	if out, err := exec.Command(herdrBin(), "pane", "run", pane, exe, "ws").CombinedOutput(); err != nil {
+	argv := []string{"pane", "run", pane, exe, "ws"}
+	if prompt != "" {
+		arg, err := promptArg(prompt)
+		if err != nil {
+			return err
+		}
+		argv = append(argv, "--prompt="+arg, "--title="+shellQuote(title))
+	}
+	if out, err := exec.Command(herdrBin(), argv...).CombinedOutput(); err != nil {
 		return errors.New("`ccwt ws` did not start: " + lastLine(out, err))
 	}
 	// "ws", since an unlabelled tab is named after what runs in it and that
@@ -3303,8 +3315,9 @@ func runWs(pane string) error {
 
 // startPending is what opening a "<new>" row does: make the worktree its prompt
 // has been waiting for, hand it whatever was queued behind that prompt, open it
-// as a workspace the way `c` does — `ccwt ws` in its first tab — and set the
-// prompt running in a tab of its own there, as the seed prompt would have. That is the whole of what
+// as a workspace the way `c` does — `ccwt ws` in its first tab — with the
+// prompt typed into that tui's seed prompt, to be added to, given an effort
+// and started from there. That is the whole of what
 // the row stood for, so the prompt itself goes — from here on the row is a
 // worktree like any other.
 //
@@ -3327,19 +3340,16 @@ func (u *ui) startPending() string {
 		return "start failed: " + err.Error()
 	}
 	msg := herdrOpen(path, filepath.Base(path))
-	pane, ws := herdrPane(path)
+	pane, _ := herdrPane(path)
 	if pane == "" {
 		return msg // no pane to run in: whatever herdrOpen said went wrong
 	}
-	// The agent's tab before the tui: a `ccwt ws` that finds itself alone in
-	// the workspace opens on the seed prompt, asking for what is already running.
-	if err := seed(ws, path, "", "", title, prompt); err != nil {
+	// Not started here: the workspace's tui opens on the seed prompt with this
+	// one typed into it, for a line more and an effort before ↵ runs it.
+	if err := runWs(pane, prompt, title); err != nil {
 		return "start failed: " + err.Error()
 	}
-	if err := runWs(pane); err != nil {
-		return "started, but " + err.Error()
-	}
-	// Last, once the prompt is actually running: a promote is a delete, and
+	// Last, once the prompt has reached the box: a promote is a delete, and
 	// until this point every failure above is one the row survives — the "<new>"
 	// row is still there, with the prompt still on it, to try again from.
 	if err := promoteTask(u.sel.task, path); err != nil {

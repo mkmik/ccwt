@@ -453,8 +453,9 @@ it:
 
 `space` (or a double-click) on a `<new>` row is where the worktree finally gets made: a
 fresh one, opened as its own [Herdr](#herdr-integration-optional) workspace the way `c`
-opens one — `ccwt ws` in its first tab — with the prompt running in a tab of its own next to
-it — `claude "<the prompt>"`, or whatever `task_command` in the config says, e.g.
+opens one — `ccwt ws` in its first tab, opened on its seed prompt with the queued prompt and
+its title already typed in. Nothing runs yet: add a line, pick the effort, and `↵` starts it
+in a tab of its own — `claude "<the prompt>"`, or whatever `task_command` in the config says, e.g.
 
 ```toml
 task_command = "claude --permission-mode plan"
