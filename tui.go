@@ -1791,13 +1791,15 @@ func (u *ui) frame() ([]string, error) {
 	// the key hints have nothing to say about a line you're typing into.
 	// The restart notice outlasts the transient messages but yields to them
 	// while one is up: they're a second old, and it will still be true after.
-	bar := statusBar(cols, cmp.Or(u.msg, u.restart), u.sel, u.divergence(), u.query != "", u.projects != nil, u.agents)
+	// A pause yields to both, being true for as long as somebody forgets it.
+	note := cmp.Or(u.msg, u.restart, pauseNote())
+	bar := statusBar(cols, note, u.sel, u.divergence(), u.query != "", u.projects != nil, u.agents)
 	// The ps view has its own keys: the list's are about worktrees, and the
 	// only thing to do with a process is go to where it's running.
 	if u.ps {
 		bar = keyBar(cols, u.msg, "", psActions(u.sel))
 	} else if u.ws {
-		bar = keyBar(cols, cmp.Or(u.msg, u.restart), "", wsActions(u.sel, u.query != ""))
+		bar = keyBar(cols, note, "", wsActions(u.sel, u.query != ""))
 	}
 	if u.typing {
 		p := "/"
@@ -3541,6 +3543,8 @@ func herdrAsk(method string, params map[string]any, args ...string) ([]byte, err
 //
 // Herdr going away — a restart, `herdr update --handoff` — ends the
 // connection, and it is made again every couple of seconds until herdr is back.
+// A pause ends it too, a subscription being something herdr keeps up for us,
+// and it is made again within a couple of seconds of `ccwt unpause`.
 func herdrListen(ctx context.Context, poke chan<- struct{}, types ...string) {
 	subs := make([]map[string]any, len(types))
 	for i, t := range types {
@@ -3548,25 +3552,43 @@ func herdrListen(ctx context.Context, poke chan<- struct{}, types ...string) {
 	}
 	req, _ := jsonv2.Marshal(map[string]any{"id": "ccwt", "method": "events.subscribe", "params": map[string]any{"subscriptions": subs}})
 	for ctx.Err() == nil {
-		if c, err := (&net.Dialer{}).DialContext(ctx, "unix", os.Getenv("HERDR_SOCKET_PATH")); err == nil {
-			stop := context.AfterFunc(ctx, func() { c.Close() })
-			if _, err := c.Write(append(req, '\n')); err == nil {
-				for r := bufio.NewReader(c); ; {
-					if _, err := r.ReadBytes('\n'); err != nil {
-						break
-					}
-					select {
-					case poke <- struct{}{}:
-					default:
-					}
-				}
-			}
-			stop()
-			c.Close()
+		if !herdrPaused() {
+			herdrHear(ctx, req, poke)
 		}
 		select {
 		case <-ctx.Done():
 		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+// herdrHear is one connection's worth of herdrListen: the subscription req
+// made, and a poke for every line down it, until herdr hangs up, ctx ends or
+// ccwt is paused.
+func herdrHear(ctx context.Context, req []byte, poke chan<- struct{}) {
+	c, err := (&net.Dialer{}).DialContext(ctx, "unix", os.Getenv("HERDR_SOCKET_PATH"))
+	if err != nil {
+		return
+	}
+	defer c.Close()
+	defer context.AfterFunc(ctx, func() { c.Close() })()
+	if _, err := c.Write(append(req, '\n')); err != nil {
+		return
+	}
+	for r := bufio.NewReader(c); ; {
+		// A read waiting on herdr's next event comes back every couple of
+		// seconds to see whether ccwt has been paused meanwhile.
+		_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, err := r.ReadBytes('\n')
+		if errors.Is(err, os.ErrDeadlineExceeded) && !herdrPaused() {
+			continue
+		}
+		if err != nil {
+			return
+		}
+		select {
+		case poke <- struct{}{}:
+		default:
 		}
 	}
 }
@@ -3588,16 +3610,18 @@ type herdrAgent struct {
 
 // herdrAgents is every agent herdr has, in every workspace: `agent list` takes
 // no workspace to narrow it to. No herdr, or none running, or one that won't
-// say, is no agents.
+// say, is no agents. ask is herdrAsk where an action rests on the answer — a
+// removal must not go by one a pause has left standing — and herdrPoll where a
+// view only shows it.
 //
 // ponytail: package var so tests can fake the herdr answer.
-var herdrAgents = func() []herdrAgent {
+var herdrAgents = func(ask herdrAsker) []herdrAgent {
 	var resp struct {
 		Result struct {
 			Agents []herdrAgent `json:"agents"`
 		} `json:"result"`
 	}
-	if out, err := herdrAsk("agent.list", nil, "agent", "list"); err == nil {
+	if out, err := ask("agent.list", nil, "agent", "list"); err == nil {
 		_ = json.Unmarshal(out, &resp)
 	}
 	return resp.Result.Agents
@@ -3683,7 +3707,7 @@ var herdrWorkspaces = func(root, path string) ([]string, error) {
 //
 // ponytail: package var so tests can fake the herdr answer.
 var herdrLabels = func() (labels map[string]string, order map[string]int, seps []int) {
-	out, err := herdrAsk("workspace.list", nil, "workspace", "list")
+	out, err := herdrPoll("workspace.list", nil, "workspace", "list")
 	if err != nil {
 		return nil, nil, nil
 	}

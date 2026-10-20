@@ -480,7 +480,7 @@ esac
 	t.Setenv("HERDR_WORKSPACE_ID", "w1")
 	t.Setenv("HERDR_TAB_ID", "w1:t1")
 
-	busy := herdrBusy(herdrAgents())
+	busy := herdrBusy(herdrAgents(herdrAsk))
 	if busy["/src/mine"] {
 		t.Error("our own tab counts as busy: an agent could not run `ccwt done` on its own worktree")
 	}
@@ -490,7 +490,7 @@ esac
 	// No tab to go by — an older herdr, a pane outside one — and the whole
 	// workspace is ours again, which is what this used to do for everyone.
 	t.Setenv("HERDR_TAB_ID", "")
-	if busy := herdrBusy(herdrAgents()); busy["/src/sibling"] {
+	if busy := herdrBusy(herdrAgents(herdrAsk)); busy["/src/sibling"] {
 		t.Error("with no tab in the environment, our own workspace is no longer exempt")
 	}
 }
@@ -501,6 +501,104 @@ esac
 // the ones the cli makes of the socket for the same words, and a refusal still
 // reads as one rather than as a workspace with no tabs in it.
 func TestHerdrIsAskedOverItsSocket(t *testing.T) {
+	asked := herdrSocket(t, herdrW1)
+	t.Setenv("HERDR_WORKSPACE_ID", "w1")
+	t.Setenv("HERDR_TAB_ID", "w1:t1")
+
+	ts, err := herdrTabs()
+	if err != nil || !slices.Equal(ts, herdrW1Tabs) {
+		t.Errorf("herdrTabs() = %v, %v, want %v", ts, err, herdrW1Tabs)
+	}
+	herdrBusy(herdrAgents(herdrAsk))
+	herdrLabels()
+	wsBadge(&mrLook{rows: []mrRow{{status: "merged"}}})
+	wsBadge(&mrLook{})
+	t.Setenv("HERDR_WORKSPACE_ID", "w2")
+	if _, err := herdrTabs(); err == nil || !strings.Contains(err.Error(), "workspace w2 not found") {
+		t.Errorf("herdrTabs() on a workspace herdr refuses = %v, want the refusal", err)
+	}
+
+	ttl := fmt.Sprint(wsBadgeTTL.Milliseconds())
+	want := []string{
+		`tab.list {"workspace_id":"w1"}`,
+		`pane.list {"workspace_id":"w1"}`,
+		`agent.list {}`,
+		`agent.list {}`,
+		`workspace.list {}`,
+		`workspace.report_metadata {"source":"ccwt","tokens":{"mr":"✓"},"ttl_ms":` + ttl + `,"workspace_id":"w1"}`,
+		`workspace.report_metadata {"source":"ccwt","tokens":{"mr":null},"workspace_id":"w1"}`,
+		`tab.list {"workspace_id":"w2"}`,
+	}
+	if got := drain(asked); !slices.Equal(got, want) {
+		t.Errorf("herdr was asked\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// `ccwt pause` quiets what ccwt asks herdr on its own and nothing else: the ws
+// view's tabs stand where herdr last left them without asking again, a
+// workspace never asked about says it is paused, and the badge goes unsent —
+// while a removal's check on the agents still asks. `ccwt unpause`, and the
+// view asks again.
+func TestPauseQuietsTheViews(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	asked := herdrSocket(t, herdrW1)
+	t.Setenv("HERDR_WORKSPACE_ID", "w1")
+	tabs := func() {
+		t.Helper()
+		if ts, err := herdrTabs(); err != nil || !slices.Equal(ts, herdrW1Tabs) {
+			t.Errorf("herdrTabs() = %v, %v, want %v", ts, err, herdrW1Tabs)
+		}
+	}
+	round := []string{`tab.list {"workspace_id":"w1"}`, `pane.list {"workspace_id":"w1"}`, `agent.list {}`}
+
+	tabs()
+	drain(asked)
+	if err := (&PauseCmd{}).Run(); err != nil {
+		t.Fatal(err)
+	}
+	if pauseNote() == "" {
+		t.Error("the bar says nothing of the pause")
+	}
+	tabs()
+	wsBadge(&mrLook{rows: []mrRow{{status: "merged"}}})
+	t.Setenv("HERDR_WORKSPACE_ID", "w9")
+	if _, err := herdrTabs(); !errors.Is(err, errHerdrPaused) {
+		t.Errorf("herdrTabs() on a workspace never asked about, paused = %v, want %v", err, errHerdrPaused)
+	}
+	herdrAgents(herdrAsk)
+	if got, want := drain(asked), []string{`agent.list {}`}; !slices.Equal(got, want) {
+		t.Errorf("paused, herdr was asked %q, want only the removal's %q", got, want)
+	}
+
+	if err := (&UnpauseCmd{}).Run(); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_WORKSPACE_ID", "w1")
+	tabs()
+	if got := drain(asked); !slices.Equal(got, round) {
+		t.Errorf("unpaused, herdr was asked %q, want %q", got, round)
+	}
+}
+
+// herdrW1 is what a herdr with one workspace, w1, says about it — and what it
+// says about w2, which it hasn't got — and herdrW1Tabs is what herdrTabs makes
+// of that.
+var (
+	herdrW1 = map[string]string{
+		`tab.list {"workspace_id":"w1"}`:  `{"result":{"tabs":[{"tab_id":"w1:t1","label":"1"}]}}`,
+		`pane.list {"workspace_id":"w1"}`: `{"result":{"panes":[{"tab_id":"w1:t1","cwd":"/src/ccwt","terminal_title_stripped":"zsh"}]}}`,
+		`agent.list {}`:                   `{"result":{"agents":[{"tab_id":"w1:t1","agent_status":"working","state_change_seq":3}]}}`,
+		`tab.list {"workspace_id":"w2"}`:  `{"error":{"code":"workspace_not_found","message":"workspace w2 not found"}}`,
+	}
+	herdrW1Tabs = []wsTab{{ID: "w1:t1", Label: "1", Status: "working", Cwd: "/src/ccwt", Title: "zsh", Seq: 3}}
+)
+
+// herdrSocket is a herdr socket in a fresh current directory, named in
+// HERDR_SOCKET_PATH, giving each request the answer keyed by its method and
+// params, and putting that key on the channel first. A question put to the cli
+// goes unanswered.
+func herdrSocket(t *testing.T, answers map[string]string) <-chan string {
+	t.Helper()
 	// Relative, since a unix socket's path has to fit in about a hundred bytes
 	// and a test's temp directory on macOS is most of that on its own.
 	t.Chdir(t.TempDir())
@@ -509,12 +607,6 @@ func TestHerdrIsAskedOverItsSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { l.Close() })
-	answers := map[string]string{
-		`tab.list {"workspace_id":"w1"}`:  `{"result":{"tabs":[{"tab_id":"w1:t1","label":"1"}]}}`,
-		`pane.list {"workspace_id":"w1"}`: `{"result":{"panes":[{"tab_id":"w1:t1","cwd":"/src/ccwt","terminal_title_stripped":"zsh"}]}}`,
-		`agent.list {}`:                   `{"result":{"agents":[{"tab_id":"w1:t1","agent_status":"working","state_change_seq":3}]}}`,
-		`tab.list {"workspace_id":"w2"}`:  `{"error":{"code":"workspace_not_found","message":"workspace w2 not found"}}`,
-	}
 	asked := make(chan string, 16)
 	go func() {
 		for {
@@ -536,41 +628,17 @@ func TestHerdrIsAskedOverItsSocket(t *testing.T) {
 		}
 	}()
 	t.Setenv("HERDR_SOCKET_PATH", "herdr.sock")
-	t.Setenv("HERDR_BIN_PATH", "/nowhere/herdr") // a question put to the cli goes unanswered
-	t.Setenv("HERDR_WORKSPACE_ID", "w1")
-	t.Setenv("HERDR_TAB_ID", "w1:t1")
+	t.Setenv("HERDR_BIN_PATH", "/nowhere/herdr")
+	return asked
+}
 
-	ts, err := herdrTabs()
-	if want := []wsTab{{ID: "w1:t1", Label: "1", Status: "working", Cwd: "/src/ccwt", Title: "zsh", Seq: 3}}; err != nil || !slices.Equal(ts, want) {
-		t.Errorf("herdrTabs() = %v, %v, want %v", ts, err, want)
-	}
-	herdrBusy(herdrAgents())
-	herdrLabels()
-	wsBadge(&mrLook{rows: []mrRow{{status: "merged"}}})
-	wsBadge(&mrLook{})
-	t.Setenv("HERDR_WORKSPACE_ID", "w2")
-	if _, err := herdrTabs(); err == nil || !strings.Contains(err.Error(), "workspace w2 not found") {
-		t.Errorf("herdrTabs() on a workspace herdr refuses = %v, want the refusal", err)
-	}
-
-	ttl := fmt.Sprint(wsBadgeTTL.Milliseconds())
-	want := []string{
-		`tab.list {"workspace_id":"w1"}`,
-		`pane.list {"workspace_id":"w1"}`,
-		`agent.list {}`,
-		`agent.list {}`,
-		`workspace.list {}`,
-		`workspace.report_metadata {"source":"ccwt","tokens":{"mr":"✓"},"ttl_ms":` + ttl + `,"workspace_id":"w1"}`,
-		`workspace.report_metadata {"source":"ccwt","tokens":{"mr":null},"workspace_id":"w1"}`,
-		`tab.list {"workspace_id":"w2"}`,
-	}
-	var got []string
+// drain is what has been asked so far. Each ask has had its answer by the time
+// it returns, and the key went on the channel ahead of that.
+func drain(asked <-chan string) (got []string) {
 	for len(asked) > 0 {
 		got = append(got, <-asked)
 	}
-	if !slices.Equal(got, want) {
-		t.Errorf("herdr was asked\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
-	}
+	return got
 }
 
 // The seed prompt starts an agent in a tab of its own: a tab of this workspace

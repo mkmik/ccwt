@@ -263,8 +263,10 @@ func emitOSC7(path string) {
 // so what a view offers and what the removal does can't drift apart.
 //
 // Asked of git and herdr directly, never of the tui's caches: a refusal to
-// delete unsaved work must not read a stale answer.
-func removeBlocked(root, name string, keepBranch bool) error {
+// delete unsaved work must not read a stale answer. ask is how herdr is asked:
+// herdrAsk by the removal, herdrPoll by the view, whose stale yes while ccwt is
+// paused costs a refusal message, never a removal.
+func removeBlocked(root, name string, keepBranch bool, ask herdrAsker) error {
 	worktreePath := filepath.Join(root, ".claude", "worktrees", name)
 	branch, err := worktreeBranch(root, name)
 	if err != nil {
@@ -290,7 +292,7 @@ func removeBlocked(root, name string, keepBranch bool) error {
 	// the only one git can't see: a branch it made a minute ago and hasn't
 	// committed to is both merged and clean. Removing it closes the workspace
 	// out from under the agent, so ask first — the same way out as the others.
-	if activeIn(worktreePath, herdrBusy(herdrAgents())) {
+	if activeIn(worktreePath, herdrBusy(herdrAgents(ask))) {
 		return fmt.Errorf("%s has an agent working in it: let it finish, or re-run with -D to remove it anyway", name)
 	}
 	return nil
@@ -349,7 +351,7 @@ func (c *RemoveCmd) remove(root string) error {
 	}
 
 	if !c.Force {
-		if err := removeBlocked(root, name, c.KeepBranch); err != nil {
+		if err := removeBlocked(root, name, c.KeepBranch, herdrAsk); err != nil {
 			return err
 		}
 	}
@@ -554,7 +556,7 @@ func (c *GcCmd) Run() error {
 // this too, so both agree on what "done with" means.
 func gcNames(root string) (names []string, kept string, err error) {
 	active := claudeCwds()
-	maps.Copy(active, herdrBusy(herdrAgents()))
+	maps.Copy(active, herdrBusy(herdrAgents(herdrAsk)))
 	names, err = gcCandidates(root, active)
 	if err != nil {
 		return nil, "", err
@@ -823,7 +825,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	var herdrOrder map[string]int
 	var herdrSeps []int
 	if tty {
-		wg.Go(func() { herdr = herdrAgents() })
+		wg.Go(func() { herdr = herdrAgents(herdrPoll) })
 		if underHerdr() {
 			wg.Go(func() { labels, herdrOrder, herdrSeps = herdrLabels() })
 		}
@@ -2380,6 +2382,8 @@ var cli struct {
 	Worklog           WorklogCmd           `cmd:"" name:"worklog" help:"Show the worktrees that have been removed, newest first, with what each one was about — what you were working on lately, after the worktree itself is gone."`
 	Gc                GcCmd                `cmd:"" name:"gc" help:"Remove every worktree whose branch is already merged, with nothing uncommitted, no agent working in it and no Claude Code session running in it, branches included — except the one you're in. Prints what it found and asks first, unless -y."`
 	Mr                MrCmd                `cmd:"" name:"mr" aliases:"pr" help:"Say where a review stands and what its pipeline did: \"ccwt mr <merge request or pull request url>\" for that one, or \"ccwt mr PROJ-1234\" (a Jira key, or its browse url) for a row per review that names the ticket. Asks glab or gh, whichever forge origin is on."`
+	Pause             PauseCmd             `cmd:"" name:"pause" help:"Stop every ccwt from asking herdr for status on its own — the rounds of the tui and of the ws view, the workspace badge, the watch on the ws tabs — until \"ccwt unpause\", to see whether herdr is slow because of them. What a key or a command does still reaches herdr: workspaces and tabs are made, opened, focused and closed as ever."`
+	Unpause           UnpauseCmd           `cmd:"" name:"unpause" help:"Undo \"ccwt pause\": every ccwt goes back to asking herdr for status."`
 	Nav               NavCmd               `cmd:"" name:"nav" help:"Go to where something is: \"nav ps <pattern>\" to the pane a process is running in, \"nav ws <pattern>\" to a workspace, by its title or by the name of the worktree it has open. Both patterns are fuzzy."`
 	RepoRoot          RepoRootCmd          `cmd:"" name:"repo-root" help:"Print the root directory of the current git repository."`
 	DotDot            DotDotCmd            `cmd:"" name:".." help:"Print the enclosing repo root, stripping any .claude/worktrees/<name> suffix (shorthand for repo-root --root-worktree)."`
