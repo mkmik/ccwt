@@ -62,7 +62,7 @@ type wsTab struct {
 func herdrTabs() ([]wsTab, error) {
 	ws := os.Getenv("HERDR_WORKSPACE_ID")
 	scope := map[string]any{"workspace_id": ws}
-	out, err := herdrAsk("tab.list", scope, "tab", "list", "--workspace", ws)
+	out, err := herdrPoll("tab.list", scope, "tab", "list", "--workspace", ws)
 	if err != nil {
 		return nil, fmt.Errorf("herdr tab list: %w", err)
 	}
@@ -79,7 +79,7 @@ func herdrTabs() ([]wsTab, error) {
 	if err := json.Unmarshal(out, &tabs); err != nil {
 		return nil, fmt.Errorf("herdr tab list: %w", err)
 	}
-	out, err = herdrAsk("pane.list", scope, "pane", "list", "--workspace", ws)
+	out, err = herdrPoll("pane.list", scope, "pane", "list", "--workspace", ws)
 	if err != nil {
 		return nil, fmt.Errorf("herdr pane list: %w", err)
 	}
@@ -101,7 +101,7 @@ func herdrTabs() ([]wsTab, error) {
 	// An answer that doesn't come is no answer rather than an error: the tabs
 	// and their panes are what the table is, and a herdr that won't say what
 	// its agents are up to costs the dots their state, not the view.
-	agents := herdrAgents()
+	agents := herdrAgents(herdrPoll)
 	// ponytail: the first pane herdr lists for the tab stands for it — a split
 	// tab is two panes, and the table has one row to say what the tab is.
 	first := map[string]int{}
@@ -446,7 +446,7 @@ func wsBadge(look *mrLook) {
 	}
 	// The workspace id goes ahead of the flags: herdr's parser takes a trailing
 	// one for the value of whatever option came last and refuses the lot.
-	_, _ = herdrAsk("workspace.report_metadata", params, append([]string{"workspace", "report-metadata", ws, "--source", "ccwt"}, token...)...)
+	_, _ = herdrPoll("workspace.report_metadata", params, append([]string{"workspace", "report-metadata", ws, "--source", "ccwt"}, token...)...)
 }
 
 // mrSection is that answer as lines, laid out in the same columns `ccwt mr`
@@ -566,7 +566,7 @@ func wsRemovable() bool {
 			return false
 		}
 		root, err := gitutil.RepoRoot("", true)
-		return err == nil && removeBlocked(root, name, false) == nil
+		return err == nil && removeBlocked(root, name, false, herdrPoll) == nil
 	})
 }
 
@@ -933,6 +933,9 @@ func watchWsDown(ctx context.Context, roots []string, global bool) {
 			case <-time.After(wsSettle):
 			}
 		case <-time.After(wsDownEvery):
+		}
+		if herdrPaused() {
+			continue // the box goes on saying what it said
 		}
 		names, tabs := herdrWsDown(roots, global)
 		wsDown.Lock()

@@ -790,9 +790,11 @@ func TestAgentWorkingIsNotSafeToRemove(t *testing.T) {
 	busy := capture(t, &NewWorktreeBranchCmd{Name: "busy", Path: true})
 	idle := capture(t, &NewWorktreeBranchCmd{Name: "idle", Path: true})
 
-	defer func(orig func() []herdrAgent) { herdrAgents = orig }(herdrAgents)
+	defer func(orig func(herdrAsker) []herdrAgent) { herdrAgents = orig }(herdrAgents)
 	// A subdirectory: where an agent that cd'd deeper into the worktree reports from.
-	herdrAgents = func() []herdrAgent { return []herdrAgent{{Status: "working", Cwd: filepath.Join(busy, "internal")}} }
+	herdrAgents = func(herdrAsker) []herdrAgent {
+		return []herdrAgent{{Status: "working", Cwd: filepath.Join(busy, "internal")}}
+	}
 
 	defer func(orig func() bool) { stdoutIsTTY = orig }(stdoutIsTTY)
 	stdoutIsTTY = func() bool { return true }
@@ -933,8 +935,8 @@ func TestListOnlyAgents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	defer func(orig func() []herdrAgent) { herdrAgents = orig }(herdrAgents)
-	herdrAgents = func() []herdrAgent { return []herdrAgent{{Status: "idle", Cwd: idle}} }
+	defer func(orig func(herdrAsker) []herdrAgent) { herdrAgents = orig }(herdrAgents)
+	herdrAgents = func(herdrAsker) []herdrAgent { return []herdrAgent{{Status: "idle", Cwd: idle}} }
 	names := func(agents bool) (got []string) {
 		rows, _, err := renderList(io.Discard, true, 0, nil, nil, nil, false, "", false, agents)
 		if err != nil {
@@ -1007,8 +1009,8 @@ func TestTuiLeadsWithHerdrsDot(t *testing.T) {
 	t.Setenv("HERDR_BIN_PATH", "/nowhere/herdr") // what isn't faked below goes unanswered
 
 	looking := false
-	defer func(orig func() []herdrAgent) { herdrAgents = orig }(herdrAgents)
-	herdrAgents = func() []herdrAgent {
+	defer func(orig func(herdrAsker) []herdrAgent) { herdrAgents = orig }(herdrAgents)
+	herdrAgents = func(herdrAsker) []herdrAgent {
 		return []herdrAgent{
 			{Pane: "w1:p1", Tab: "w1:t1", Cwd: busy, Status: "working", Seq: 3},
 			{Pane: "w1:p2", Tab: "w1:t1", Cwd: busy, Status: "blocked", Seq: 4},

@@ -62,10 +62,11 @@ const taskSchema = `CREATE TABLE IF NOT EXISTS task (
 	deleted  INTEGER NOT NULL DEFAULT 0
 ) STRICT`
 
-// tasksPath is $XDG_STATE_HOME/ccwt/tasks.db, falling back to the ~/.local/state
-// default XDG defines when the variable is unset. State rather than config: it's
-// written by the program, not by hand, and it is not worth backing up.
-func tasksPath() string {
+// stateDir is $XDG_STATE_HOME/ccwt, falling back to the ~/.local/state default
+// XDG defines when the variable is unset, and "" with no home to put it in.
+// State rather than config: it's written by the program, not by hand, and it is
+// not worth backing up.
+func stateDir() string {
 	dir := os.Getenv("XDG_STATE_HOME")
 	if dir == "" {
 		home, err := os.UserHomeDir()
@@ -74,7 +75,15 @@ func tasksPath() string {
 		}
 		dir = filepath.Join(home, ".local", "state")
 	}
-	return filepath.Join(dir, "ccwt", "tasks.db")
+	return filepath.Join(dir, "ccwt")
+}
+
+// tasksPath is the task database, in stateDir.
+func tasksPath() string {
+	if dir := stateDir(); dir != "" {
+		return filepath.Join(dir, "tasks.db")
+	}
+	return ""
 }
 
 // openTasks opens the task database, creating it and its schema the first time
