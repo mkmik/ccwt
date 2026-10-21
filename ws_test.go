@@ -1340,3 +1340,16 @@ func TestWsTodoFilters(t *testing.T) {
 		t.Errorf("second esc = %q, want close", do)
 	}
 }
+
+// A screen narrower than the effort scale cuts the scale off; it used to take
+// the whole tui down when c opened the box.
+func TestWsSeedPaneFitsANarrowScreen(t *testing.T) {
+	for _, effort := range []string{"", "low", "max"} {
+		for cols := 1; cols <= 80; cols++ {
+			u := ui{ws: true, effort: effort, entry: newEntry(listRow{}, "", 0), title: newEntry(listRow{}, "", 0)}
+			u.seedPane(cols, 13)
+			u.effortFocus = true
+			u.seedPane(cols, 13)
+		}
+	}
+}
