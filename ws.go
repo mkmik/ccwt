@@ -689,8 +689,11 @@ func (u *ui) effortPane(pad string, inner int) []string {
 	// The colours go in after the padding is counted: paneRow counts runes, and
 	// an escape is runes that take no room.
 	at := len([]rune(pad)) + 1 + lead
+	// A box narrower than the scale cuts it off: so does the paint.
+	end := len([]rune(pad)) + 1 + inner
 	paint := func(l string, from, to int, sgr string) string {
 		r := []rune(l)
+		from, to = min(from, end), min(to, end)
 		return string(r[:from]) + "\x1b[" + sgr + "m" + string(r[from:to]) + "\x1b[0m" + string(r[to:])
 	}
 	if i >= 0 {
