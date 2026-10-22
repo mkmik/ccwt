@@ -61,6 +61,8 @@ ccwt gc             # ... or all the finished ones at once, after confirming
 `worktree-<name>` (the prefix is [configurable](#several-projects-at-once)). With no name
 it generates one (e.g. `dreamy-foraging-hickey`); pass a name to choose your own. Run from
 inside an existing worktree, it returns that worktree instead of nesting a new one.
+The new branch starts from the upstream of the repo's checked-out branch (`origin/main`,
+usually, which the tui keeps fetched), not from local `main`, so it doesn't need a `p` first.
 
 ```sh
 ccwt new --switch foobar          # check out an existing branch instead of creating one

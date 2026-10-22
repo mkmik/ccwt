@@ -53,13 +53,22 @@ func RepoRoot(dir string, stripClaudeWorktree bool) (string, error) {
 const LockReason = "ccwt"
 
 // AddWorktree creates a new linked worktree at `path` on a freshly-created
-// branch `branch`, via `git worktree add -b <branch> <path>`. On success the
+// branch `branch`, via `git worktree add -b <branch> <path> [<start>]`. The
+// branch starts from the upstream of the branch checked out in dir (origin/main,
+// usually), which the tui keeps fetched, rather than from the local branch,
+// which only moves when someone pulls it. With no upstream it starts from HEAD.
+// The upstream goes in as a commit rather than a ref name, so the new branch
+// doesn't end up tracking origin/main. On success the
 // command is silent — git's progress chatter ("Preparing worktree…",
 // "HEAD is now at…") is captured and discarded. On failure the captured
 // output is written verbatim to the process stderr so the user sees git's
 // own error message.
 func AddWorktree(dir, path, branch string) error {
-	return addWorktree(dir, "-b", branch, path)
+	args := []string{"-b", branch, path}
+	if out, err := git(dir, "rev-parse", "--verify", "--quiet", "@{u}").Output(); err == nil {
+		args = append(args, strings.TrimSpace(string(out)))
+	}
+	return addWorktree(dir, args...)
 }
 
 // AddWorktreeOnBranch creates a new linked worktree at `path` checked out on
