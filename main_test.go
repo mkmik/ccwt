@@ -1305,6 +1305,7 @@ func TestStatusBarOffersTheQueueKeyWithNothingSelected(t *testing.T) {
 // unreadable stamp (the file is being replaced right now, or was never
 // stattable) must not stick a notice up that nothing can take back down.
 func TestUpgradeNoticeNeedsTwoReadableStamps(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir()) // no `ccwt restart` of the user's own
 	var now string
 	defer func(old func() string) { selfStamp = old }(selfStamp)
 	selfStamp = func() string { return now }
@@ -1339,6 +1340,30 @@ func TestUpgradeNoticeNeedsTwoReadableStamps(t *testing.T) {
 	u.checkUpgrade()
 	if u.restart != said {
 		t.Errorf("the notice changed to %q on a later tick, want it to stay %q", u.restart, said)
+	}
+}
+
+// `ccwt restart` reaches a tui that started before it, through the same
+// notice an upgrade puts up — and only once: the tui it restarts into reads
+// the file as it is then, and sees nothing new.
+func TestRestartCmdAsksRunningTuisToRestart(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	u := ui{asked: restartAsked()}
+	u.checkUpgrade()
+	if u.restart != "" {
+		t.Fatalf("before any ccwt restart the bar says %q, want nothing", u.restart)
+	}
+	if err := (&RestartCmd{}).Run(); err != nil {
+		t.Fatal(err)
+	}
+	u.checkUpgrade()
+	if !strings.HasPrefix(u.restart, "restart asked") {
+		t.Errorf("after ccwt restart the bar says %q, want the restart notice", u.restart)
+	}
+	again := ui{asked: restartAsked()}
+	again.checkUpgrade()
+	if again.restart != "" {
+		t.Errorf("the restarted tui says %q, want nothing", again.restart)
 	}
 }
 

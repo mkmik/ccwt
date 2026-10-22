@@ -21,4 +21,10 @@ id = "content-stamp"
 title = "Key the restart on the binary's content, not its mtime"
 status = "done"
 note = "So a `git pull && go install` loop only restarts on a real change"
+
+[[feature]]
+id = "restart-cmd"
+title = "`ccwt restart` sets off the same restart in every tui, with no new binary"
+status = "done"
+note = "A file in the state directory each tui compares with what it said at startup; for config only startup reads, like herdr_events"
 +++
