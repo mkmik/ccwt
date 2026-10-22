@@ -95,14 +95,26 @@ func (c *TuiCmd) Run() error {
 	}
 
 	go fetchMain(ctx, c.Fetch, projects)
+	cfg, _ := loadConfig() // a config we can't read is one that leaves herdr_events off
 	// The list keeps an eye on the conductors of its own worktrees'
 	// workspaces, over herdr's socket. The ws view doesn't: there is one in
 	// every workspace, and each watching all of them is the herdr traffic the
 	// socket was meant to cut. A repo git can't name has no worktrees to list.
-	if !c.ws && os.Getenv("HERDR_SOCKET_PATH") != "" {
+	underSocket := os.Getenv("HERDR_SOCKET_PATH") != ""
+	if !c.ws && underSocket {
 		if roots, err := worklogProjects(projects); err == nil {
-			go watchWsDown(ctx, roots, projects != nil)
+			go watchWsDown(ctx, roots, projects != nil, cfg.HerdrEvents)
 		}
+	}
+	// With herdr_events on, the ws view asks herdr about its tabs when herdr
+	// says something in its workspace changed, rather than every tick: the
+	// tick goes on redrawing, from what it last heard (see wsTabs).
+	var heard chan struct{}
+	var settled <-chan time.Time
+	if c.ws && underSocket && cfg.HerdrEvents {
+		heard = make(chan struct{}, 1)
+		wsTabsHeard.on = true
+		go herdrListen(ctx, heard, wsHeard(os.Getenv("HERDR_WORKSPACE_ID")), wsEvents...)
 	}
 
 	// Raw mode so single keypresses arrive without waiting for a newline. If
@@ -255,6 +267,14 @@ func (c *TuiCmd) Run() error {
 			// it, and a window dragged out and back lands on the same text — so
 			// this repaints all of it rather than trusting the diff.
 			last = ""
+		case <-heard:
+			if settled == nil {
+				settled = time.After(wsSettleHeard)
+			}
+		case <-settled:
+			settled = nil
+			wsTabsHeard.dirty = true
+			u.refresh()
 		case <-tick.C:
 			u.msg = ""
 			u.refresh() // the tick is what re-reads the list
@@ -3536,16 +3556,16 @@ func herdrAsk(method string, params map[string]any, args ...string) ([]byte, err
 
 // herdrListen holds a subscription to herdr's events of these types open over
 // the socket for as long as ctx lasts, and pokes each time a line comes down
-// it: the answer that says the subscription has started — whatever happened
-// before it went unheard, so that is worth a look too — and then one per
-// event. A poke already waiting stands for the ones after it: whoever is
+// it that keep, when there is one, keeps: the answer that says the subscription
+// has started — whatever happened before it went unheard, so that is worth a
+// look too — and then one per event. A poke already waiting stands for the ones after it: whoever is
 // listening looks again, and one look sees all of them.
 //
 // Herdr going away — a restart, `herdr update --handoff` — ends the
 // connection, and it is made again every couple of seconds until herdr is back.
 // A pause ends it too, a subscription being something herdr keeps up for us,
 // and it is made again within a couple of seconds of `ccwt unpause`.
-func herdrListen(ctx context.Context, poke chan<- struct{}, types ...string) {
+func herdrListen(ctx context.Context, poke chan<- struct{}, keep func(line []byte) bool, types ...string) {
 	subs := make([]map[string]any, len(types))
 	for i, t := range types {
 		subs[i] = map[string]any{"type": t}
@@ -3553,7 +3573,7 @@ func herdrListen(ctx context.Context, poke chan<- struct{}, types ...string) {
 	req, _ := jsonv2.Marshal(map[string]any{"id": "ccwt", "method": "events.subscribe", "params": map[string]any{"subscriptions": subs}})
 	for ctx.Err() == nil {
 		if !herdrPaused() {
-			herdrHear(ctx, req, poke)
+			herdrHear(ctx, req, poke, keep)
 		}
 		select {
 		case <-ctx.Done():
@@ -3563,9 +3583,9 @@ func herdrListen(ctx context.Context, poke chan<- struct{}, types ...string) {
 }
 
 // herdrHear is one connection's worth of herdrListen: the subscription req
-// made, and a poke for every line down it, until herdr hangs up, ctx ends or
-// ccwt is paused.
-func herdrHear(ctx context.Context, req []byte, poke chan<- struct{}) {
+// made, and a poke for every line down it keep keeps, until herdr hangs up, ctx
+// ends or ccwt is paused.
+func herdrHear(ctx context.Context, req []byte, poke chan<- struct{}, keep func([]byte) bool) {
 	c, err := (&net.Dialer{}).DialContext(ctx, "unix", os.Getenv("HERDR_SOCKET_PATH"))
 	if err != nil {
 		return
@@ -3579,12 +3599,15 @@ func herdrHear(ctx context.Context, req []byte, poke chan<- struct{}) {
 		// A read waiting on herdr's next event comes back every couple of
 		// seconds to see whether ccwt has been paused meanwhile.
 		_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
-		_, err := r.ReadBytes('\n')
+		line, err := r.ReadBytes('\n')
 		if errors.Is(err, os.ErrDeadlineExceeded) && !herdrPaused() {
 			continue
 		}
 		if err != nil {
 			return
+		}
+		if keep != nil && !keep(line) {
+			continue
 		}
 		select {
 		case poke <- struct{}{}:

@@ -270,7 +270,7 @@ func agentDots(agents []herdrAgent) func(path string) string {
 // take it down.
 func wsTable(width int) ([]string, []listRow) {
 	head := append(wsMR(width), "")
-	tabs, err := herdrTabs()
+	tabs, err := wsTabs()
 	if err != nil {
 		return append(head, "  TAB", "  "+err.Error()), []listRow{{pid: -1}}
 	}
@@ -288,6 +288,33 @@ func wsTable(width int) ([]string, []listRow) {
 	}
 	fitTable(table, width, cols)
 	return append(head, tabbed(table)...), rows
+}
+
+// wsTabsHeard is herdrTabs' last answer, kept while the ws view listens to
+// herdr's events: it asks again only when an event has said something in the
+// workspace changed (dirty), or wsTabsEvery has gone by without one — the way
+// back from an event that went missing. Only the tui's own loop touches it.
+var wsTabsHeard struct {
+	on, dirty bool
+	tabs      []wsTab
+	at        time.Time
+}
+
+// wsTabsEvery is how long the ws view trusts what it last heard about its tabs
+// while herdr is quiet.
+const wsTabsEvery = time.Minute
+
+// wsTabs is herdrTabs, through wsTabsHeard.
+func wsTabs() ([]wsTab, error) {
+	h := &wsTabsHeard
+	if h.on && !h.dirty && time.Since(h.at) < wsTabsEvery {
+		return h.tabs, nil
+	}
+	tabs, err := herdrTabs()
+	if err == nil {
+		h.tabs, h.at, h.dirty = tabs, time.Now(), false
+	}
+	return tabs, err
 }
 
 // mrWindow is how long the ws view goes on showing the same answer about the
@@ -907,6 +934,49 @@ func wsDownTab(i int) string {
 // workspaces they are in, may have changed.
 var wsDownEvents = []string{"tab.created", "tab.renamed", "tab.closed", "workspace.renamed", "workspace.closed"}
 
+// wsEvents are what herdr says when what the ws view shows — the tabs, their
+// panes, the agents in them — may have changed. An agent's status comes as a
+// pane.updated: pane.agent_status_changed is one pane's, by its id, and herdr
+// refuses a subscription to it without one (herdr 0.9.5). Output in a pane
+// says nothing.
+var wsEvents = []string{
+	"tab.created", "tab.renamed", "tab.closed", "tab.moved", "tab.focused",
+	"pane.created", "pane.updated", "pane.closed", "pane.agent_detected",
+	"workspace.renamed",
+}
+
+// wsSettleHeard is how long the ws view waits after an event before it asks:
+// an agent at work rewrites its pane's title over and over, and a burst of
+// those is one change to read.
+const wsSettleHeard = 500 * time.Millisecond
+
+// wsHeard is which of herdr's events the ws view of workspace ws re-reads for:
+// anything in that workspace, and a tab taking the focus anywhere — which is
+// how one of ours loses it, with nothing said about ours (herdr 0.9.5). The
+// line saying the subscription has started counts, and so does a line that
+// doesn't say where it happened.
+func wsHeard(ws string) func(line []byte) bool {
+	return func(line []byte) bool {
+		var e struct {
+			Event string `json:"event"`
+			Data  struct {
+				Workspace string `json:"workspace_id"`
+				Tab       struct {
+					Workspace string `json:"workspace_id"`
+				} `json:"tab"`
+				Pane struct {
+					Workspace string `json:"workspace_id"`
+				} `json:"pane"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(line, &e) != nil {
+			return true
+		}
+		w := cmp.Or(e.Data.Workspace, e.Data.Tab.Workspace, e.Data.Pane.Workspace)
+		return e.Event == "" || e.Event == "tab_focused" || w == "" || w == ws
+	}
+}
+
 // wsDownEvery is how often the list looks anyway. A ccwt that quits hands its
 // pane back to the shell, and herdr says nothing when a pane's foreground
 // changes hands — nothing at all, in a probe session on herdr 0.9.1 — so this
@@ -921,10 +991,12 @@ var wsSettle = 2 * time.Second
 
 // watchWsDown keeps wsDown up to date for as long as ctx lasts, for the
 // worktrees of the repos at roots — or, global, for the repos' own workspaces:
-// a look when herdr says the tabs have moved, and every wsDownEvery besides.
-func watchWsDown(ctx context.Context, roots []string, global bool) {
+// every wsDownEvery, and, listen, when herdr says the tabs have moved.
+func watchWsDown(ctx context.Context, roots []string, global, listen bool) {
 	poke := make(chan struct{}, 1)
-	go herdrListen(ctx, poke, wsDownEvents...)
+	if listen {
+		go herdrListen(ctx, poke, nil, wsDownEvents...)
+	}
 	for {
 		select {
 		case <-ctx.Done():

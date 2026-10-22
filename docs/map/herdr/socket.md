@@ -20,15 +20,15 @@ status = "done"
 [[feature]]
 id = "events"
 title = "tab, pane, agent-status and rename events each re-read and redraw"
-status = "todo"
-note = "Stage 2: the list's corner listens; the ws round doesn't yet"
+status = "done"
+note = "Opt-in: herdr_events = true in the config"
 needs = ["#listen"]
 
 [[feature]]
 id = "slow-tick"
 title = "The tick goes slow, as the fallback for a missed event"
 status = "todo"
-note = "herdr says nothing when a program exits back to its shell, so a look stays"
+note = "Done for the ws view (wsTabs, a minute); the list's round is still per tick. herdr says nothing when a program exits back to its shell, so a look stays"
 needs = ["#events"]
 
 [[needs]]
