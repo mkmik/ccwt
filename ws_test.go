@@ -1127,7 +1127,7 @@ func TestListWatchesTheWsTabsForTheirCcwt(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { watchWsDown(ctx, []string{"/src/app"}, false); close(done) }()
+	go func() { watchWsDown(ctx, []string{"/src/app"}, false, true); close(done) }()
 	t.Cleanup(func() { cancel(); <-done; close(events); wsDown.names, wsDown.tabs, wsSettle = nil, nil, settle })
 
 	// Well inside wsDownEvery, so that only the subscription can have asked.
@@ -1350,6 +1350,28 @@ func TestWsSeedPaneFitsANarrowScreen(t *testing.T) {
 			u.seedPane(cols, 13)
 			u.effortFocus = true
 			u.seedPane(cols, 13)
+		}
+	}
+}
+
+// The ws view re-reads its tabs for herdr's events in its own workspace, and
+// for a tab taking the focus anywhere, since that is how one of its own loses
+// it. Another workspace's agent rewriting its title is nothing to it. The
+// lines are herdr 0.9.5's, cut down.
+func TestWsHearsItsOwnWorkspace(t *testing.T) {
+	heard := wsHeard("w1")
+	for line, want := range map[string]bool{
+		`{"id":"ccwt","result":{"type":"subscription_started"}}`:                                                   true,
+		`{"data":{"tab":{"tab_id":"w1:t2","workspace_id":"w1"},"type":"tab_created"},"event":"tab_created"}`:       true,
+		`{"data":{"label":"foo","tab_id":"w1:t2","type":"tab_renamed","workspace_id":"w1"},"event":"tab_renamed"}`: true,
+		`{"data":{"pane":{"pane_id":"w1:p2","workspace_id":"w1"},"type":"pane_updated"},"event":"pane_updated"}`:   true,
+		`{"data":{"pane":{"pane_id":"w2:p1","workspace_id":"w2"},"type":"pane_updated"},"event":"pane_updated"}`:   false,
+		`{"data":{"agent":"claude","pane_id":"w2:p1","workspace_id":"w2"},"event":"pane_agent_detected"}`:          false,
+		`{"data":{"tab_id":"w2:t1","type":"tab_focused","workspace_id":"w2"},"event":"tab_focused"}`:               true,
+		`{"data":{"type":"something_new"},"event":"something_new"}`:                                                true,
+	} {
+		if got := heard([]byte(line)); got != want {
+			t.Errorf("heard %s = %v, want %v", line, got, want)
 		}
 	}
 }

@@ -56,6 +56,11 @@ type Config struct {
 	//	name = "work"
 	//	path = "~/w"
 	Categories []Category `toml:"categories"`
+	// HerdrEvents has the tuis hear herdr's events over its socket rather than
+	// only asking every tick: the list's corner box when a `ws` tab comes or
+	// goes, the ws view whenever a tab, pane or agent changes. Off by default,
+	// since every ws view hears every workspace's events.
+	HerdrEvents bool `toml:"herdr_events"`
 }
 
 // Category is a name for the projects checked out under a directory.

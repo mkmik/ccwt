@@ -647,6 +647,17 @@ production = "prod"
 staging = "stg"
 ```
 
+`herdr_events` has the tuis listen to [Herdr](#herdr-integration-optional)'s events over its
+socket. `ccwt ws` then asks Herdr about its tabs only when something changes in its own
+workspace — a tab, a pane's title or directory, an agent's state — or a tab anywhere takes the
+focus, and once a minute besides, rather than every two seconds; a burst of changes is one
+look, half a second after it starts. The list's corner box looks again when a `ws` tab comes
+or goes, on top of its ten-second look. It is off by default:
+
+```toml
+herdr_events = true
+```
+
 `ccwt config view` prints that file and `ccwt config edit` opens it in `$EDITOR`, either one
 creating an empty file first when you don't have one yet.
 
@@ -808,9 +819,10 @@ its worktrees' workspaces in that state, in a yellow box in its bottom-right cor
  ☰  q:quit  p:pull  g:git  /:search  l:log  a:agents  x:new  c:new+ws  n:queue │ main
 ```
 
-It listens to Herdr's events, and looks again whenever a tab or a workspace is made, renamed
-or closed — and every ten seconds besides, since Herdr says nothing when a program exits back
-to its shell. It covers only the workspaces open on the worktrees it lists — the ones Herdr
+It looks every ten seconds, and with [`herdr_events`](#several-projects-at-once) on it also listens to
+Herdr's events and looks again whenever a tab or a workspace is made, renamed or closed — the
+ten-second look stays either way, since Herdr says nothing when a program exits back to its
+shell. It covers only the workspaces open on the worktrees it lists — the ones Herdr
 shows under the repo, or under any known project with `-g` — and leaves another repo's to
 that repo's tui. Only the tui does this, not `ccwt ws`, and only when it is running in a Herdr
 pane.
@@ -936,7 +948,7 @@ swallow stderr, or you'll lose the cwd report.
 | `ccwt repo-root` | Print the root of the current git repository. Add `--root-worktree` to print the *enclosing* repo root when you're inside a `.claude/worktrees/<name>` worktree. |
 | `ccwt ..` | Shorthand for `repo-root --root-worktree`: print (and, with shell integration, `cd` to) the enclosing repository root. |
 | `ccwt init <shell>` | Emit the shell-integration snippet to source from your rc file. For `zsh` the snippet carries completion too: commands, and worktree names for `cd`, `remove` and `lock`. |
-| `ccwt config view` / `ccwt config edit` | Print the config file, or open it in `$EDITOR` (`vi` if unset). Both create an empty one if there isn't any. The file holds `[[projects]]`, repos for `-g` to span besides the ones `ccwt` has been run in, `branch_prefix` — what `ccwt new` puts in front of a worktree's name to make its branch (`worktree-` when unset) — `columns`, which columns the table draws, `sort`, the order the worktrees come in (`freshness` when unset), `task_command`, the agent cli a queued prompt is run with (`claude` when unset), `forges`, which cli finds a host's reviews for the tui's `m` and `ccwt mr`, `environments`, what `ccwt mr`'s `ENV` column calls each environment (`production = "prod"`), and `categories`, which section of Herdr's sidebar `o` puts a project in. |
+| `ccwt config view` / `ccwt config edit` | Print the config file, or open it in `$EDITOR` (`vi` if unset). Both create an empty one if there isn't any. The file holds `[[projects]]`, repos for `-g` to span besides the ones `ccwt` has been run in, `branch_prefix` — what `ccwt new` puts in front of a worktree's name to make its branch (`worktree-` when unset) — `columns`, which columns the table draws, `sort`, the order the worktrees come in (`freshness` when unset), `task_command`, the agent cli a queued prompt is run with (`claude` when unset), `forges`, which cli finds a host's reviews for the tui's `m` and `ccwt mr`, `environments`, what `ccwt mr`'s `ENV` column calls each environment (`production = "prod"`), `categories`, which section of Herdr's sidebar `o` puts a project in, and `herdr_events`, whether the tuis listen to Herdr's events (off when unset). |
 | `ccwt --version` | Print version information. |
 
 ### Layout

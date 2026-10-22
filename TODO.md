@@ -71,10 +71,13 @@ to, in `HERDR_SOCKET_PATH`.
   - [x] the ws view's round (`tab.list`, `pane.list`, `agent.list`), the list's (`agent.list`, `workspace.list`), and the badge once a minute (`workspace.report_metadata`)
   - [x] tests: `TestHerdrIsAskedOverItsSocket`; `TestMain` drops the herdr environment `go test` inherits, so no test reaches the live herdr through its socket
 - [ ] 2. Hear from herdr instead of asking every 2s
-  - [ ] `events.subscribe` on a connection held open: `tab.*`, `pane.updated`/`created`/`closed`, `pane.agent_status_changed`, `workspace.renamed` — each one re-reads and redraws, as a tick does now
-  - [ ] reconnect when herdr goes away and comes back (a restart, `herdr update --handoff`)
-  - `herdrListen` is that connection, redialled every couple of seconds while herdr is away; the list's corner warning listens on it, the ws view's round doesn't yet
+  - [x] `events.subscribe` on a connection held open: `tab.*`, `pane.updated`/`created`/`closed`/`agent_detected`, `workspace.renamed` — each one re-reads and redraws, as a tick does now. Not `pane.agent_status_changed`: herdr 0.9.5 takes it only for one `pane_id`, and an agent's status comes as a `pane.updated` anyway
+  - [x] reconnect when herdr goes away and comes back (a restart, `herdr update --handoff`)
+  - [x] off unless the config says `herdr_events = true`, the list's corner included: every ws view hears every workspace's events
+  - `herdrListen` is that connection, redialled every couple of seconds while herdr is away; the list's corner warning and the ws view's round both listen on it
   - [ ] the tick goes slow, as the fallback for a missed event, rather than away
+    - [x] the ws view: its tick redraws from what it last heard (`wsTabs`), and asks herdr only half a second after an event in its own workspace — or a tab focused anywhere, which is how one of ours loses the focus — or once a minute without one. In a probe session: 3 questions in 20s idle against 28, none while another workspace's agent worked
+    - [ ] the list: `agent.list` and `workspace.list` still go every tick
 - [ ] 3. Later, if it earns its keep
   - [ ] the one-off reads (`nav ws`, `pane get`, `worktree list`, …): a process per keypress rather than per round
   - [ ] the actions: `pane run` is the cli's own — it types the line — with no method to call instead, so they stay on the cli

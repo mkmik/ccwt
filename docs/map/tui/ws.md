@@ -63,7 +63,8 @@ needs = ["/tools/todography", "#seed"]
 [[feature]]
 id = "events"
 title = "Redraw on herdr's events rather than asking every 2s"
-status = "todo"
+status = "done"
+note = "With herdr_events = true; the 2s tick stays until /herdr/socket#slow-tick"
 needs = ["/herdr/socket#events"]
 
 [[feature]]
