@@ -157,7 +157,7 @@ func (c *TuiCmd) Run() error {
 	resized, stopResize := watchResize()
 	defer stopResize()
 
-	u := ui{projects: projects, sort: c.Sort, stamp: selfStamp(), ws: c.ws}
+	u := ui{projects: projects, sort: c.Sort, stamp: selfStamp(), asked: restartAsked(), ws: c.ws}
 	if c.ws {
 		u.askTrust() // whether Claude Code may run its agents here, asked over all else
 		u.askSeed(c.seedPrompt, c.seedTitle) // a fresh workspace opens on the question of what it is for
@@ -771,6 +771,7 @@ type ui struct {
 	// that goes in the bar once it stops looking like that — see checkUpgrade.
 	stamp   string
 	restart string
+	asked   string // what `ccwt restart`'s file said when this tui started
 
 	clicked time.Time // when the last click landed on sel — see click
 	nav     time.Time // when the last key was pressed — see refresh
@@ -2287,16 +2288,22 @@ func wrapIndent(s string, width int) []string {
 // A stamp that can't be read (at startup or now) means we can't tell, and the
 // bar stays quiet rather than crying upgrade at the window during an install
 // where the path is momentarily missing.
+//
+// `ccwt restart` gets the same notice and the same restart, binary or no.
 func (u *ui) checkUpgrade() {
-	if u.restart != "" || u.stamp == "" {
-		return
-	}
-	if s := selfStamp(); s == "" || s == u.stamp {
+	if u.restart != "" {
 		return
 	}
 	hint := " — restart ccwt"
 	if reexec != nil { // the process does that itself — see idle
 		hint = " — restarting when idle"
+	}
+	if restartAsked() != u.asked {
+		u.restart = "restart asked" + hint
+		return
+	}
+	if s := selfStamp(); u.stamp == "" || s == "" || s == u.stamp {
+		return
 	}
 	u.restart = "upgraded" + hint
 	if v := selfVersion(); v != "" {

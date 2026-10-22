@@ -6,7 +6,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
+	"time"
 )
 
 // `ccwt pause` quiets what every ccwt asks herdr on its own — the list's round
@@ -40,6 +42,42 @@ func (c *UnpauseCmd) Run() error {
 		return err
 	}
 	return nil
+}
+
+// `ccwt restart` has every tui and ws view running restart the way an upgrade
+// does (see checkUpgrade), with no new binary: to pick up config only startup
+// reads, herdr_events most of all. It's a file for the same reason the pause
+// is — a message would need a list of every ccwt to send it to. Each one
+// remembers what the file said when it started and restarts once that changes.
+type RestartCmd struct{}
+
+func (c *RestartCmd) Run() error {
+	path := restartPath()
+	if path == "" {
+		return errors.New("cannot locate a state directory: set XDG_STATE_HOME")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	// The time rather than an empty file's mtime, which a second restart
+	// within the filesystem's mtime granularity wouldn't move.
+	return os.WriteFile(path, strconv.AppendInt(nil, time.Now().UnixNano(), 10), 0o644)
+}
+
+// restartPath is the file `ccwt restart` writes, "" when there is no state
+// directory to find it in.
+func restartPath() string {
+	if dir := stateDir(); dir != "" {
+		return filepath.Join(dir, "restart")
+	}
+	return ""
+}
+
+// restartAsked is what restartPath says now: "" when it's missing, since a
+// ccwt started before the first `ccwt restart` has to see that as a change.
+func restartAsked() string {
+	b, _ := os.ReadFile(restartPath())
+	return string(b)
 }
 
 // pausePath is the file that says ccwt is paused, "" when there is no state
