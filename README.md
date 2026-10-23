@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/src/images/ccwt-logo-dark.svg">
+    <img alt="ccwt" src="docs/src/images/ccwt-logo.svg" width="300">
+  </picture>
+</p>
+
 # ccwt
 
 A small command-line helper for managing coding-agent git worktrees.
@@ -7,7 +14,8 @@ An agent works best in a worktree of its own, one per task, under
 tear down those worktrees from your own shell, with a table saying what each one is about
 and whether something is running in it.
 
-**The manual is at <https://mkmik.github.io/ccwt/>.**
+**The manual is at <https://mkmik.github.io/ccwt/>**, and a map of what ccwt is made of
+at <https://mkmik.github.io/ccwt/map/>.
 
 ## Install
 
@@ -35,8 +43,9 @@ ccwt                # the same list, full-screen and kept up to date
 ## The manual
 
 The manual is an [mdBook](https://rust-lang.github.io/mdBook/) under `docs/`: its pages are
-in `docs/src`, and `mdbook serve docs` shows them locally. Every push to `main` publishes it
-to GitHub Pages.
+in `docs/src`, and `mdbook serve docs` shows them locally. The map is a
+[todography](https://github.com/mkmik/todography) map in `docs/map`. `docs/build.sh` builds
+both into `docs/book`, and every push to `main` publishes that to GitHub Pages.
 
 ## License
 

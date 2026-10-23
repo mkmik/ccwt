@@ -1,3 +1,8 @@
+<p class="hero-logo">
+  <img class="logo-light" alt="ccwt" src="images/ccwt-logo.svg" width="300">
+  <img class="logo-dark" alt="ccwt" src="images/ccwt-logo-dark.svg" width="300">
+</p>
+
 # Introduction
 
 `ccwt` is a small command-line helper for managing coding-agent git worktrees.
@@ -27,3 +32,4 @@ where you say which one that is.
   for the rest.
 - **Setting up** covers the config file and running Claude Code through `ccwt`.
 - [Commands](reference/commands.md) lists every command and flag in one place.
+- [The map](map.md) is ccwt's own map of its components, published next to this book.

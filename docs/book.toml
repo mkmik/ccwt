@@ -15,6 +15,7 @@ git-repository-url = "https://github.com/mkmik/ccwt"
 edit-url-template = "https://github.com/mkmik/ccwt/edit/main/docs/{path}"
 default-theme = "light"
 preferred-dark-theme = "navy"
+additional-css = ["theme/ccwt.css"]
 no-section-label = true
 
 [output.html.fold]

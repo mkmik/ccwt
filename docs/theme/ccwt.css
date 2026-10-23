@@ -1,0 +1,39 @@
+/* ccwt's colours on top of mdBook's themes: the logo's merged green for
+   links, its working amber under headings. */
+
+.light, .rust {
+    --links: #2b7a4b;
+    --sidebar-active: #2b7a4b;
+    --ccwt-accent: #c98a0b;
+}
+
+.coal, .navy, .ayu {
+    --links: #6cc28f;
+    --sidebar-active: #6cc28f;
+    --ccwt-accent: #f2b84b;
+}
+
+.content h1 {
+    border-bottom: 2px solid var(--ccwt-accent);
+    padding-bottom: 0.2em;
+}
+
+.hero-logo {
+    margin: 1.5em 0 0.5em;
+}
+
+.hero-logo img {
+    max-width: 100%;
+    height: auto;
+}
+
+/* Show the logo that reads on the current theme. */
+.logo-dark { display: none; }
+.coal .logo-dark, .navy .logo-dark, .ayu .logo-dark { display: inline; }
+.coal .logo-light, .navy .logo-light, .ayu .logo-light { display: none; }
+
+/* The tables and the tui's screens are wide; let them scroll instead of
+   wrapping. */
+.content pre > code {
+    white-space: pre;
+}

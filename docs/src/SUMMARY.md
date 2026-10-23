@@ -35,3 +35,7 @@
 # Reference
 
 - [Commands](reference/commands.md)
+
+---
+
+[The map](map.md)

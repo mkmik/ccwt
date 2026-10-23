@@ -4,7 +4,7 @@ summary = "The manual, an mdBook published to GitHub Pages; the README points at
 kind = "infra"
 intent = "goal"
 research = "done"
-refs = ["README.md", "docs/book.toml", "docs/src/SUMMARY.md", ".github/workflows/docs.yml"]
+refs = ["README.md", "docs/book.toml", "docs/build.sh", "docs/src/SUMMARY.md", "docs/theme/ccwt.css", ".github/workflows/docs.yml"]
 
 [[feature]]
 id = "manual"
@@ -14,6 +14,11 @@ status = "done"
 [[feature]]
 id = "book"
 title = "A book on GitHub Pages instead of one long README"
+status = "done"
+
+[[feature]]
+id = "map-page"
+title = "This map's page published next to the book, linted on every pull request"
 status = "done"
 
 [[feature]]
