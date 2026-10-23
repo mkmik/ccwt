@@ -395,8 +395,11 @@ func (c *RemoveCmd) remove(root string) error {
 	}
 
 	// What the worktree was about, read while it is still there to read it from:
-	// the session transcript is keyed by its path and the last commit is in it.
-	entry := Removal{Project: root, Name: name, Topic: worktreeTopic(worktreePath), At: time.Now()}
+	// the session transcript is keyed by its path and the last commit is in it,
+	// and its merge request is found by the branch it has checked out. No merge
+	// request, or no forge to ask, is a removal with no review to follow up on.
+	review, _ := branchMR(worktreePath)
+	entry := Removal{Project: root, Name: name, Topic: worktreeTopic(worktreePath), Review: review, At: time.Now()}
 
 	if _, err := os.Stat(worktreePath); err == nil {
 		if err := gitutil.RemoveWorktree(root, worktreePath); err != nil {

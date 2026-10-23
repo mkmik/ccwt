@@ -396,7 +396,7 @@ func landed() {
 // so a branch it can't find one for is no rows rather than an error to put on
 // the screen. `ccwt mr` in a tab says which of the two it was.
 func branchLook() *mrLook {
-	u, err := branchMR()
+	u, err := branchMR(".")
 	if err != nil {
 		return &mrLook{}
 	}

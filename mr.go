@@ -115,7 +115,7 @@ func (c *MrCmd) look() ([]mrRow, string, error) {
 func (c *MrCmd) things() ([]string, error) {
 	switch c.Thing {
 	case "":
-		u, err := branchMR()
+		u, err := branchMR(".")
 		return []string{u}, err
 	case "-":
 		var things []string
@@ -186,7 +186,7 @@ func lookThing(thing string, askEnvs bool) ([]mrRow, error) {
 	return nil, fmt.Errorf("%q is not a merge request url, a pull request url or a jira issue", thing)
 }
 
-// branchMR is the merge request of the branch checked out here — the one
+// branchMR is the merge request of the branch checked out in dir — the one
 // whose source branch it is, most recently touched first — and the url it
 // answers with goes back through lookThing like any other argument.
 //
@@ -199,9 +199,9 @@ func lookThing(thing string, askEnvs bool) ([]mrRow, error) {
 // from a fork belongs to the project it targets rather than the one it came
 // from, so it isn't found here and the workspace reads as having none. Follow
 // source_project_id when someone works that way.
-func branchMR() (string, error) {
-	origin := gitLine(".", "remote", "get-url", "origin")
-	branch := checkedOutBranch(".")
+func branchMR(dir string) (string, error) {
+	origin := gitLine(dir, "remote", "get-url", "origin")
+	branch := checkedOutBranch(dir)
 	project := urlPath(origin)
 	if project == "" || branch == "" {
 		return "", errors.New("no merge request for this branch: no origin remote or no branch here")

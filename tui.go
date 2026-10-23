@@ -2057,6 +2057,7 @@ func removalPage(r Removal) *page {
 		"REMOVED  " + humanAge(time.Since(r.At)) + " ago, " + r.At.Format("2006-01-02 15:04"),
 		"PATH     " + path,
 		"TOPIC    " + r.Topic,
+		"REVIEW   " + cmp.Or(r.Review, "none"),
 		"SESSION  " + cmp.Or(shortenHome(transcript), "none"),
 	}
 	if lines := transcriptLines(transcript); len(lines) > 0 {
