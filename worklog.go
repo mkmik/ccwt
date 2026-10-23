@@ -28,7 +28,11 @@ type Removal struct {
 	Project string
 	Name    string
 	Topic   string
-	At      time.Time
+	// The url of the branch's merge request or pull request, "" when it had
+	// none: what `ccwt mr` takes to say which environments the work has been
+	// promoted to since, now that the branch it was found by is gone.
+	Review string
+	At     time.Time
 }
 
 // It lives in the task database rather than a file of its own: same state
@@ -40,7 +44,8 @@ const worklogSchema = `CREATE TABLE IF NOT EXISTS worklog (
 	project TEXT    NOT NULL,
 	name    TEXT    NOT NULL,
 	topic   TEXT    NOT NULL,
-	removed INTEGER NOT NULL
+	removed INTEGER NOT NULL,
+	review  TEXT    NOT NULL DEFAULT ''
 ) STRICT`
 
 // How many removals a log shows when nothing says otherwise; -n's default says
@@ -56,8 +61,8 @@ func logRemoval(r Removal) error {
 		return err
 	}
 	defer db.Close()
-	_, err = db.Exec(`INSERT INTO worklog (project, name, topic, removed) VALUES (?, ?, ?, ?)`,
-		r.Project, r.Name, r.Topic, r.At.Unix())
+	_, err = db.Exec(`INSERT INTO worklog (project, name, topic, review, removed) VALUES (?, ?, ?, ?, ?)`,
+		r.Project, r.Name, r.Topic, r.Review, r.At.Unix())
 	return err
 }
 
@@ -83,7 +88,7 @@ func loadWorklog(projects []string, limit int) ([]Removal, error) {
 		args = append(args, p)
 	}
 	args = append(args, limit)
-	q := fmt.Sprintf(`SELECT project, name, topic, removed FROM worklog WHERE project IN (?%s) ORDER BY id DESC LIMIT ?`,
+	q := fmt.Sprintf(`SELECT project, name, topic, review, removed FROM worklog WHERE project IN (?%s) ORDER BY id DESC LIMIT ?`,
 		strings.Repeat(", ?", max(len(projects)-1, 0)))
 	rows, err := db.Query(q, args...)
 	if err != nil {
@@ -94,7 +99,7 @@ func loadWorklog(projects []string, limit int) ([]Removal, error) {
 	for rows.Next() {
 		var r Removal
 		var at int64
-		if err := rows.Scan(&r.Project, &r.Name, &r.Topic, &at); err != nil {
+		if err := rows.Scan(&r.Project, &r.Name, &r.Topic, &r.Review, &at); err != nil {
 			return nil, err
 		}
 		r.At = time.Unix(at, 0)
@@ -145,6 +150,8 @@ func worktreeTopic(path string) string {
 //
 // PROJECT joins them only when the entries span more than one repo, which is
 // what -g does: a worktree name on its own doesn't say which one it was in.
+// REVIEW joins them once any had a merge request, and goes last and uncut: a
+// url is only any use whole, to click or to hand to `ccwt mr`.
 func worklogTable(log []Removal, width int) []string {
 	if len(log) == 0 {
 		return []string{"no worktrees removed yet"}
@@ -153,6 +160,10 @@ func worklogTable(log []Removal, width int) []string {
 	span := slices.ContainsFunc(log, func(r Removal) bool { return r.Project != log[0].Project })
 	if span {
 		cols = slices.Insert(cols, 1, column{name: "PROJECT", cut: truncate, max: 20})
+	}
+	reviewed := slices.ContainsFunc(log, func(r Removal) bool { return r.Review != "" })
+	if reviewed {
+		cols = append(cols, column{name: "REVIEW"})
 	}
 
 	head := make([]string, len(cols))
@@ -164,6 +175,9 @@ func worklogTable(log []Removal, width int) []string {
 		row := []string{humanAge(time.Since(r.At)), r.Name, r.Topic}
 		if span {
 			row = slices.Insert(row, 1, filepath.Base(r.Project))
+		}
+		if reviewed {
+			row = append(row, r.Review)
 		}
 		table = append(table, row)
 	}

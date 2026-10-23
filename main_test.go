@@ -3303,7 +3303,8 @@ func TestRemoveLogsWhatTheWorktreeWasAbout(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := logRemoval(Removal{Project: "/elsewhere", Name: "bravo", Topic: "not ours", At: time.Now()}); err != nil {
+	const review = "https://github.com/someone/elsewhere/pull/7"
+	if err := logRemoval(Removal{Project: "/elsewhere", Name: "bravo", Topic: "not ours", Review: review, At: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
 	if err := (&RemoveCmd{Name: "alpha", Force: true}).Run(); err != nil {
@@ -3335,6 +3336,9 @@ func TestRemoveLogsWhatTheWorktreeWasAbout(t *testing.T) {
 	table := strings.Join(worklogTable(both, 0), "\n")
 	if !strings.Contains(table, "PROJECT") || !strings.Contains(table, "elsewhere") {
 		t.Errorf("a table of two projects doesn't say which is which:\n%s", table)
+	}
+	if both[1].Review != review || !strings.Contains(table, review) {
+		t.Errorf("the merge request url didn't survive the log, got %q:\n%s", both[1].Review, table)
 	}
 }
 
