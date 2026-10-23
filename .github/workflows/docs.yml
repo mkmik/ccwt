@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Lints docs/map, and leaves todography on the PATH for build.sh.
-      - uses: mkmik/todography@9782b41251fcb63ea5276d159454e7b497ccf212 # v0.13.0
+      - uses: mkmik/todography@5b3fcb1ef081ff2645d12495fcafe1b7676b18f4 # v0.14.0
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
         with:
           tool: mdbook@0.4.40
