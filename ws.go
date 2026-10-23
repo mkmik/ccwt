@@ -36,7 +36,26 @@ func (c *WsCmd) Run() error {
 	if !underHerdr() {
 		return errors.New("ws runs in a herdr workspace, and this isn't one (no HERDR_ENV)")
 	}
+	// The prompt is for the box this run opens on, and no other: a restart (see
+	// reexec) runs the tui again on its arguments, by when that box has been
+	// sent or put away — and the prompt back in it, as it was queued, starts a
+	// second agent on the same work at the next ↵.
+	os.Args = withoutSeed(os.Args)
 	return (&TuiCmd{Interval: c.Interval, ws: true, seedPrompt: c.Prompt, seedTitle: c.Title}).Run()
+}
+
+// withoutSeed is args less --prompt and --title, in either spelling kong reads.
+func withoutSeed(args []string) []string {
+	var out []string
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case a == "--prompt", a == "--title":
+			i++ // and its value, the word after it
+		case !strings.HasPrefix(a, "--prompt=") && !strings.HasPrefix(a, "--title="):
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // wsTab is one tab of the workspace as the ws view draws it: what `herdr tab

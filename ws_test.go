@@ -706,6 +706,16 @@ esac
 	}
 }
 
+// What a ws view restarts on keeps its flags but the seed prompt's, spelled
+// either way kong takes them — TestAQueuedPromptStartsOneAgentThroughARestart
+// has runWs's spelling, through a real restart.
+func TestARestartLeavesTheSeedPromptBehind(t *testing.T) {
+	got := withoutSeed([]string{"ccwt", "ws", "--prompt", "fix it", "--interval=1s", "--title", "docs", "--prompt=--title"})
+	if want := []string{"ccwt", "ws", "--interval=1s"}; !slices.Equal(got, want) {
+		t.Errorf("withoutSeed = %q, want %q", got, want)
+	}
+}
+
 // A workspace whose agents are Claude Code, in a repository Claude Code hasn't
 // been told to trust, opens on that question — over the seed prompt, which is
 // still there under it once the question is answered. Yes is filed where
