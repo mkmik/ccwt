@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="32" height="32">
+  <style>
+    .ink{fill:none;stroke:#2B3A4A}.ok{fill:#2F8F5B}.busy{fill:#C98A0B}.glyph{fill:none;stroke:#FFFFFF}
+    @media (prefers-color-scheme: dark){.ink{stroke:#A9B8C8}.ok{fill:#6CC28F}.busy{fill:#F2B84B}.glyph{stroke:#1F2430}}
+  </style>
+  <g class="ink" stroke-width="16" stroke-linecap="round">
+    <path d="M100,190 L100,68"/>
+    <path d="M100,156 C100,130 82,118 64,112"/>
+    <path d="M100,118 C100,94 116,84 134,79"/>
+  </g>
+  <circle class="ink" cx="100" cy="44" r="20" stroke-width="14"/>
+  <circle class="ok" cx="40" cy="110" r="30"/>
+  <path class="glyph" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" d="M26,110 L36,120 L54,98"/>
+  <circle class="busy" cx="160" cy="74" r="30"/>
+  <path class="glyph" stroke-width="8" stroke-linecap="round" d="M160,57 L160,91 M143,74 L177,74 M148,62 L172,86 M172,62 L148,86"/>
+</svg>

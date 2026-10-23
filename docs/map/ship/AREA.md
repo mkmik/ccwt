@@ -1,5 +1,5 @@
 +++
 title = "Shipping"
 band = "ship"
-summary = "Tests, CI, releases, dependency updates and the README"
+summary = "Tests, CI, releases, dependency updates and the book"
 +++

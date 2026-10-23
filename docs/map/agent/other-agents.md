@@ -11,4 +11,4 @@ why = "AGENT and TOPIC's ✳ read Claude Code's transcripts alone"
 +++
 
 task_command already runs any agent, and herdr's dots and ✳ already cover
-any. The README lists what is still hardcoded to Claude Code.
+any. The book's introduction lists what is still hardcoded to Claude Code.
