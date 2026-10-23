@@ -19,6 +19,18 @@ func watchResize() (<-chan os.Signal, func()) {
 	return ch, func() { signal.Stop(ch) }
 }
 
+// watchSummon reports `ccwt open` asking for the picker `o` opens: SIGUSR1.
+// Every tui takes it, -g or not, so a pid in globalPath that has since become
+// another tui's costs that tui nothing — the signal's default is to kill.
+func watchSummon() (<-chan os.Signal, func()) {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGUSR1)
+	return ch, func() { signal.Stop(ch) }
+}
+
+// summon is `ccwt open`'s end of watchSummon.
+func summon(pid int) error { return syscall.Kill(pid, syscall.SIGUSR1) }
+
 // cellHeight is how many pixels tall a row of the terminal is, or 0 when the
 // terminal doesn't say.
 func cellHeight() int {

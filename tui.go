@@ -156,6 +156,11 @@ func (c *TuiCmd) Run() error {
 	defer tick.Stop()
 	resized, stopResize := watchResize()
 	defer stopResize()
+	summoned, stopSummon := watchSummon()
+	defer stopSummon()
+	if projects != nil {
+		defer registerGlobal()()
+	}
 
 	u := ui{projects: projects, sort: c.Sort, stamp: selfStamp(), asked: restartAsked(), ws: c.ws}
 	if c.ws {
@@ -267,6 +272,8 @@ func (c *TuiCmd) Run() error {
 			// it, and a window dragged out and back lands on the same text — so
 			// this repaints all of it rather than trusting the diff.
 			last = ""
+		case <-summoned:
+			u.summon()
 		case <-heard:
 			if settled == nil {
 				settled = time.After(wsSettleHeard)
@@ -477,11 +484,7 @@ func (c *TuiCmd) Run() error {
 			// `o` under -g opens a repo that isn't open yet, picked from the
 			// ones ccwt has been used in.
 			case k == "o" && underHerdr() && u.projects != nil:
-				if o, err := newOpener(); err != nil {
-					u.msg = "open: " + err.Error()
-				} else {
-					u.opener, u.msg = o, ""
-				}
+				u.openOpener()
 			case k == "c" && underHerdr() && !u.ws:
 				if err := act("creating…", u.newWorkspace); err != nil {
 					return err

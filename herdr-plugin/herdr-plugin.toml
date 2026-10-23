@@ -2,7 +2,7 @@ id = "ccwt"
 name = "ccwt worktrees"
 version = "0.1.0"
 min_herdr_version = "0.8.0"
-description = "Open a new Herdr workspace on a fresh ccwt-managed git worktree."
+description = "Open a new Herdr workspace on a fresh ccwt-managed git worktree, or a project from ccwt -g's picker."
 platforms = ["linux", "macos"]
 
 # No [[build]]: the plugin is one bash script and expects `ccwt` already on PATH.
@@ -13,3 +13,10 @@ title = "New ccwt worktree"
 description = "Create a worktree with `ccwt new` and open it as a Herdr workspace."
 contexts = ["workspace"]
 command = ["bash", "new-worktree.sh"]
+
+[[actions]]
+id = "open-project"
+title = "Open a ccwt project"
+description = "Go to the `ccwt -g` tui and open its project picker (`ccwt open`)."
+contexts = ["workspace"]
+command = ["bash", "open-project.sh"]

@@ -1,9 +1,14 @@
 # ccwt plugin for [Herdr](https://herdr.dev)
 
-One action: **New ccwt worktree**. It runs `ccwt new` in the repo your focused
-pane is in, then opens the resulting worktree as its own Herdr workspace
-(`herdr worktree open`), so the worktree layout, branch naming and locking stay
-ccwt's job.
+Two actions:
+
+- **New ccwt worktree** (`ccwt.new-worktree`) runs `ccwt new` in the repo your
+  focused pane is in, then opens the resulting worktree as its own Herdr
+  workspace (`herdr worktree open`), so the worktree layout, branch naming and
+  locking stay ccwt's job.
+- **Open a ccwt project** (`ccwt.open-project`) runs `ccwt open`: it goes to the
+  pane `ccwt -g` is running in and opens its project picker there, the one `o`
+  opens.
 
 Requires [`ccwt`](https://github.com/mkmik/ccwt) on `PATH` (or set `CCWT_BIN`)
 and Herdr 0.8.0+.
@@ -20,9 +25,10 @@ herdr plugin link ~/w/mmikulicic/ccwt/herdr-plugin
 
 ```sh
 herdr plugin action invoke ccwt.new-worktree
+herdr plugin action invoke ccwt.open-project
 ```
 
-or bind a key in `~/.config/herdr/config.toml`:
+or bind keys in `~/.config/herdr/config.toml`:
 
 ```toml
 [[keys.command]]
@@ -30,6 +36,12 @@ key = "prefix+w"
 type = "plugin_action"
 command = "ccwt.new-worktree"
 description = "new ccwt worktree"
+
+[[keys.command]]
+key = "prefix+o"
+type = "plugin_action"
+command = "ccwt.open-project"
+description = "open a ccwt project"
 ```
 
 Failures show up as a Herdr notification and in `herdr plugin log list --plugin ccwt`.

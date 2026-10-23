@@ -31,6 +31,12 @@ status = "done"
 needs = ["/herdr/workspaces#open"]
 
 [[feature]]
+id = "open-cmd"
+title = "ccwt open: o from anywhere, the -g tui found by its pid file and woken by SIGUSR1"
+status = "done"
+needs = ["#open"]
+
+[[feature]]
 id = "categories"
 title = "categories: o puts a project last under its ------ <name> divider"
 status = "done"

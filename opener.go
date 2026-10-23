@@ -2,10 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -23,6 +25,98 @@ type opener struct {
 	picked   bool              // sel was moved to by hand, so p and P are about it, not the filter
 	first, n int               // the screen line the first row came out on, and how many were drawn
 	clicked  time.Time
+}
+
+// openOpener is `o`: the picker, over the list.
+func (u *ui) openOpener() {
+	if o, err := newOpener(); err != nil {
+		u.msg = "open: " + err.Error()
+	} else {
+		u.opener, u.msg = o, ""
+	}
+}
+
+// summon is `ccwt open` arriving: `o`, whatever is up. A search is given up as
+// esc gives it up, and what only shows something — a pane, a page, the menu —
+// is closed; a prompt being written or a question being asked is left alone,
+// since what's in it is the user's.
+func (u *ui) summon() {
+	if !underHerdr() || u.projects == nil || u.opener != nil {
+		return
+	}
+	if u.entry.open || u.model.open || u.trust != "" {
+		u.msg = "open: finish the prompt first"
+		return
+	}
+	if u.typing {
+		u.edit("\x1b")
+	}
+	u.detail, u.page, u.menu, u.todo = nil, nil, nil, nil
+	u.logOpen, u.log = false, nil
+	u.openOpener()
+}
+
+// OpenCmd is `o` from anywhere: the -g tui's pane, with the picker up in it, so
+// a herdr key can bring the projects up without the list being on screen. The
+// tui says which process it is in globalPath, and watchSummon is how it hears.
+type OpenCmd struct{}
+
+func (c *OpenCmd) Run() error {
+	b, _ := os.ReadFile(globalPath())
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	// The file outlives a tui killed outright, and its pid can be anyone's by
+	// then: only a ccwt is sent the signal, and every tui shrugs it off.
+	if err != nil || !isCcwt(pid) {
+		return errors.New("no ccwt -g running")
+	}
+	if err := summon(pid); err != nil {
+		return err
+	}
+	if msg := focusPid(pid); !strings.HasPrefix(msg, "went to ") {
+		return errors.New(msg)
+	}
+	return nil
+}
+
+// isCcwt reports whether pid is a ccwt other than this one.
+func isCcwt(pid int) bool {
+	procs, err := listProcesses()
+	if err != nil || pid == os.Getpid() {
+		return false
+	}
+	for _, p := range procs {
+		if p.pid == pid {
+			exe, _, _ := strings.Cut(p.cmdline, " ")
+			return filepath.Base(exe) == "ccwt"
+		}
+	}
+	return false
+}
+
+// globalPath is the file the -g tui writes its pid in, for `ccwt open`.
+//
+// ponytail: one file, so the last -g started is the one `ccwt open` reaches —
+// a second herdr session's -g included. Key it by HERDR_SOCKET_PATH if two at
+// once ever matters.
+func globalPath() string {
+	if dir := stateDir(); dir != "" {
+		return filepath.Join(dir, "global.pid")
+	}
+	return ""
+}
+
+// registerGlobal puts this tui in globalPath, and returns what takes it out
+// again: on the way out, unless a later -g has written its own since.
+func registerGlobal() func() {
+	path, pid := globalPath(), strconv.Itoa(os.Getpid())
+	if path == "" || os.MkdirAll(filepath.Dir(path), 0o755) != nil || os.WriteFile(path, []byte(pid), 0o644) != nil {
+		return func() {}
+	}
+	return func() {
+		if b, _ := os.ReadFile(path); string(b) == pid {
+			os.Remove(path)
+		}
+	}
 }
 
 // newOpener looks at what there is to offer: the seen projects, and which of
