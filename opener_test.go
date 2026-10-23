@@ -184,3 +184,39 @@ func TestHerdrPlaceLastInCategory(t *testing.T) {
 		}
 	}
 }
+
+// TestSummon: `ccwt open` arriving puts the picker up over a page that only
+// shows something, but not over a prompt being written; and the -g tui's pid
+// file is its own to take away, not a later -g's.
+func TestSummon(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("HERDR_ENV", "1")
+	orig := herdrRepoWS
+	herdrRepoWS = func() map[string]string { return nil }
+	t.Cleanup(func() { herdrRepoWS = orig })
+
+	u := ui{projects: []string{}, page: &page{}}
+	u.summon()
+	if u.opener == nil || u.page != nil {
+		t.Errorf("over a page: opener %v, page %v; want the picker in the page's place", u.opener, u.page)
+	}
+	u = ui{projects: []string{}, entry: entry{open: true}}
+	if u.summon(); u.opener != nil || !u.entry.open {
+		t.Errorf("over a prompt: opener %v, entry open %v; want the prompt left alone", u.opener, u.entry.open)
+	}
+
+	done := registerGlobal()
+	if b, _ := os.ReadFile(globalPath()); string(b) != fmt.Sprint(os.Getpid()) {
+		t.Fatalf("global.pid = %q, want this pid", b)
+	}
+	done()
+	if _, err := os.Stat(globalPath()); !os.IsNotExist(err) {
+		t.Errorf("global.pid still there after its tui left: %v", err)
+	}
+	done = registerGlobal()
+	os.WriteFile(globalPath(), []byte("1"), 0o644) // a later -g
+	done()
+	if b, _ := os.ReadFile(globalPath()); string(b) != "1" {
+		t.Errorf("global.pid = %q after the earlier tui left, want the later one's kept", b)
+	}
+}
