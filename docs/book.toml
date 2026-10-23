@@ -1,0 +1,25 @@
+[book]
+title = "ccwt"
+description = "Manage coding-agent git worktrees from your own shell"
+authors = ["Marko Mikulicic"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+create-missing = false
+
+[output.html]
+site-url = "/ccwt/"
+git-repository-url = "https://github.com/mkmik/ccwt"
+edit-url-template = "https://github.com/mkmik/ccwt/edit/main/docs/{path}"
+default-theme = "light"
+preferred-dark-theme = "navy"
+no-section-label = true
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.search]
+limit-results = 20
