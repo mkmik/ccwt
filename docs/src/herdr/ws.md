@@ -13,7 +13,7 @@ under it the tabs working towards it.
   2    ●      dreamy-foraging-hickey  Wiring the widget to real numbers
   3    ○      dreamy-foraging-hickey  Waiting on your review
 
- ☰  q:quit  /:search  n:agent  space:go  g:git │ started
+ ☰  q:quit  /:search  c:agent  space:go  g:git │ started
 ```
 
 It refuses to run outside Herdr. `--interval` (default `2s`) sets the refresh rate.
@@ -71,7 +71,7 @@ round, next to the tab and pane lists the table is built from.
 
 ## Seeding agents
 
-`n` opens the same box the [queue](../tui/queue.md) types into, and what goes in it is a seed
+`c` opens the same box the [queue](../tui/queue.md) types into, and what goes in it is a seed
 prompt: `↵` opens a tab of the workspace in the workspace's own worktree — the one the tui is
 standing in — and runs [`task_command`](../configuration.md#task_command) there with the
 prompt. No worktree and no tab name of its own: the agents of one workspace are working on
