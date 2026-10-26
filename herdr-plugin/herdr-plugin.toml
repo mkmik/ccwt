@@ -17,6 +17,17 @@ command = ["bash", "new-worktree.sh"]
 [[actions]]
 id = "open-project"
 title = "Open a ccwt project"
-description = "Go to the `ccwt -g` tui and open its project picker (`ccwt open`)."
+description = "Pick a project ccwt has seen in a popup (`ccwt open`) and go to its workspace."
 contexts = ["workspace"]
 command = ["bash", "open-project.sh"]
+
+# The popup `ccwt open` opens. Through bash so CCWT_BIN still works, and
+# from $HOME: ccwt marks the repo it runs in as used, and a plugin linked from a
+# checkout of ccwt would otherwise put ccwt on top of the picker every time.
+[[panes]]
+id = "picker"
+title = "Open a ccwt project"
+placement = "popup"
+width = "80%"
+height = "60%"
+command = ["bash", "-c", "cd && exec \"${CCWT_BIN:-ccwt}\" open --here"]

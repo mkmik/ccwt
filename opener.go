@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/term"
 )
 
 // opener is `o` under -g: a pane over the list offering the repos ccwt has
@@ -25,6 +28,7 @@ type opener struct {
 	picked   bool              // sel was moved to by hand, so p and P are about it, not the filter
 	first, n int               // the screen line the first row came out on, and how many were drawn
 	clicked  time.Time
+	bare     bool // `ccwt open --here`'s: see pane
 }
 
 // openOpener is `o`: the picker, over the list.
@@ -56,12 +60,22 @@ func (u *ui) summon() {
 	u.openOpener()
 }
 
-// OpenCmd is `o` from anywhere: the -g tui's pane, with the picker up in it, so
-// a herdr key can bring the projects up without the list being on screen. The
-// tui says which process it is in globalPath, and watchSummon is how it hears.
-type OpenCmd struct{}
+// OpenCmd is `o` from anywhere: under herdr, a popup over the focused pane with
+// the picker in it (the plugin's `picker` pane, which is `open --here`), so the
+// focus comes back to that pane when it closes. Without the plugin's popup it
+// is the -g tui's pane, with the picker up in it. The tui says which process it
+// is in globalPath, and watchSummon is how it hears.
+type OpenCmd struct {
+	Here bool `help:"Run the picker in this terminal, which is what the herdr plugin's popup runs: esc closes it, a pick goes to the project's workspace."`
+}
 
 func (c *OpenCmd) Run() error {
+	if c.Here {
+		return pickHere()
+	}
+	if underHerdr() && openPopup() == nil {
+		return nil
+	}
 	b, _ := os.ReadFile(globalPath())
 	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
 	// The file outlives a tui killed outright, and its pid can be anyone's by
@@ -76,6 +90,100 @@ func (c *OpenCmd) Run() error {
 		return errors.New(msg)
 	}
 	return nil
+}
+
+// openPopup has herdr open the ccwt plugin's `picker` pane as a popup, running
+// this same binary — a build of a branch, not just the one on PATH. It fails
+// where the plugin isn't linked, or is a version without the pane.
+func openPopup() error {
+	env := map[string]string{}
+	if exe, err := os.Executable(); err == nil {
+		env["CCWT_BIN"] = exe
+	}
+	_, err := herdrAsk("plugin.pane.open",
+		map[string]any{"plugin_id": "ccwt", "entrypoint": "picker", "placement": "popup", "focus": true, "env": env},
+		"plugin", "pane", "open", "--plugin", "ccwt", "--entrypoint", "picker", "--placement", "popup", "--focus", "--env", "CCWT_BIN="+env["CCWT_BIN"])
+	// ponytail: `go run` deletes this binary as soon as it exits, which can be
+	// before the popup has started it; a moment's wait covers that. Have the
+	// popup say when it's up if the guess is ever short.
+	if err == nil && strings.Contains(env["CCWT_BIN"], "go-build") {
+		time.Sleep(time.Second)
+	}
+	return err
+}
+
+// pickHere is `ccwt open --here`: the picker, the whole of this terminal, until
+// esc or a project picked. A pick that fails says why on the bar and stays up.
+func pickHere() error {
+	if !stdoutIsTTY() {
+		return errors.New("open --here needs a terminal")
+	}
+	o, err := newOpener()
+	if err != nil {
+		return err
+	}
+	o.bare = true
+	state, err := term.MakeRaw(int(os.Stdin.Fd()))
+	if err != nil {
+		return err
+	}
+	defer term.Restore(int(os.Stdin.Fd()), state)
+	// As in the tui: git's complaints would land in the middle of the frame.
+	if devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0); err == nil {
+		saved := os.Stderr
+		os.Stderr = devnull
+		defer func() { os.Stderr = saved; devnull.Close() }()
+	}
+	fmt.Print("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1002h\x1b[?1006h")
+	defer fmt.Print("\x1b[?1006l\x1b[?1002l\x1b[?7h\x1b[?25h\x1b[?1049l")
+
+	keys, next := readKeys()
+	resized, stopResize := watchResize()
+	defer stopResize()
+	out := bufio.NewWriter(os.Stdout)
+	msg := ""
+	draw := func() error {
+		cols, rows := termSize()
+		body := max(rows-1, 1)
+		lines, bar := o.pane(cols, body)
+		lines = append(lines, make([]string, max(body-len(lines), 0))...)
+		paint(out, append(lines[:body], highlight(bar+msg, cols)))
+		return out.Flush()
+	}
+	for {
+		if err := draw(); err != nil {
+			return err
+		}
+		var k string
+		select {
+		case <-resized:
+			continue
+		case k = <-keys:
+		}
+		do, p := o.key(k)
+		if k == "\x03" {
+			do = "close"
+		}
+		msg = ""
+		switch do {
+		case "close":
+			return nil
+		case "open":
+			msg = "opening " + filepath.Base(p) + "…"
+			if err := draw(); err != nil {
+				return err
+			}
+			if msg = o.open(p); strings.HasPrefix(msg, "opened") || strings.HasPrefix(msg, "switched to ") {
+				return nil
+			}
+		case "pull":
+			msg = gitPull(p)
+		case "copy":
+			copyClip(p)
+			msg = "copied to clipboard: " + p
+		}
+		next <- struct{}{}
+	}
 }
 
 // isCcwt reports whether pid is a ccwt other than this one.
@@ -229,11 +337,19 @@ func (o *opener) key(k string) (string, string) {
 // pane draws the picker as the worklog is drawn — a box over the list, rows
 // under a line of their own, which here is the filter — and says what the bar
 // under it is to read.
+//
+// bare is the picker with the whole terminal to itself, a popup herdr has
+// already put a border round: no box of its own, rows from the second line.
 func (o *opener) pane(cols, rows int) ([]string, string) {
 	pad, inner := paneWidth(cols)
-	row := paneRow(pad, inner)
-	shown := o.shown()
+	row, sel := paneRow(pad, inner), band
 	fits := logFits(rows)
+	if o.bare {
+		row = func(s string) string { return s }
+		sel = func(s string) string { return draw(s, cols, nil, rowBar) }
+		fits = max(rows-1, 1)
+	}
+	shown := o.shown()
 	o.sel = min(max(o.sel, 0), max(len(shown)-1, 0))
 	o.top = max(min(max(o.top, o.sel-fits+1), o.sel), 0)
 
@@ -246,16 +362,13 @@ func (o *opener) pane(cols, rows int) ([]string, string) {
 		}
 		l := row(" " + mark + " " + shortenHome(p))
 		if o.top+i == o.sel {
-			l = band(l)
+			l = sel(l)
 		}
 		body = append(body, l)
 	}
 	if len(shown) == 0 {
 		body = append(body, row(" nothing to open"))
 	}
-	lines := paneBox(pad, inner, "open", body)
-	margin := min(2, max(rows-len(lines), 0)/2)
-	o.first = margin + 3 // the margin, the top rule and the filter, and a mouse counts from 1
 	keys := " type:filter  ↑↓:select  ↵:open  esc:close "
 	if o.filter != "" {
 		keys = " type:filter  ↑↓:select  ↵:open  esc:clear "
@@ -263,6 +376,13 @@ func (o *opener) pane(cols, rows int) ([]string, string) {
 	if o.picked && len(shown) > 0 {
 		keys = " ↑↓:select  ↵:open  p:pull  P:copy path  type:filter "
 	}
+	if o.bare {
+		o.first = 2 // past the filter, and a mouse counts from 1
+		return body, keys
+	}
+	lines := paneBox(pad, inner, "open", body)
+	margin := min(2, max(rows-len(lines), 0)/2)
+	o.first = margin + 3 // the margin, the top rule and the filter, and a mouse counts from 1
 	return append(make([]string, margin), lines...), keys
 }
 

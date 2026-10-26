@@ -162,12 +162,18 @@ standing on; `-` reads a list of those off stdin. Piped, the table comes out as 
 
 ## `ccwt open`
 
-Go to the pane `ccwt -g` is running in and open its project picker there, as `o` does — for a
-[Herdr](../herdr/index.md) key that brings the projects up from anywhere. Whatever the tui had
+Bring up the project picker `o` opens in `ccwt -g`, from anywhere. Under
+[Herdr](../herdr/index.md), with the [plugin](../herdr/index.md#the-plugin) linked, it is a
+popup over the pane you're in: `esc` closes it and leaves you there, a pick goes to the
+project's workspace. Otherwise it goes to the pane `ccwt -g` is running in and opens the picker
+there. Whatever the tui had
 up is closed first (a search is given up as `esc` would), unless it's a prompt being typed,
 which is left alone. The `-g` tui writes its pid to `$XDG_STATE_HOME/ccwt/global.pid` and
 `ccwt open` sends it `SIGUSR1`; with more than one running, the last one started is the one
 reached. Not on Windows. See [Opening a project](../projects.md#opening-a-project).
+
+`ccwt open --here` is the picker on its own, in the terminal it is run in: it is what runs in
+the popup.
 
 ## `ccwt new-worktree-name`
 

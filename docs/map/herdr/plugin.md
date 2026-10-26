@@ -1,6 +1,6 @@
 +++
 title = "Herdr plugin"
-summary = "herdr actions: New ccwt worktree (ccwt new, then worktree open) and Open a ccwt project (ccwt open)"
+summary = "herdr actions: New ccwt worktree (ccwt new, then worktree open) and Open a ccwt project (ccwt open, in a herdr popup)"
 kind = "bridge"
 intent = "goal"
 research = "done"
