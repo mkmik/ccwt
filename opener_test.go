@@ -220,3 +220,31 @@ func TestSummon(t *testing.T) {
 		t.Errorf("global.pid = %q after the earlier tui left, want the later one's kept", b)
 	}
 }
+
+// TestOpenAsksForThePopup: `ccwt open` under herdr has herdr open the plugin's
+// picker as a popup, on this binary, and goes nowhere else; a herdr that won't
+// (no plugin, or one without the pane) leaves it to the -g tui, as before.
+func TestOpenAsksForThePopup(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("HERDR_ENV", "1")
+	dir := t.TempDir()
+	log, bin := filepath.Join(dir, "calls"), filepath.Join(dir, "herdr")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho \"$@\" >> "+log+"\n[ \"$2\" = pane ] && exit \"${FAIL:-0}\"\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_BIN_PATH", bin)
+	exe, _ := os.Executable()
+
+	if err := (&OpenCmd{}).Run(); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(log)
+	if want := "plugin pane open --plugin ccwt --entrypoint picker --placement popup --focus --env CCWT_BIN=" + exe + "\n"; string(b) != want {
+		t.Errorf("herdr calls = %q, want only %q", b, want)
+	}
+
+	t.Setenv("FAIL", "1")
+	if err := (&OpenCmd{}).Run(); err == nil || err.Error() != "no ccwt -g running" {
+		t.Errorf("with no popup to be had: %v, want the -g tui looked for", err)
+	}
+}

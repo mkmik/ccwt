@@ -150,6 +150,73 @@ esac
 	}
 }
 
+// `ccwt open --here`, as herdr's popup runs it: esc closes it having asked
+// herdr nothing but what's open, and a pick goes to that project's workspace
+// and closes it too — closing is what gives the focus back to the pane the
+// popup was opened over.
+func TestOpenHereIsAPickerThatCloses(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds ccwt")
+	}
+	src, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "ccwt")
+	build := exec.Command("go", "build", "-o", bin, ".")
+	build.Dir = src
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	alpha, beta := filepath.Join(dir, "alpha"), filepath.Join(dir, "beta")
+	for i, p := range []string{alpha, beta} {
+		gitInit(t, p)
+		if err := markSeen(p, "", time.Unix(int64(1000+i), 0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	log, herdr := filepath.Join(dir, "calls"), filepath.Join(dir, "herdr")
+	script := fmt.Sprintf(`#!/bin/sh
+echo "$@" >> %q
+[ "$1 $2" = "workspace list" ] && printf '%%s' '{"result":{"workspaces":[{"workspace_id":"w7","worktree":{"repo_root":"%s"}}]}}'
+exit 0
+`, log, beta)
+	if err := os.WriteFile(herdr, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_BIN_PATH", herdr)
+	calls := func() string {
+		b, _ := os.ReadFile(log)
+		return string(b)
+	}
+	closed := func(tt *tty) func() bool {
+		return func() bool { return strings.Contains(tt.raw(), "\x1b[?1049l") }
+	}
+	open := func() *tty {
+		cmd := exec.Command(bin, "open", "--here")
+		cmd.Dir = dir
+		tt := runTty(t, cmd)
+		tt.waitFor(t, "the picker", func() bool { return strings.Contains(plain(tt.raw()), "alpha") })
+		return tt
+	}
+
+	tt := open()
+	tt.write(t, "\x1b")
+	tt.waitFor(t, "esc to close it", closed(tt))
+	if strings.Contains(calls(), "focus") {
+		t.Errorf("esc went somewhere: %q", calls())
+	}
+
+	tt = open()
+	tt.write(t, "bet\r")
+	tt.waitFor(t, "a pick to close it", closed(tt))
+	if !strings.Contains(calls(), "workspace focus w7") {
+		t.Errorf("herdr calls = %q, want beta's workspace focused", calls())
+	}
+}
+
 // tty is a program running in a terminal of its own, and everything it has
 // written there.
 type tty struct {

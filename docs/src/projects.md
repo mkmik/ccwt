@@ -50,7 +50,7 @@ those Herdr has a workspace on and `○` the rest — typing filters them, `↑�
 selects — after which `p` runs `git pull` in it and `P` copies its path — `↵` or a second
 click switches to an open one's workspace, or opens a closed one: a new workspace in the repo,
 with `ccwt` running in its first tab, named `prj`. [`ccwt open`](reference/commands.md#ccwt-open)
-brings the same list up from anywhere.
+brings the same list up from anywhere, in a popup when the Herdr plugin is linked.
 
 Categories name the projects checked out under a directory (the longest match wins). Under
 Herdr, a workspace named `------ <name>` heads a category's section of the sidebar, and a

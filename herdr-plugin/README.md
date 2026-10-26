@@ -6,9 +6,10 @@ Two actions:
   focused pane is in, then opens the resulting worktree as its own Herdr
   workspace (`herdr worktree open`), so the worktree layout, branch naming and
   locking stay ccwt's job.
-- **Open a ccwt project** (`ccwt.open-project`) runs `ccwt open`: it goes to the
-  pane `ccwt -g` is running in and opens its project picker there, the one `o`
-  opens.
+- **Open a ccwt project** (`ccwt.open-project`) opens a Herdr popup over the
+  focused pane with ccwt's project picker in it (`ccwt open`), the one
+  `o` opens in `ccwt -g`. `esc` closes it and leaves you where you were; a pick
+  goes to the project's workspace.
 
 Requires [`ccwt`](https://github.com/mkmik/ccwt) on `PATH` (or set `CCWT_BIN`)
 and Herdr 0.8.0+.

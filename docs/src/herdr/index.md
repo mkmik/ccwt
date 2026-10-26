@@ -70,5 +70,6 @@ focus with it, and where you switched to is where you meant to be.
 
 The plugin in [`herdr-plugin/`](https://github.com/mkmik/ccwt/tree/main/herdr-plugin) adds a
 **New ccwt worktree** action to Herdr — the same thing the tui's `x` does — and **Open a ccwt
-project**, which is [`ccwt open`](../reference/commands.md#ccwt-open): `o` in `ccwt -g`, from
-wherever you are.
+project**: the picker `o` opens in `ccwt -g`, in a Herdr popup over whatever pane you are in
+([`ccwt open`](../reference/commands.md#ccwt-open), which does the same from a shell). `esc` closes the popup and leaves
+you in that pane; a pick goes to the project's workspace.

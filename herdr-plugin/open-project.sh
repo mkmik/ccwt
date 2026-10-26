@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# `ccwt.open-project` action: `ccwt open`, which goes to the pane `ccwt -g` is
-# running in and puts its project picker up there. Like new-worktree.sh, a
+# `ccwt.open-project` action: `ccwt open`, which puts its project picker up in
+# a popup over the focused pane (the `picker` pane below it in the manifest),
+# or failing that in the pane `ccwt -g` is running in. Like new-worktree.sh, a
 # failure is only visible as a toast.
 set -uo pipefail
 
