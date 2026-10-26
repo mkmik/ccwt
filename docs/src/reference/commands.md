@@ -96,7 +96,7 @@ on — one line saying there isn't one while the branch has none, and looked up 
 background (at most once a minute) so the table never waits on GitLab or GitHub.
 
 Then that workspace's tabs as a table — label, agent status, directory, terminal title — with
-`space`/`↵` (or a double-click) going to the selected tab, `n` asking for a seed prompt that
+`space`/`↵` (or a double-click) going to the selected tab, `c` asking for a seed prompt that
 starts an agent in a tab of its own (`task_command` run with the prompt in the workspace's own
 worktree, the tab unnamed and opened behind the current one), `g` the history of the worktree
 under the tab, `r` being `ccwt done` for the workspace itself — the worktree the tui is

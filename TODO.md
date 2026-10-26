@@ -13,7 +13,7 @@ stages; tick things off as they land.
   - [x] seed prompt: `herdr tab create --cwd <the workspace's worktree> --no-focus`, `task_command '<prompt>'` in the pane the create names — no worktree and no label of its own
   - [x] opens on the seed prompt when the workspace has no other tab yet
   - [x] tab table: TAB, AGENT (Herdr's `agent_status`, blank for `unknown`), DIR (the first pane's cwd), TITLE (its terminal title); `*` on the tui's own tab
-  - [x] `space`/`↵`/double-click go to the tab; `n` opens the prompt; `g` is the history of the worktree under the tab
+  - [x] `space`/`↵`/double-click go to the tab; `c` opens the prompt; `g` is the history of the worktree under the tab
   - [x] tests: the table (`TestWsTableListsTheWorkspaceTabs`), the seed (`TestWsSeedStartsAnAgentInANewTab`)
 - [ ] 2. What each tab is about
   - [ ] a TOPIC column: an agent's one-line summary of the tab, from its transcript or `herdr pane read`, with a glyph saying where it came from (as the list's TOPIC has `✳`/`⎇`); TITLE stays the fallback
