@@ -18,6 +18,11 @@ title = "e in the details pane rewrites it; r drops it and what waits on it"
 status = "done"
 
 [[feature]]
+id = "reorder"
+title = "☰ reorder: hjkl move a queued prompt among its siblings, out and in"
+status = "done"
+
+[[feature]]
 id = "promote"
 title = "Removing the worktree promotes what waited on it to <new> rows"
 status = "done"
