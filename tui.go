@@ -448,6 +448,14 @@ func (c *TuiCmd) Run() error {
 					u.title.open = false
 					u.detail = nil
 				}
+			// Reordering takes the vim keys for the prompt itself, so it comes
+			// before them; Ctrl-C still quits.
+			case u.reorder && k == "\x03":
+				return nil
+			case u.reorder:
+				u.rearrange(k)
+			case k == reorderKey && u.sel.task != 0:
+				u.reorder = true
 			case k == "q", k == "\x03": // \x03 = Ctrl-C, which raw mode delivers as a keystroke
 				return nil
 			case k == "p":
@@ -829,6 +837,10 @@ type ui struct {
 	menuSel   int
 	menuFirst int
 
+	// The menu's "reorder": the list as ever, but h, j, k and l move the
+	// selected queued prompt about it — see rearrange — until esc.
+	reorder bool
+
 	// Where the corner's first workspace came out — its box's left edge and
 	// the name's line — so a click on one goes to it. The zero point while
 	// the corner is empty. And the workspace last clicked there, and when,
@@ -950,6 +962,30 @@ func (u *ui) move(d int) {
 		i += s
 	}
 	u.sel = u.rows[i]
+}
+
+// rearrange is a keystroke in the reorder mode. The arrows walk the selection,
+// as they do anywhere, and the vim keys move the queued prompt it is on — up and
+// down among its siblings, out from under its parent and in under the sibling
+// above (moveTask) — so a prompt queued behind the wrong row is put right a key
+// at a time, the list showing where it went after each. esc or ↵ is done.
+func (u *ui) rearrange(k string) {
+	switch k {
+	case "\x1b", "\r", "\n":
+		u.reorder = false
+	case "\x1b[A":
+		u.move(-1)
+	case "\x1b[B":
+		u.move(1)
+	case "h", "j", "k", "l":
+		if u.sel.task == 0 {
+			break
+		}
+		if err := moveTask(u.sel.task, k); err != nil {
+			u.msg = "reorder: " + err.Error()
+		}
+		u.stale()
+	}
 }
 
 // search is one / (or ?) pattern: the text of it and the direction n repeats
@@ -1625,9 +1661,13 @@ func (u *ui) frame() ([]string, error) {
 	// themselves below it.
 	u.rows = u.all
 	u.height = max(body-u.head, 0) // what's left once the pinned lines have theirs
-	sel := slices.Index(u.rows, u.sel)
+	// A queued prompt is the same row by its id alone: moved in or out of a
+	// "<new>", it changes what else the row carries, and the selection follows.
+	sel := slices.IndexFunc(u.rows, func(r listRow) bool { return r == u.sel || u.sel.task != 0 && r.task == u.sel.task })
 	if sel < 0 {
 		u.sel = listRow{} // the selected row is gone (removed, or folded away)
+	} else {
+		u.sel = u.rows[sel]
 	}
 	u.top = min(max(u.top, 0), max(len(u.rows)-u.height, 0))
 	if sel >= 0 {
@@ -1809,6 +1849,11 @@ func (u *ui) frame() ([]string, error) {
 		}
 		u.menuFirst = first + 1 // +1: a mouse counts from 1
 		return append(lines[:body], highlight(hamburger+"  ↑↓:select  ↵:do  esc:close ", cols)), nil
+	}
+
+	// Reordering is the list itself, so only the bar says it's on.
+	if u.reorder {
+		return append(lines[:body], highlight(" ↑↓:select  k/j:up/down  h:out  l:in  esc:done "+u.msg, cols)), nil
 	}
 
 	// While the search prompt is up it takes the whole bar, as it does in vim:
@@ -2330,7 +2375,7 @@ const restartIdle = 4 * time.Second
 // no box with half a prompt typed into it. The selection and the pattern in
 // force do go with it; those are a keystroke to get back.
 func (u *ui) idle() bool {
-	return time.Since(u.nav) >= restartIdle && u.quiet() && !u.typing
+	return time.Since(u.nav) >= restartIdle && u.quiet() && !u.typing && !u.reorder
 }
 
 // selfStamp identifies the file behind os.Executable() by a hash of its
@@ -2870,7 +2915,7 @@ func (a action) name() string {
 		return "↵"
 	case "\x1b":
 		return "esc"
-	case copyDirKey, hideKey:
+	case copyDirKey, hideKey, reorderKey:
 		return "" // nothing to press: the menu is the only way to it
 	}
 	return a.key
@@ -2895,6 +2940,10 @@ const copyDirKey = "\x00copy-dir"
 // project, if ever, which a key of its own would only make easy to misfire.
 const hideKey = "\x00hide"
 
+// reorderKey is the same for the reorder mode: moving a queued prompt is rare,
+// and the mode it opens has keys of its own.
+const reorderKey = "\x00reorder"
+
 // menuActions is what the hamburger lists: the bar's keys, plus the three that
 // belong in a menu and nowhere else. `G` collects every worktree that's done
 // with at once — rare, and too much of a mouthful for a bar that has to say
@@ -2903,12 +2952,16 @@ const hideKey = "\x00hide"
 // being the way back out. "copy dir" puts the project's path on the clipboard
 // and has no key at all — a path is fetched to paste somewhere else, which is
 // already a hand off the keyboard. "hide" is keyless too, and only there on a
-// section header under -g: the one place a project is what's selected.
+// section header under -g: the one place a project is what's selected. So is
+// "reorder", only there on a queued prompt.
 func menuActions(sel listRow, searching, global, agents bool) []action {
 	as := append(actions(sel, searching, global, agents), action{"G", "gc"}, action{"P", "ps"},
 		action{copyDirKey, "copy dir"})
 	if global && sel.section() {
 		as = append(as, action{hideKey, "hide"})
+	}
+	if sel.task != 0 {
+		as = append(as, action{reorderKey, "reorder"})
 	}
 	return as
 }

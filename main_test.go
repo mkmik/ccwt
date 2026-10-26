@@ -2977,6 +2977,122 @@ func TestEditingAQueuedPromptLeavesItWhereItIs(t *testing.T) {
 	}
 }
 
+// A prompt queued behind the wrong row is put right in the menu's reorder
+// mode: h takes it out from under the prompt it waits on, k and j move it among
+// its siblings, l puts it under the one above — with the arrows still walking
+// the selection, and the selection following the prompt even when the move
+// makes a "<new>" row of it.
+func TestReorderMovesAQueuedPrompt(t *testing.T) {
+	initRepo(t)
+	capture(t, &NewWorktreeBranchCmd{Name: "alpha", Path: true})
+
+	var u ui
+	queue := func(parent listRow, prompt string) {
+		t.Helper()
+		u.entry = newEntry(parent, "", 0)
+		typeInto(&u, prompt)
+	}
+	rows, _ := renderRows(t)
+	alpha := rows[0]
+	queue(alpha, "port the widget")
+	queue(alpha, "write the docs")
+	rows, _ = renderRows(t)
+	queue(rows[2], "cut a release") // behind the docs, by mistake
+
+	// shape is the list as the prompts' last words, each with a > per level
+	// it is drawn in, or "new:" on a "<new>" row.
+	shape := func() string {
+		t.Helper()
+		_, body := renderRows(t)
+		var s []string
+		for _, l := range strings.Split(strings.TrimRight(body, "\n"), "\n") {
+			name := "wt"
+			for _, p := range []string{"widget", "docs", "release", "notes"} {
+				if strings.Contains(l, p) {
+					name = p
+				}
+			}
+			switch {
+			case strings.Contains(l, newName):
+				name = "new:" + name
+			case strings.Contains(l, taskGlyph):
+				name = strings.Repeat(">", strings.Index(l, taskGlyph)/2+1) + name
+			}
+			s = append(s, name)
+		}
+		return strings.Join(s, " ")
+	}
+	if got, want := shape(), "wt >widget >docs >>release"; got != want {
+		t.Fatalf("queued = %q, want %q", got, want)
+	}
+
+	if _, err := u.frame(); err != nil {
+		t.Fatal(err)
+	}
+	release := u.rows[3]
+	u.sel = release
+	if !slices.Contains(menuActions(u.sel, false, false, false), action{reorderKey, "reorder"}) {
+		t.Fatalf("the menu on a queued prompt has no reorder: %v", menuActions(u.sel, false, false, false))
+	}
+	u.reorder = true
+	step := func(k, want string) {
+		t.Helper()
+		u.rearrange(k)
+		if _, err := u.frame(); err != nil {
+			t.Fatal(err)
+		}
+		if got := shape(); got != want {
+			t.Errorf("after %q: %q, want %q", k, got, want)
+		}
+		if u.sel.task != release.task {
+			t.Errorf("after %q the selection is %v, want the release still", k, u.sel)
+		}
+	}
+	step("h", "wt >widget >docs >release")  // out from under the docs, right after them
+	step("k", "wt >widget >release >docs")  // up past them
+	step("l", "wt >widget >>release >docs") // under the widget, the sibling above
+	step("j", "wt >widget >>release >docs") // its only sibling now: nowhere to go
+	step("h", "wt >widget >release >docs")
+	step("h", "wt >widget >release >docs") // waiting on a worktree: no further out
+	step("l", "wt >widget >>release >docs")
+
+	// The arrows walk the selection rather than the prompt.
+	u.rearrange("\x1b[B")
+	if u.sel.task == release.task || u.sel.task == 0 {
+		t.Errorf("↓ left the selection on %v, want the docs", u.sel)
+	}
+	u.rearrange("\x1b[A")
+	if u.rearrange("\x1b"); u.reorder {
+		t.Error("esc left the reorder mode on")
+	}
+	u.reorder = true
+
+	// Queued after all that, a prompt still goes last.
+	queue(alpha, "and the release notes")
+	if got, want := shape(), "wt >widget >>release >docs >notes"; got != want {
+		t.Fatalf("queued after reordering = %q, want %q", got, want)
+	}
+
+	// With the worktree gone, out from under the widget is a "<new>" of its own,
+	// a row of a different kind that the selection still follows; and the
+	// project's "<new>" rows are one another's siblings.
+	if err := (&RemoveCmd{Name: "alpha", Force: true}).remove(alpha.project); err != nil {
+		t.Fatal(err)
+	}
+	u.stale()
+	if _, err := u.frame(); err != nil {
+		t.Fatal(err)
+	}
+	step("h", "new:widget new:release new:docs new:notes")
+	if !u.sel.pending() {
+		t.Errorf("selection = %v, want the <new> row the release now is", u.sel)
+	}
+	step("k", "new:release new:widget new:docs new:notes")
+	step("l", "new:release new:widget new:docs new:notes") // the first: nothing above to go under
+	step("j", "new:widget new:release new:docs new:notes")
+	step("l", "new:widget >release new:docs new:notes")
+}
+
 // The box a prompt is typed into is a line editor: the caret moves, text goes
 // in where it is, and each delete takes the rune on its own side of it. The
 // keys arrive the way the tty delivers them — an escape sequence for the

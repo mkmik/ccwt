@@ -51,6 +51,22 @@ then" is a tree hanging off the worktree it starts from. `d` shows a long prompt
 the details pane, and `r` deletes one — along with everything queued behind it, since
 nothing waiting on a prompt that isn't going to happen can happen either.
 
+## Moving a prompt
+
+A prompt queued behind the wrong row — `n` pressed with the last prompt still selected, when
+the new one didn't need to wait for it — is moved rather than typed again. "reorder" in the
+[`☰` menu](index.md#the--menu), on a queued prompt, keeps the list up and gives the vim keys
+to the prompt:
+
+- `k` and `j` move it up and down among the prompts waiting on the same thing as it
+- `h` takes it out from under the prompt it waits on: it waits on what that one waits on
+  instead, and goes right after it
+- `l` puts it under the prompt just above it, after whatever already waits there
+
+What is queued behind it moves with it. The arrows still move the selection, so one visit to
+the menu can move several prompts, and `esc` (or `↵`) is done. The menu is the only way in:
+it's rare, and a key of its own would be one more to hit by accident.
+
 ## Editing a prompt
 
 `e` in that details pane — where the prompt is legible in full, which is where you notice it

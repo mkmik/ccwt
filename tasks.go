@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mkmik/ccwt/internal/gitutil"
 	_ "modernc.org/sqlite"
 )
 
@@ -31,6 +32,7 @@ type Task struct {
 	Prompt   string
 	Title    string // what the session and its workspace are to be called, "" for the cli's own
 	Created  time.Time
+	Ord      int64 // its place among the prompts waiting on the same thing; ties go to the older
 }
 
 // The task database is shared by every ccwt in the session — the tui of each
@@ -59,7 +61,8 @@ const taskSchema = `CREATE TABLE IF NOT EXISTS task (
 	prompt   TEXT    NOT NULL,
 	title    TEXT    NOT NULL DEFAULT '',
 	created  INTEGER NOT NULL,
-	deleted  INTEGER NOT NULL DEFAULT 0
+	deleted  INTEGER NOT NULL DEFAULT 0,
+	ord      INTEGER NOT NULL DEFAULT 0
 ) STRICT`
 
 // stateDir is $XDG_STATE_HOME/ccwt, falling back to the ~/.local/state default
@@ -118,6 +121,7 @@ func openTasks() (*sql.DB, error) {
 			// statement as a duplicate column, and either way we're done.
 			_, _ = db.Exec(`ALTER TABLE task ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0`)
 			_, _ = db.Exec(`ALTER TABLE task ADD COLUMN title TEXT NOT NULL DEFAULT ''`)
+			_, _ = db.Exec(`ALTER TABLE task ADD COLUMN ord INTEGER NOT NULL DEFAULT 0`)
 			// The worklog shares the file: one thing that outlives the process,
 			// one place to keep it, and the pragmas above cover both tables.
 			if _, err = db.Exec(worklogSchema + ";" + seenSchema); err != nil {
@@ -137,8 +141,8 @@ func openTasks() (*sql.DB, error) {
 	}
 }
 
-// loadTasks reads every queued prompt, oldest first, which is the order a
-// chain was typed in and so the order it's drawn in.
+// loadTasks reads every queued prompt in the order it's drawn in: the order a
+// chain was typed in, oldest first, as far as the reorder mode has left it.
 //
 // No database yet is no tasks: `list` and `tui` read this on every refresh, and
 // a state file materialising because someone looked at a table is rude.
@@ -153,7 +157,7 @@ func loadTasks() ([]Task, error) {
 		return nil, err
 	}
 	defer db.Close()
-	rows, err := db.Query(`SELECT id, project, worktree, COALESCE(parent, 0), prompt, title, created FROM task WHERE deleted = 0 ORDER BY id`)
+	rows, err := db.Query(`SELECT id, project, worktree, COALESCE(parent, 0), prompt, title, created, ord FROM task WHERE deleted = 0 ORDER BY ord, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +166,7 @@ func loadTasks() ([]Task, error) {
 	for rows.Next() {
 		var t Task
 		var created int64
-		if err := rows.Scan(&t.ID, &t.Project, &t.Worktree, &t.Parent, &t.Prompt, &t.Title, &created); err != nil {
+		if err := rows.Scan(&t.ID, &t.Project, &t.Worktree, &t.Parent, &t.Prompt, &t.Title, &created, &t.Ord); err != nil {
 			return nil, err
 		}
 		t.Created = time.Unix(created, 0)
@@ -203,9 +207,9 @@ func indexTasks(tasks []Task) taskTree {
 
 // pending is the prompts of project that were queued on a worktree that no
 // longer exists: what the removal of a worktree promotes, from work waiting
-// under it to work waiting for a worktree of its own. Oldest first, the order
-// they were queued in — a removal mustn't shuffle the rows around under the
-// cursor.
+// under it to work waiting for a worktree of its own. In the order they were
+// queued in, or reordered to — a removal mustn't shuffle the rows around under
+// the cursor.
 func (tt taskTree) pending(project string, live map[string]bool) []Task {
 	var ts []Task
 	for _, root := range tt.roots {
@@ -215,7 +219,7 @@ func (tt taskTree) pending(project string, live map[string]bool) []Task {
 			}
 		}
 	}
-	slices.SortFunc(ts, func(a, b Task) int { return cmp.Compare(a.ID, b.ID) })
+	slices.SortFunc(ts, func(a, b Task) int { return cmp.Or(cmp.Compare(a.Ord, b.Ord), cmp.Compare(a.ID, b.ID)) })
 	return ts
 }
 
@@ -258,9 +262,96 @@ func addTask(parent listRow, title, prompt string) error {
 	if t.Parent != 0 {
 		pid = t.Parent
 	}
-	_, err = db.Exec(`INSERT INTO task (project, worktree, parent, prompt, title, created) VALUES (?, ?, ?, ?, ?, ?)`,
+	// Last of what waits on the same thing, however moveTask has numbered the
+	// rest: past the highest place any prompt has.
+	_, err = db.Exec(`INSERT INTO task (project, worktree, parent, prompt, title, created, ord) VALUES (?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(ord), 0) + 1 FROM task))`,
 		t.Project, t.Worktree, pid, t.Prompt, t.Title, time.Now().Unix())
 	return err
+}
+
+// moveTask is the reorder mode's h, j, k and l on a queued prompt, each a move
+// among its siblings — the prompts waiting on the same thing, drawn together:
+//
+//   - k and j swap it with the sibling above or below it
+//   - h takes it out from under the prompt it waits on, to wait on what that
+//     one waits on, right after it: a "then" that should have been an "and"
+//   - l puts it under the sibling above it, after what waits there already: an
+//     "and" that should have been a "then"
+//
+// What is queued behind it comes along, and a move with nowhere to go — k on
+// the first, h on a prompt waiting on a worktree — leaves things as they are.
+// Neither h nor l can make a loop: what the prompt goes beside or under was
+// never under it.
+func moveTask(id int64, key string) error {
+	tasks, err := loadTasks()
+	if err != nil {
+		return err
+	}
+	byID := func(id int64) int { return slices.IndexFunc(tasks, func(t Task) bool { return t.ID == id }) }
+	i := byID(id)
+	if i < 0 {
+		return errors.New("no longer queued")
+	}
+	t := tasks[i]
+	// A project's "<new>" rows are drawn together, whichever removed worktree
+	// each of them outlived, so they are one another's siblings; what waits on a
+	// live worktree is that worktree's alone. ponytail: git is asked on every
+	// key, a few ms against the list's own redraw.
+	live := map[string]bool{}
+	wts, _ := gitutil.ListWorktrees(t.Project)
+	for _, wt := range wts {
+		live[wt.Path] = true
+	}
+	siblings := func(of Task) []Task {
+		return slices.DeleteFunc(slices.Clone(tasks), func(o Task) bool {
+			if o.Parent != 0 || of.Parent != 0 {
+				return o.Parent != of.Parent
+			}
+			return o.Project != of.Project || o.Worktree != of.Worktree && (live[o.Worktree] || live[of.Worktree])
+		})
+	}
+	sibs := siblings(t)
+	at := slices.IndexFunc(sibs, func(o Task) bool { return o.ID == id })
+	switch {
+	case key == "k" && at > 0:
+		sibs[at-1], sibs[at] = sibs[at], sibs[at-1]
+	case key == "j" && at < len(sibs)-1:
+		sibs[at], sibs[at+1] = sibs[at+1], sibs[at]
+	case key == "h" && t.Parent != 0:
+		p := tasks[byID(t.Parent)]
+		t.Parent, t.Worktree = p.Parent, p.Worktree
+		sibs = siblings(p)
+		sibs = slices.Insert(sibs, slices.IndexFunc(sibs, func(o Task) bool { return o.ID == p.ID })+1, t)
+	case key == "l" && at > 0:
+		t.Parent, t.Worktree = sibs[at-1].ID, ""
+		sibs = append(siblings(t), t)
+	default:
+		return nil
+	}
+
+	db, err := openTasks()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var pid any // NULL rather than 0, as addTask has it
+	if t.Parent != 0 {
+		pid = t.Parent
+	}
+	if _, err := tx.Exec(`UPDATE task SET parent = ?, worktree = ? WHERE id = ?`, pid, t.Worktree, t.ID); err != nil {
+		return err
+	}
+	for n, s := range sibs {
+		if _, err := tx.Exec(`UPDATE task SET ord = ? WHERE id = ?`, n, s.ID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // updateTask rewrites a queued prompt in place. Its place in the chain doesn't
@@ -280,8 +371,8 @@ func updateTask(id int64, title, prompt string) error {
 // happen.
 //
 // Walking the chain by hand is what ON DELETE CASCADE used to do for free — a
-// mark isn't a delete, so nothing follows it on its own. Parents are always
-// older than their children, so the walk can't loop.
+// mark isn't a delete, so nothing follows it on its own. The chains are trees
+// — moveTask never puts a prompt under one of its own — so the walk can't loop.
 func dropTask(id int64) (string, bool) {
 	db, err := openTasks()
 	if err != nil {

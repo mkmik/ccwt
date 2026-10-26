@@ -62,7 +62,9 @@ the list and drawn as a tree under the row it waits on, kept in
 `$XDG_STATE_HOME/ccwt/tasks.db` and so shared with every other `ccwt` running; `e` in a
 queued prompt's details pane rewrites it in place — the box is a line editor, with the
 arrows, `home`/`end` and Ctrl-W/U/K, shift-`↵` for a line break, and Ctrl-G to finish the
-prompt in `$EDITOR`, as in Claude Code — `r` deletes it and everything queued behind it, and
+prompt in `$EDITOR`, as in Claude Code — "reorder" in the `☰` menu moves it with `hjkl`
+(among its siblings, out from under its parent, under the one above), `r` deletes it and
+everything queued behind it, and
 removing the worktree promotes what was queued on it to `<new>` rows — worktrees waiting to
 be made, which `space` makes and starts the prompt in. `n` with nothing selected queues a
 prompt that waits on nothing, which is a `<new>` row from the start; under `-g` that takes a
