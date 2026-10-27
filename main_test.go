@@ -1715,12 +1715,21 @@ func TestSplitKeys(t *testing.T) {
 		// one that is really the head of a sequence has to not look like it.
 		"\x1bOD":     {"\x1bOD"},     // SS3, the arrows in application mode
 		"\x1b\x1b[D": {"\x1b\x1b[D"}, // alt-← on the terminals that send it so
-		"\x1b\r":     {"\x1b\r"},     // shift-↵, as Claude Code binds it
+		"\x1b\r":     {shiftEnter},   // shift-↵, as Claude Code binds it
 		"\x1bbj":     {"\x1bb", "j"}, // alt-B, and the key after it
 		"\x1b\x1b":   {"\x1b\x1b"},
 		// With modifyOtherKeys on, shift-↵ stays itself — a line break in a
 		// prompt — and ctrl-↵ is ↵, as it was before the terminal told them apart.
-		"a\x1b[27;2;13~b\x1b[27;5;13~": {"a", "\x1b[27;2;13~", "b", "\r"},
+		"a\x1b[27;2;13~b\x1b[27;5;13~": {"a", shiftEnter, "b", "\r"},
+		// Level 2 spells out every modified key, and herdr 0.9.5 does even
+		// shift-A: each comes back as the bytes the bindings know it by. As
+		// does CSI u, from a terminal reporting modifiers unasked.
+		"\x1b[27;3;13~\x1b[13;2u\x1b[13;3u":     {shiftEnter, shiftEnter, shiftEnter},
+		"\x1b[27;5;97~\x1b[27;5;103~\x1b[97;5u": {"\x01", "\x07", "\x01"}, // ctrl-A, ctrl-G
+		"\x1b[27;3;98~\x1b[98;3u":               {"\x1bb", "\x1bb"},       // alt-B
+		"\x1b[27;2;65~\x1b[97;2u":               {"A", "A"},
+		"\x1b[27;2;9~\x1b[9;2u\x1b[27u":         {"\x1b[Z", "\x1b[Z", "\x1b"},
+		"\x1b[27;3;127~\x1b[27;5;32~":           {"\x1b\x7f", "\x00"},
 		// A paste is one key, escapes and all: nothing in it is a key to act on.
 		"a\x1b[200~q\r\x1b[Bb\x1b[201~c": {"a", "\x1b[200~q\r\x1b[Bb\x1b[201~", "c"},
 	} {
