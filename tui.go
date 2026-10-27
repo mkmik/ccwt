@@ -135,14 +135,14 @@ func (c *TuiCmd) Run() error {
 		// held — the last of which is the drag a text selection is made with.
 		// 1006: report them in SGR form, which unlike the original encoding
 		// keeps working past column 223.
-		// >4;1: xterm's modifyOtherKeys, at the level that spells out a modifier
-		// only on the keys that have no spelling of their own with one. Without
-		// it shift-↵ is ↵ — herdr hears shift from the terminal and drops it on
-		// the way to any pane that didn't ask — and it started the agent the
-		// line break was meant for. Every other key we bind arrives as before;
-		// level 2 would re-spell alt-↵ and shift-tab too.
+		// >4;2: xterm's modifyOtherKeys, so a key pressed with a modifier says
+		// so. Without it shift-↵ is ↵ — herdr hears shift from the terminal and
+		// drops it on the way to any pane that didn't ask — and it started the
+		// agent the line break was meant for. Level 2 rather than 1 because
+		// herdr 0.9.5 stopped spelling shift-↵ out at level 1; level 2 re-spells
+		// ctrl-A, alt-B and even shift-A as well, which plainKey undoes.
 		// 2004: bracketed paste, so a paste comes as one — see pasteStart.
-		fmt.Print("\x1b[?1002h\x1b[?1006h\x1b[>4;1m\x1b[?2004h")
+		fmt.Print("\x1b[?1002h\x1b[?1006h\x1b[>4;2m\x1b[?2004h")
 		defer fmt.Print("\x1b[?2004l\x1b[>4m\x1b[?1006l\x1b[?1002l")
 	}
 
@@ -249,7 +249,7 @@ func (c *TuiCmd) Run() error {
 		term.Restore(int(os.Stdin.Fd()), raw)
 		text, err := externalEdit(u.entry.expanded())
 		term.MakeRaw(int(os.Stdin.Fd()))
-		fmt.Print("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1002h\x1b[?1006h\x1b[>4;1m\x1b[?2004h")
+		fmt.Print("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1002h\x1b[?1006h\x1b[>4;2m\x1b[?2004h")
 
 		last = "" // the editor drew over the frame, so redraw all of it
 		u.entry.edited(text)
@@ -1010,7 +1010,7 @@ func (u *ui) prompt(d int) {
 // text re-runs the search as it goes.
 func (u *ui) edit(k string) {
 	switch k {
-	case "\r", "\n", "\x1b[27;2;13~": // shift-↵ too: a search is one line
+	case "\r", "\n", shiftEnter: // shift-↵ too: a search is one line
 		u.typing = false
 		u.report(u.preview())
 	case "\x1b", "\x03":
@@ -1212,11 +1212,9 @@ func lineEdit(s string, cur int, k string) (string, int) {
 	case "\x1b[F", "\x1b[4~", "\x05": // end, Ctrl-E
 		return s, eol
 	// Shift-↵ — and Alt-↵, and Ctrl-J — is a line break rather than the end of
-	// the prompt, the way it is in Claude Code's own box. Terminals disagree on
-	// what to send for it: ESC CR is what Claude Code's terminal setup binds it
-	// to, CSI 27 is modifyOtherKeys' — which the tui asks for, and herdr sends —
-	// and CSI u is what a terminal reporting modifiers unasked sends.
-	case "\n", "\x1b\r", "\x1b\n", "\x1b[13;2u", "\x1b[27;2;13~":
+	// the prompt, the way it is in Claude Code's own box. However the terminal
+	// spelled it, plainKey has made it shiftEnter by now.
+	case "\n", shiftEnter:
 		return s[:cur] + "\n" + s[cur:], cur + 1
 	case "\x7f", "\b": // backspace: the rune before the caret
 		at := back()
@@ -1336,6 +1334,9 @@ func notSpace(r rune) bool { return !unicode.IsSpace(r) }
 // typeKey applies one keystroke to a line with no caret to move — the search
 // prompt, where the text only ever grows and shrinks at its end.
 func typeKey(s, k string) string {
+	if k == "\n" || k == shiftEnter { // one line: a break has nowhere to go
+		return s
+	}
 	s, _ = lineEdit(s, len(s), k)
 	return s
 }
@@ -2805,21 +2806,61 @@ func readKeys() (<-chan string, chan<- struct{}) {
 // it: four repos of worktrees take longer to re-read, so the window in which
 // keystrokes pile up is wider.
 //
-// Ctrl-↵ comes out as ↵. It arrives spelled apart once the terminal is asked
-// for modifyOtherKeys, and it was ↵ here before that — as it sends in Claude
-// Code's box, where shift-↵ is the line break.
+// Each one comes out as plainKey spells it, so that every box and binding
+// sees one spelling of a key whichever terminal it was pressed in.
 func splitKeys(s string) []string {
 	var keys []string
 	for len(s) > 0 {
 		n := keyLen(s)
-		k := s[:n]
-		if k == "\x1b[27;5;13~" {
-			k = "\r"
-		}
-		keys = append(keys, k)
+		keys = append(keys, plainKey(s[:n]))
 		s = s[n:]
 	}
 	return keys
+}
+
+// shiftEnter is the one spelling of a line break typed into a box: shift-↵ or
+// alt-↵, however the terminal sent it. A one-line box takes it as ↵.
+const shiftEnter = "\x1b[27;2;13~"
+
+// modified is a key with its modifiers spelled out: modifyOtherKeys' CSI 27,
+// which the tui asks for, and the CSI u of a terminal reporting them unasked.
+var modified = regexp.MustCompile(`^\x1b\[(?:27;(\d+);(\d+)~|(\d+)(?:;(\d+))?u)$`)
+
+// plainKey turns a key spelled with its modifiers back into the bytes a
+// terminal sends for it when nobody asked — ctrl-A is ^A, alt-B is ESC b,
+// shift-tab is CSI Z — which is what every binding here is written against.
+// The exception is the line break: shift-↵, alt-↵ and Claude Code's ESC CR
+// all become shiftEnter, and ctrl-↵ is ↵, as in Claude Code's box.
+func plainKey(k string) string {
+	if k == "\x1b\r" || k == "\x1b\n" {
+		return shiftEnter
+	}
+	m := modified.FindStringSubmatch(k)
+	if m == nil {
+		return k
+	}
+	code, _ := strconv.Atoi(m[2] + m[3])
+	mod, _ := strconv.Atoi(cmp.Or(m[1]+m[4], "1"))
+	shift, alt, ctrl := (mod-1)&1 != 0, (mod-1)&2 != 0, (mod-1)&4 != 0
+	switch r := rune(code); {
+	case r == '\r' && (shift || alt):
+		return shiftEnter
+	case r == '\r':
+		return "\r"
+	case r == '\t' && shift:
+		return "\x1b[Z"
+	default:
+		if shift && m[3] != "" { // CSI u names the key, not what shift made of it
+			r = unicode.ToUpper(r)
+		}
+		if ctrl && (r >= '@' && r <= '_' || r >= 'a' && r <= 'z' || r == ' ') {
+			r &= 0x1f
+		}
+		if alt {
+			return "\x1b" + string(r)
+		}
+		return string(r)
+	}
 }
 
 // keyLen is how many bytes of s the keystroke at the front of it takes.

@@ -649,7 +649,7 @@ func (u *ui) askSeed(prompt, title string) {
 // lot, and the rest is the line editor.
 func (u *ui) askTitle(k string) {
 	switch k {
-	case "\r", "\t", "\x1b[27;2;13~":
+	case "\r", "\n", "\t", shiftEnter:
 		u.title.open = false
 	case "\x1b[Z":
 		u.title.open, u.effortFocus = !u.ws, u.ws
@@ -691,7 +691,7 @@ func (u *ui) askEffort(k string) {
 		u.effort = efforts[i].name
 	case "\x7f", "\b":
 		u.effort = ""
-	case "\r", "\t", "\x1b[B", "\x1b[27;2;13~":
+	case "\r", "\t", "\x1b[B", shiftEnter:
 		u.effortFocus, u.title.open = false, true
 	case "\x1b", "\x03":
 		u.entry, u.title, u.effortFocus = entry{}, entry{}, false
@@ -832,7 +832,7 @@ func (u *ui) startSeed() string {
 // and a ccwt that kept a list of them would be wrong by the next release.
 func (u *ui) askModel(k string) {
 	switch k {
-	case "\r", "\x1b[27;2;13~": // shift-↵ too: a model name is one line
+	case "\r", "\n", shiftEnter: // shift-↵ too: a model name is one line
 		u.modelName, u.model = strings.TrimSpace(u.model.text), entry{}
 	case "\x1b", "\x03":
 		u.model = entry{}
