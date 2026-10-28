@@ -79,6 +79,8 @@ one thing, in one checkout, and an unnamed tab is named by what runs in it, whic
 saying what it's doing. The tab opens behind the one you're typing in, so the table shows it
 and you go when you're ready. A workspace with no other tab yet opens straight on that box,
 since the first thing to do in a fresh workspace is say what it's for; `esc` puts it away.
+The workspace takes the box's title as its name a second after you stop typing it, without
+waiting for `↵`, so the sidebar says what the work is while you're still writing the prompt.
 `g` shows the history of the worktree under the selected tab, and `/`, the mouse and the `☰`
 are the tui's own.
 

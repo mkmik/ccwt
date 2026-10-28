@@ -657,7 +657,35 @@ func (u *ui) askTitle(k string) {
 		u.entry, u.title = entry{}, entry{}
 	default:
 		u.title.text, u.title.cur = lineEdit(u.title.text, u.title.cur, k)
+		u.renameSoon()
 	}
+}
+
+// titleSettle is how long the title line has to sit still before the
+// workspace takes its name. ponytail: package var so tests can shorten it.
+var titleSettle = time.Second
+
+// renameSoon names the ws view's workspace after the title line while it is
+// still being typed, rather than only once the agent starts: the sidebar says
+// what the work is from the moment you've said it. Once typing has paused for
+// titleSettle, so a word typed is one rename and not one per letter. A title
+// cleared back to nothing leaves the last name standing.
+//
+// The workspace and the herdr are read now, not when the timer goes off: by
+// then the environment may say something else, and a rename sent to the wrong
+// herdr renames somebody else's workspace.
+func (u *ui) renameSoon() {
+	if u.renaming != nil {
+		u.renaming.Stop()
+	}
+	name := strings.Join(strings.Fields(u.title.text), " ")
+	ws, bin := os.Getenv("HERDR_WORKSPACE_ID"), herdrBin()
+	if !u.ws || ws == "" || name == "" {
+		return
+	}
+	u.renaming = time.AfterFunc(titleSettle, func() {
+		_ = exec.Command(bin, "workspace", "rename", ws, name).Run()
+	})
 }
 
 // efforts are the cli's --effort levels, lowest first, with the colour Claude
@@ -815,6 +843,9 @@ func (u *ui) startSeed() string {
 		return "start failed: " + err.Error()
 	}
 	name := strings.Join(strings.Fields(u.title.text), " ")
+	if u.renaming != nil { // seed names the workspace itself
+		u.renaming.Stop()
+	}
 	if err := seed(os.Getenv("HERDR_WORKSPACE_ID"), cwd, u.modelName, u.effort, name, u.entry.expanded()); err != nil {
 		return "start failed: " + err.Error()
 	}
