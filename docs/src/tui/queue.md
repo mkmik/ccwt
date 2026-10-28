@@ -104,6 +104,10 @@ in view. The paste goes back in its place when the prompt is queued or its agent
 is text however long it is: a line break in one is a line break, not the `↵` that records the
 prompt.
 
+To see a long paste in the box, paste it again: the second paste replaces the marker with the
+full text, as Claude Code's own box does. It only works while that marker is the last one in
+the box and the paste is under 100,000 characters.
+
 `n` is also vim's next-match key, and while a [search](search.md) pattern is in force that's
 what it stays: `/`, then `n` and `N` to walk the matches, and `esc` to clear the pattern and
 get the queue key back. The bar says which one is live.

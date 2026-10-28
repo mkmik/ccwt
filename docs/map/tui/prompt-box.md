@@ -28,6 +28,12 @@ title = "A long paste goes in as [Pasted text #1 +N lines]"
 status = "done"
 
 [[feature]]
+id = "paste-again"
+title = "Pasting it again puts the paste in full in place of its marker"
+status = "done"
+needs = ["#paste"]
+
+[[feature]]
 id = "title"
 title = "A one-line title box over the prompt, tab and the mouse move between them"
 status = "done"
