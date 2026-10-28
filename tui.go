@@ -1064,6 +1064,9 @@ func newEntry(parent listRow, text string, id int64) entry {
 // as there — since a log dropped in whole would push what's typed around it out
 // of the box. The paste itself waits in the entry, and goes back in place of its
 // marker once the prompt leaves the box: queued, started, or off to $EDITOR.
+// Pasting the same thing again, while its marker is still the last one in the
+// box, swaps the marker for the paste in full rather than adding a second one —
+// Claude Code's "paste again to expand", for a paste that is there to be read.
 func (u *ui) queue(k string) {
 	switch k {
 	case "\r":
@@ -1087,7 +1090,17 @@ func (u *ui) queue(k string) {
 	case "\x1b", "\x03":
 		u.entry, u.title = entry{}, entry{}
 	default:
-		if p, ok := pasted(k); ok && (utf8.RuneCountInString(p) > 800 || strings.Count(p, "\n") > 2) {
+		p, ok := pasted(k)
+		// Up to 100,000 characters, as there: a paste past that stays a marker.
+		if n := len(u.entry.pastes); ok && n > 0 && p == u.entry.pastes[n-1] && utf8.RuneCountInString(p) <= 100_000 {
+			m := pasteMarker(n, p)
+			if at := strings.Index(u.entry.text, m); at >= 0 {
+				u.entry.text = u.entry.text[:at] + p + u.entry.text[at+len(m):]
+				u.entry.cur, u.entry.pastes = at+len(p), u.entry.pastes[:n-1]
+				return
+			}
+		}
+		if ok && (utf8.RuneCountInString(p) > 800 || strings.Count(p, "\n") > 2) {
 			u.entry.pastes = append(u.entry.pastes, p)
 			k = pasteStart + pasteMarker(len(u.entry.pastes), p) // in at the caret, as pasting it would
 		}

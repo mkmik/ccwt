@@ -2888,6 +2888,27 @@ func TestAPromptCanHoldLineBreaks(t *testing.T) {
 	}
 }
 
+// The same long paste a second time, as in Claude Code's box, goes in full in
+// its marker's place, with the caret after it. In full it is text: a third
+// paste is a marker again.
+func TestPastingAgainExpandsTheMarker(t *testing.T) {
+	var u ui
+	u.entry = newEntry(listRow{}, "", 0)
+	const log = "panic: boom\n\tat a.go:1\n\tat b.go:2\n\tat c.go:3"
+	for _, k := range splitKeys("fix " + pasteStart + log + pasteEnd + " now" + pasteStart + log + pasteEnd) {
+		u.queue(k)
+	}
+	const full = "fix panic: boom\n    at a.go:1\n    at b.go:2\n    at c.go:3"
+	if u.entry.text != full+" now" || u.entry.cur != len(full) || len(u.entry.pastes) != 0 {
+		t.Fatalf("the box holds %q, caret at %d, %d pastes; want %q, caret at %d, none",
+			u.entry.text, u.entry.cur, len(u.entry.pastes), full+" now", len(full))
+	}
+	u.queue(pasteStart + log + pasteEnd)
+	if want := full + "[Pasted text #1 +3 lines] now"; u.entry.text != want {
+		t.Fatalf("a third paste leaves %q, want %q", u.entry.text, want)
+	}
+}
+
 // A paste goes in whole, and a long one — over two line breaks or 800
 // characters, as in Claude Code's box — as Claude Code's marker for it, so what
 // is typed around it stays in view. The prompt that leaves the box has the paste
