@@ -945,6 +945,37 @@ esac
 	}
 }
 
+// The title names the workspace while it is still being typed, once the typing
+// pauses: one rename for the lot, not one per letter.
+func TestWsSeedTitleRenamesTheWorkspaceAsItIsTyped(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "calls")
+	herdr := filepath.Join(dir, "herdr")
+	if err := os.WriteFile(herdr, []byte(fmt.Sprintf("#!/bin/sh\necho \"$@\" >> %q\n", log)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERDR_BIN_PATH", herdr)
+	t.Setenv("HERDR_WORKSPACE_ID", "w1")
+	old := titleSettle
+	titleSettle = 50 * time.Millisecond
+	t.Cleanup(func() { titleSettle = old })
+
+	u := ui{ws: true, entry: newEntry(listRow{}, "", 0), title: newEntry(listRow{}, "", 0)}
+	for k := range strings.SplitSeq("mtls  fix", "") {
+		u.askTitle(k)
+	}
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if calls, _ := os.ReadFile(log); len(calls) > 0 {
+			time.Sleep(4 * titleSettle) // long enough for a second one to show up
+			if calls, _ = os.ReadFile(log); string(calls) != "workspace rename w1 mtls fix\n" {
+				t.Fatalf("herdr calls = %q, want the one rename", calls)
+			}
+			return
+		}
+	}
+	t.Fatal("the workspace was never renamed")
+}
+
 // The effort scale sits over the title without the keys: shift-tab from the
 // title reaches it, the arrows move along it from high, a click picks the level
 // under it, and what it is left on goes to the harness as --effort.

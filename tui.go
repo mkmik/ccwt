@@ -766,6 +766,9 @@ type ui struct {
 	// titleRow is the screen row, counted the way a mouse report does, of the
 	// title box's top rule as last drawn: a click there or below picks the box.
 	titleRow int
+	// renaming is the workspace rename the title line has waiting — see
+	// renameSoon.
+	renaming *time.Timer
 
 	// The seed prompt's --effort, "" for the harness's default, and whether its
 	// scale, above the title, is what the arrows move. effortRow is that box's
