@@ -99,6 +99,165 @@ to, in `HERDR_SOCKET_PATH`.
   whatever watches for a process — the list's corner — keeps a slow look going
   alongside its events.
 
+# dennet beside herdr — task list
+
+ccwt opens workspaces on worktrees, starts agents in their tabs, reads what
+the agents are doing and puts badges on the workspaces. Until now it did all
+of that with herdr. [dennet](https://github.com/mkmik/dennet) keeps the same
+kind of things as Kubernetes-style objects, and dense (a Ghostty fork) draws
+them:
+
+- a **Space** is a workspace. Spaces form a tree: a repo's Space at the top,
+  its worktrees' Spaces under it (`spec.parent`). `spec.workingDir` is the
+  checkout, `spec.title` the name, `spec.order` the place among its siblings.
+- a **Surface** is a tab of a Space (`spec.space`, `spec.order`, `spec.title`).
+- a **Den** is the terminal in a tab (`spec.terminal.den`). den runs it in the
+  background and reports `status.cwd`, `status.title`, `status.pid`, the
+  screen. One terminal per tab: no splits.
+
+Its api has what herdr's socket has for reading: get, list, and a watch that
+streams every change, over a unix socket, as plain JSON over HTTP.
+
+Everything ccwt says to herdr now goes through one Go interface, `mux`
+(mux.go); herdr's side is herdr.go. dennet's side is to be dennet.go, picked
+where ccwt runs inside a den. Neither side is finished on dennet's part: the
+gaps below are what dennet, dense or den would need to add.
+
+## How the two line up
+
+| ccwt asks (`mux`) | herdr | dennet |
+|---|---|---|
+| `inside`, `here` | `HERDR_ENV`, `HERDR_WORKSPACE_ID`, `HERDR_TAB_ID` | `DEN_SOCKET` is `<state>/den/<ns>/<name>.sock`, which names the Den; its Surface is the one whose `terminal.den` is that name, and the Space is that Surface's |
+| `workspaces`, `sidebar`, `worktreeWorkspaces`, `repoWorkspaces` | `workspace list`, `worktree list` | Spaces, by `workingDir` and `parent`; order by walking the tree |
+| `tabs`, `snapshot` | `tab list`, `pane list`, `api snapshot` | Surfaces of the Space by `order`, each with its Den's status |
+| `listen` | `events.subscribe` | `?watch=1` on spaces, surfaces and dens; list again on `410 Gone` |
+| `openWorktree`, `openProject`, `newTab` | `worktree open`, `tab create` | create the Space (and the repo's, when missing), a Surface and a Den |
+| `run` | `pane run`: types a line at the shell | `den send`: types a line and Enter, on a den of this machine |
+| `renameTab`, `moveTab`, `renameWorkspace` | `tab rename`/`move`, `workspace rename` | Surface `title`/`order`, Space `title` |
+| `closeWorkspace` | `workspace close` | delete the Dens (that stops them), the Surfaces, then the Space |
+| `badge` | a `ccwt` token with a ttl | `spec.badges` — see gap 4 |
+| `agents` | `agent list`: working, blocked, idle, done, and a counter | none — gap 2 |
+| `focusTab`, `focusWorkspace` | `tab focus`, `workspace focus` | a request on our own Surface, obeyed by dense — gap 1 |
+| `focused` | `workspace get` | none — gap 1 |
+| `procs` | `pane process-info` | none — gap 3 |
+| `popup` | a plugin pane | none — gap 6 |
+| `file` | `workspace move` under a `------` divider | none — gap 8 |
+
+## Gaps
+
+What dennet (or dense, or den) does not have yet, and what ccwt does meanwhile.
+
+1. **Focus.** Nothing in dennet says which Space and tab dense shows: each
+   dense window keeps its own selection, so different windows can show
+   different tabs. ccwt needs to know for the green dot going grey once a tab
+   has been looked at; meanwhile it stays green until the tab's agent works
+   again.
+   - Asking dense to show something (`space` on a row, `nav ws`, `done`
+     landing on the repo's workspace, `x`/`c` bringing the new workspace to
+     the front) changes no den, no dennet and no terminal code, only dense's
+     app code, since restarting dens stops what runs in them:
+     - ccwt writes the request on its own Surface, as an annotation:
+       `dense.mkm.pub/show: {"space":…,"surface":…,"at":…}`. The time makes
+       each request a change, even when it repeats the one before. It is
+       written only when ccwt asks for something, never on a click in dense,
+       and nothing has to take it off again.
+     - Every dense window already watches the Surfaces. A window acts on a
+       request only when both of these hold:
+       - the Surface that asks is the tab in front of that window;
+       - that window got a key press in the last 5 seconds.
+     - That is the window whose key press made ccwt ask: the rule den uses for
+       the terminal size, worked out by dense itself, with an `NSEvent`
+       monitor.
+     - The window shows the Space or tab, waiting up to 10 seconds for one
+       that dennet's watch hasn't brought in yet.
+     - A request already there when a watch starts is old, and ignored.
+   - Turned down: a private OSC that den would hand only to the client that
+     sets the size. It needs a new den, and a terminal extension in dense.
+2. **Agent status.** herdr finds the agents in its panes and says what each
+   is doing. den does not. (a) Claude Code writes its state into the terminal
+   title: a spinner glyph while it works, `✳` when it is idle — a den's
+   `status.title` reads `◐ CCWT Dennet and Herder integration` mid-turn. No
+   "blocked", Claude Code only, and `lastOutputTime` stands in for herdr's
+   counter. (b) A Claude Code hook (`ccwt hook`) that writes the state onto
+   the Den, as `herdr pane report-agent` does: exact, and "blocked" too. (a)
+   first.
+3. **What runs in front.** herdr says which processes are in the foreground
+   of a pane; a Den has only its program's `status.pid`. The list's corner and
+   `↻` ask it to see whether a `ws` tab still runs ccwt. On this machine ccwt
+   can walk the processes under that pid itself (ps.go does already); for a
+   den on another Host, den would have to report it.
+4. **Badges with an owner and an end.** herdr's badge is ccwt's own token, and
+   goes away by itself when nobody renews it. `spec.badges` is a plain list:
+   ccwt has to tell its badge from others (by its glyph, until a badge has a
+   `source`), and one left by a ccwt that died stays. Wants `source` and an
+   expiry on a badge.
+5. **Deleting a workspace.** dennet has no garbage collector: deleting a
+   Space leaves its Surfaces and Dens. ccwt deletes them itself.
+6. **Popups.** No plugin panes: `ccwt open` falls back to the picker in its
+   own terminal, as it does outside herdr.
+7. **Typing into a den on another Host.** `den send` needs the den's socket,
+   on that machine. dennet's `dens/input` (todo in its map) would do it from
+   here.
+8. **Dividers.** herdr's sidebar is flat, with `------` workspaces between
+   categories; dense's is a tree. Undecided: a Space per category with the
+   repos under it, or no categories.
+
+## Stages
+
+- [x] 1. One seam: everything ccwt says to herdr goes through `mux` — mux.go
+  is the interface and what is the same for both, herdr.go is herdr's side.
+  Nothing ccwt does changed: the herdr tests fake herdr's cli and socket,
+  which the seam left where they were, and pass unchanged but for renames
+- [x] 2. dennet, reading
+  - [x] dennet.go: JSON over HTTP on dennet's socket (`$XDG_RUNTIME_DIR/dennet/dennet.sock`, else `$XDG_STATE_HOME/dennet/dennet.sock`, the first that is there), standard library only
+  - [x] `mx()` picks dennet inside a den (`DEN_SOCKET`, no `HERDR_ENV`); `TestMain` drops `DEN_*` as it drops `HERDR_*`
+  - [x] `here` (remembered once found), `workspaces`, `sidebar`, `worktreeWorkspaces`, `repoWorkspaces`, `tabs`, `paneAt`, `paneTab`, `place`, `snapshot`
+  - [x] `agents` from Den titles (gap 2a): `✳` idle, a half circle or braille spinner working
+  - [x] `listen`: a watch each on spaces, surfaces and — for the ws view — dens, only what touches its own Space poking it
+  - [x] tests against a fake dennet on a unix socket (`TestDennetReads`, `TestDennetListens`, `TestDenAgent`); tried live with `ccwt nav ws --dry-run`, which found the copied herdr workspaces by title
+- [x] 3. dennet, acting
+  - [x] `openWorktree`, `openProject`, `newTab`: a Space named after the directory (dennet's own name when that is taken), under the repo's Space, made when missing; a Den as dense makes one, and a Surface of the same name
+  - [x] `run` with `den send`, tried again for a few seconds while a new den starts; `renameTab`, `moveTab`, `renameWorkspace`
+  - [x] `closeWorkspace` (gap 5): the Space, its Surfaces, then their Dens — ours last, since deleting it stops this ccwt; what is gone already is fine
+  - [x] `badge` on `spec.badges` (gap 4): ccwt's own told apart by its glyphs, written only on a change, with the resourceVersion so another's badge isn't written over
+  - [x] `procs` from the process table: the terminal's foreground group (`ps -o tpgid`) read off the Den's `status.pid`
+  - [x] tests against a fake dennet that keeps what it is told (`TestDennetNewWorkspace`, `TestDennetActs`, `TestForeground`); tried live in a namespace of its own: a tab made, `echo` sent and run, `sleep` seen in front, all of it closed again
+  - [x] the manual's "Under dennet and dense"
+- [x] 3b. Going somewhere (gap 1): `focusTab`, `focusWorkspace`, and
+  `openWorktree`/`openProject` showing what they open, as a request on our
+  Surface. dense's side, `ShowRequest` and `SpaceTabs.obeys`, is in dense's
+  worktree piped-honking-backus, not committed yet. dennet took the
+  annotation in a probe namespace.
+- [ ] 4. Waiting on dennet, dense or den: which tab a window shows (1), the agent hook (2b),
+  what runs in front on another Host (3), badge owners (4), cascading deletes
+  (5), remote input (7), categories (8)
+
+## Decisions
+
+- `mux` speaks ccwt's words — workspace, tab, pane, agent — and its ids are
+  whatever the mux calls things, handed back to it unread.
+- What dennet has nothing for (focus, popups) says so on the bar rather than
+  hiding its key: the keys are the ones herdr has, and the bar says why one
+  does nothing.
+- No green "unread" dot under dennet: a tab is never seen being looked at
+  (gap 1), so `tabs` leaves the counter at 0 and a settled agent is grey.
+- `ccwt pause` is herdr's: dennet's lists and watches go on while it is in
+  force. The watch still waits for `herdr_events = true`, as herdr's does.
+- The corner looks at what runs in each den with a `ps` of its own, a fork per
+  pane every 10s. ponytail: one `ps` a round would do, if there are ever enough
+  `ws` tabs for it to show.
+- `mx()` chooses afresh at each call, from the environment, so a test changes
+  it with `t.Setenv`. `herdrMux` keeps the cli it was made with, so a rename
+  put off for a second still goes to the herdr it was meant for.
+- The standard library, not client-go, to talk to dennet: the api is JSON over
+  HTTP, and client-go would add megabytes to each of the 40-odd ccwts running
+  (see "One ccwt for every pane").
+- An agent is typed into its tab with `den send`, as herdr's `pane run` types
+  it, rather than started as the Den's command: one flow for both muxes, the
+  prompt already travels in a file (promptArg) so the tty's line limit doesn't
+  bite, and live the den took the line within milliseconds of being made, the
+  shell running it once it was up.
+
 # One ccwt for every pane — the idea, not yet a plan
 
 Every pane runs a whole ccwt: 44 of them on 2026-10-12 (19 lists, 23 ws views,

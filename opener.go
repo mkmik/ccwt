@@ -2,11 +2,9 @@ package main
 
 import (
 	"bufio"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -45,7 +43,7 @@ func (u *ui) openOpener() {
 // is closed; a prompt being written or a question being asked is left alone,
 // since what's in it is the user's.
 func (u *ui) summon() {
-	if !underHerdr() || u.projects == nil || u.opener != nil {
+	if !mx().inside() || u.projects == nil || u.opener != nil {
 		return
 	}
 	if u.entry.open || u.model.open || u.trust != "" {
@@ -73,7 +71,7 @@ func (c *OpenCmd) Run() error {
 	if c.Here {
 		return pickHere()
 	}
-	if underHerdr() && openPopup() == nil {
+	if mx().inside() && openPopup() == nil {
 		return nil
 	}
 	b, _ := os.ReadFile(globalPath())
@@ -92,17 +90,14 @@ func (c *OpenCmd) Run() error {
 	return nil
 }
 
-// openPopup has herdr open the ccwt plugin's `picker` pane as a popup, running
-// this same binary — a build of a branch, not just the one on PATH. It fails
-// where the plugin isn't linked, or is a version without the pane.
+// openPopup has the mux open the project picker as a popup, running this same
+// binary — a build of a branch, not just the one on PATH.
 func openPopup() error {
 	env := map[string]string{}
 	if exe, err := os.Executable(); err == nil {
 		env["CCWT_BIN"] = exe
 	}
-	_, err := herdrAsk("plugin.pane.open",
-		map[string]any{"plugin_id": "ccwt", "entrypoint": "picker", "placement": "popup", "focus": true, "env": env},
-		"plugin", "pane", "open", "--plugin", "ccwt", "--entrypoint", "picker", "--placement", "popup", "--focus", "--env", "CCWT_BIN="+env["CCWT_BIN"])
+	err := mx().popup(env)
 	// ponytail: `go run` deletes this binary as soon as it exits, which can be
 	// before the popup has started it; a moment's wait covers that. Have the
 	// popup say when it's up if the guess is ever short.
@@ -234,7 +229,7 @@ func newOpener() (*opener, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &opener{all: recent, ws: herdrRepoWS()}, nil
+	return &opener{all: recent, ws: mx().repoWorkspaces()}, nil
 }
 
 // open is what picking p does: switch to herdr's workspace on it, or open one.
@@ -243,39 +238,10 @@ func (o *opener) open(p string) string {
 	if !ok {
 		return openProject(p)
 	}
-	if err := herdrFocusWS(id); err != nil {
+	if err := mx().focusWorkspace(id); err != nil {
 		return err.Error()
 	}
 	return "switched to " + filepath.Base(p)
-}
-
-// herdrRepoWS is the first workspace in herdr's sidebar on each repo — the
-// main checkout or any worktree of it, the same test that puts a repo's section
-// among the open ones in -g's list — keyed by the repo's root.
-//
-// ponytail: package var so tests can fake the herdr answer.
-var herdrRepoWS = func() map[string]string {
-	out, err := herdrAsk("workspace.list", nil, "workspace", "list")
-	var resp struct {
-		Result struct {
-			Workspaces []struct {
-				ID       string `json:"workspace_id"`
-				Worktree struct {
-					Repo string `json:"repo_root"`
-				} `json:"worktree"`
-			} `json:"workspaces"`
-		} `json:"result"`
-	}
-	if err != nil || json.Unmarshal(out, &resp) != nil {
-		return nil
-	}
-	ws := map[string]string{}
-	for _, w := range resp.Result.Workspaces {
-		if _, ok := ws[w.Worktree.Repo]; !ok && w.Worktree.Repo != "" {
-			ws[w.Worktree.Repo] = w.ID
-		}
-	}
-	return ws
 }
 
 // shown is what the filter leaves of it.
@@ -401,80 +367,24 @@ func openProject(path string) string {
 	if err != nil {
 		return "open failed: " + err.Error()
 	}
-	out, err := herdrAsk("worktree.open", map[string]any{"cwd": path, "path": path, "focus": true},
-		"worktree", "open", "--cwd", path, "--path", path, "--focus")
-	var resp struct {
-		Result struct {
-			AlreadyOpen bool `json:"already_open"`
-			Workspace   struct {
-				ID string `json:"workspace_id"`
-			} `json:"workspace"`
-			Tab struct {
-				ID string `json:"tab_id"`
-			} `json:"tab"`
-			Pane struct {
-				ID string `json:"pane_id"`
-			} `json:"root_pane"`
-		} `json:"result"`
+	m := mx()
+	o, err := m.openProject(path)
+	if err != nil {
+		return "open failed: " + err.Error()
 	}
-	if err != nil || json.Unmarshal(out, &resp) != nil || resp.Result.Pane.ID == "" {
-		return fmt.Sprintf("open failed: herdr worktree open: %v", err)
-	}
-	if resp.Result.AlreadyOpen {
+	if o.already {
 		return "opened " + filepath.Base(path)
 	}
 	// Best effort: a workspace in the wrong place is still open.
 	if cfg, err := loadConfig(); err == nil {
 		if cat := categoryOf(cfg.Categories, path); cat != "" {
-			herdrFile(resp.Result.Workspace.ID, cat)
+			m.file(o.ws, cat)
 		}
 	}
-	if out, err := exec.Command(herdrBin(), "pane", "run", resp.Result.Pane.ID, exe).CombinedOutput(); err != nil {
-		return "opened, but ccwt did not start: " + lastLine(out, err)
+	if err := m.run(o.pane, exe); err != nil {
+		return "opened, but ccwt did not start: " + err.Error()
 	}
 	// Best effort, as `c`'s `ws`: a tab with the wrong name still has its tui.
-	_ = exec.Command(herdrBin(), "tab", "rename", resp.Result.Tab.ID, "prj").Run()
+	_ = m.renameTab(o.tab, "prj")
 	return "opened " + filepath.Base(path)
-}
-
-// herdrFile moves the workspace id to the end of category cat's section of
-// herdr's sidebar: just above the divider after "------ cat", or last when
-// that is the last divider. No such divider leaves it where it is.
-func herdrFile(id, cat string) {
-	out, err := herdrAsk("workspace.list", nil, "workspace", "list")
-	var resp struct {
-		Result struct {
-			Workspaces []struct {
-				ID    string `json:"workspace_id"`
-				Label string `json:"label"`
-			} `json:"workspaces"`
-		} `json:"result"`
-	}
-	if err != nil || json.Unmarshal(out, &resp) != nil {
-		return
-	}
-	// Counted without the workspace itself, since that is how herdr counts
-	// where it lands.
-	at, in := -1, false
-	i := 0
-	for _, w := range resp.Result.Workspaces {
-		if w.ID == id {
-			continue
-		}
-		if rest, ok := strings.CutPrefix(w.Label, herdrSep); ok {
-			if in {
-				break
-			}
-			in = strings.TrimSpace(strings.TrimLeft(rest, "-")) == cat
-		}
-		i++
-		if in {
-			at = i
-		}
-	}
-	if at < 0 {
-		return
-	}
-	_, _ = herdrAsk("workspace.move", map[string]any{"workspace_id": id, "insert_index": at},
-		"workspace", "move", id, fmt.Sprint(at)) // ponytail: herdr 0.9.1 has no cli for it, only the socket
 }

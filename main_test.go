@@ -24,10 +24,11 @@ import (
 // the pane `go test` was typed in would go past the fake to the live herdr —
 // answering in its place, and taking its orders. The rest of herdr's
 // environment goes with it, so that a test starts out where CI does, outside
-// herdr, and is under one only when it says so.
+// herdr, and is under one only when it says so. So does den's: in a den, ccwt
+// talks to dennet instead.
 func TestMain(m *testing.M) {
 	for _, kv := range os.Environ() {
-		if k, _, _ := strings.Cut(kv, "="); strings.HasPrefix(k, "HERDR_") {
+		if k, _, _ := strings.Cut(kv, "="); strings.HasPrefix(k, "HERDR_") || strings.HasPrefix(k, "DEN_") {
 			os.Unsetenv(k)
 		}
 	}
@@ -535,8 +536,8 @@ func TestHerdrOpenLabelsNewWorkspacesOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := capture(t, &NewWorktreeBranchCmd{Name: name, Path: true})
-	if msg := herdrOpen(path, ""); !strings.HasPrefix(msg, "opened ") {
-		t.Fatalf("herdrOpen: %s", msg)
+	if msg := openWorkspace(path, ""); !strings.HasPrefix(msg, "opened ") {
+		t.Fatalf("openWorkspace: %s", msg)
 	}
 	if got, _ := os.ReadFile(log); strings.Contains(string(got), "--label") {
 		t.Errorf("herdr calls = %q, want a reopen to leave the workspace name alone", got)
@@ -790,10 +791,10 @@ func TestAgentWorkingIsNotSafeToRemove(t *testing.T) {
 	busy := capture(t, &NewWorktreeBranchCmd{Name: "busy", Path: true})
 	idle := capture(t, &NewWorktreeBranchCmd{Name: "idle", Path: true})
 
-	defer func(orig func(herdrAsker) []herdrAgent) { herdrAgents = orig }(herdrAgents)
+	defer func(orig func(herdrAsker) []muxAgent) { herdrAgents = orig }(herdrAgents)
 	// A subdirectory: where an agent that cd'd deeper into the worktree reports from.
-	herdrAgents = func(herdrAsker) []herdrAgent {
-		return []herdrAgent{{Status: "working", Cwd: filepath.Join(busy, "internal")}}
+	herdrAgents = func(herdrAsker) []muxAgent {
+		return []muxAgent{{Status: "working", Cwd: filepath.Join(busy, "internal")}}
 	}
 
 	defer func(orig func() bool) { stdoutIsTTY = orig }(stdoutIsTTY)
@@ -935,8 +936,8 @@ func TestListOnlyAgents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	defer func(orig func(herdrAsker) []herdrAgent) { herdrAgents = orig }(herdrAgents)
-	herdrAgents = func(herdrAsker) []herdrAgent { return []herdrAgent{{Status: "idle", Cwd: idle}} }
+	defer func(orig func(herdrAsker) []muxAgent) { herdrAgents = orig }(herdrAgents)
+	herdrAgents = func(herdrAsker) []muxAgent { return []muxAgent{{Status: "idle", Cwd: idle}} }
 	names := func(agents bool) (got []string) {
 		rows, _, err := renderList(io.Discard, true, 0, nil, nil, nil, false, "", false, agents)
 		if err != nil {
@@ -1009,9 +1010,9 @@ func TestTuiLeadsWithHerdrsDot(t *testing.T) {
 	t.Setenv("HERDR_BIN_PATH", "/nowhere/herdr") // what isn't faked below goes unanswered
 
 	looking := false
-	defer func(orig func(herdrAsker) []herdrAgent) { herdrAgents = orig }(herdrAgents)
-	herdrAgents = func(herdrAsker) []herdrAgent {
-		return []herdrAgent{
+	defer func(orig func(herdrAsker) []muxAgent) { herdrAgents = orig }(herdrAgents)
+	herdrAgents = func(herdrAsker) []muxAgent {
+		return []muxAgent{
 			{Pane: "w1:p1", Tab: "w1:t1", Cwd: busy, Status: "working", Seq: 3},
 			{Pane: "w1:p2", Tab: "w1:t1", Cwd: busy, Status: "blocked", Seq: 4},
 			// Started at the repo root, and moved into the worktree since.
