@@ -5,7 +5,7 @@ aka = ["herdrAsk", "herdrListen"]
 kind = "bridge"
 intent = "induced"
 research = "done"
-refs = ["TODO.md", "main.go"]
+refs = ["TODO.md", "herdr.go"]
 
 [[feature]]
 id = "ask"

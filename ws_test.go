@@ -135,7 +135,7 @@ esac
 	t.Setenv("HERDR_WORKSPACE_ID", "w1")
 	wsWatched = map[string]wsWatch{}
 
-	tabs, err := herdrTabs()
+	tabs, err := readTabs()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ esac
 		if err := os.WriteFile(agents, []byte(agent), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		ts, err := herdrTabs()
+		ts, err := readTabs()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -226,7 +226,7 @@ func TestWsGreenUntilTheTabIsLookedAt(t *testing.T) {
 			t.Errorf("%s/%d (focused=%s) = %q, want %q — %s", step.status, step.seq, step.focused, got, step.want, step.whyfy)
 		}
 	}
-	if msg := herdrFocusTab("w1:t2"); msg != "" {
+	if msg := goToTab("w1:t2"); msg != "" {
 		t.Fatalf("herdr tab focus = %q", msg)
 	}
 	if got := round("idle", 8, "false"); got != "○" { // going there is reading it
@@ -480,7 +480,7 @@ esac
 	t.Setenv("HERDR_WORKSPACE_ID", "w1")
 	t.Setenv("HERDR_TAB_ID", "w1:t1")
 
-	busy := herdrBusy(herdrAgents(herdrAsk))
+	busy := busyCwds(herdrAgents(herdrAsk))
 	if busy["/src/mine"] {
 		t.Error("our own tab counts as busy: an agent could not run `ccwt done` on its own worktree")
 	}
@@ -490,7 +490,7 @@ esac
 	// No tab to go by — an older herdr, a pane outside one — and the whole
 	// workspace is ours again, which is what this used to do for everyone.
 	t.Setenv("HERDR_TAB_ID", "")
-	if busy := herdrBusy(herdrAgents(herdrAsk)); busy["/src/sibling"] {
+	if busy := busyCwds(herdrAgents(herdrAsk)); busy["/src/sibling"] {
 		t.Error("with no tab in the environment, our own workspace is no longer exempt")
 	}
 }
@@ -505,17 +505,17 @@ func TestHerdrIsAskedOverItsSocket(t *testing.T) {
 	t.Setenv("HERDR_WORKSPACE_ID", "w1")
 	t.Setenv("HERDR_TAB_ID", "w1:t1")
 
-	ts, err := herdrTabs()
+	ts, err := readTabs()
 	if err != nil || !slices.Equal(ts, herdrW1Tabs) {
-		t.Errorf("herdrTabs() = %v, %v, want %v", ts, err, herdrW1Tabs)
+		t.Errorf("readTabs() = %v, %v, want %v", ts, err, herdrW1Tabs)
 	}
-	herdrBusy(herdrAgents(herdrAsk))
+	busyCwds(herdrAgents(herdrAsk))
 	herdrLabels()
 	wsBadge(&mrLook{rows: []mrRow{{status: "merged"}}})
 	wsBadge(&mrLook{})
 	t.Setenv("HERDR_WORKSPACE_ID", "w2")
-	if _, err := herdrTabs(); err == nil || !strings.Contains(err.Error(), "workspace w2 not found") {
-		t.Errorf("herdrTabs() on a workspace herdr refuses = %v, want the refusal", err)
+	if _, err := readTabs(); err == nil || !strings.Contains(err.Error(), "workspace w2 not found") {
+		t.Errorf("readTabs() on a workspace herdr refuses = %v, want the refusal", err)
 	}
 
 	ttl := fmt.Sprint(wsBadgeTTL.Milliseconds())
@@ -545,8 +545,8 @@ func TestPauseQuietsTheViews(t *testing.T) {
 	t.Setenv("HERDR_WORKSPACE_ID", "w1")
 	tabs := func() {
 		t.Helper()
-		if ts, err := herdrTabs(); err != nil || !slices.Equal(ts, herdrW1Tabs) {
-			t.Errorf("herdrTabs() = %v, %v, want %v", ts, err, herdrW1Tabs)
+		if ts, err := readTabs(); err != nil || !slices.Equal(ts, herdrW1Tabs) {
+			t.Errorf("readTabs() = %v, %v, want %v", ts, err, herdrW1Tabs)
 		}
 	}
 	round := []string{`tab.list {"workspace_id":"w1"}`, `pane.list {"workspace_id":"w1"}`, `agent.list {}`}
@@ -562,8 +562,8 @@ func TestPauseQuietsTheViews(t *testing.T) {
 	tabs()
 	wsBadge(&mrLook{rows: []mrRow{{status: "merged"}}})
 	t.Setenv("HERDR_WORKSPACE_ID", "w9")
-	if _, err := herdrTabs(); !errors.Is(err, errHerdrPaused) {
-		t.Errorf("herdrTabs() on a workspace never asked about, paused = %v, want %v", err, errHerdrPaused)
+	if _, err := readTabs(); !errors.Is(err, errHerdrPaused) {
+		t.Errorf("readTabs() on a workspace never asked about, paused = %v, want %v", err, errHerdrPaused)
 	}
 	herdrAgents(herdrAsk)
 	if got, want := drain(asked), []string{`agent.list {}`}; !slices.Equal(got, want) {
@@ -1195,7 +1195,7 @@ func TestListWatchesTheWsTabsForTheirCcwt(t *testing.T) {
 	// With -g it is the projects' own workspaces instead, and a ccwt in any
 	// pane of any of their tabs will do: other's is in its second tab. A
 	// double click on app goes to its first tab.
-	if got, tabs := herdrWsDown([]string{"/src/app", "/src/other"}, true); !slices.Equal(got, []string{"app"}) || !slices.Equal(tabs, []string{"w7:t1"}) {
+	if got, tabs := findWsDown([]string{"/src/app", "/src/other"}, true); !slices.Equal(got, []string{"app"}) || !slices.Equal(tabs, []string{"w7:t1"}) {
 		t.Errorf("global corner names %q with first tabs %q, want [app] and [w7:t1]", got, tabs)
 	}
 }

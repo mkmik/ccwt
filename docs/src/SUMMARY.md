@@ -25,6 +25,7 @@
 - [Herdr integration](herdr/index.md)
     - [A workspace's own tui: ccwt ws](herdr/ws.md)
     - [When ccwt ws has gone](herdr/gone.md)
+    - [Under dennet and dense](herdr/dennet.md)
 
 # Setting up
 

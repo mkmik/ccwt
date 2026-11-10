@@ -5,7 +5,7 @@ aka = ["report_metadata", "▣", "■"]
 kind = "bridge"
 intent = "goal"
 research = "done"
-refs = ["ws.go"]
+refs = ["ws.go", "herdr.go"]
 
 [[feature]]
 id = "review"

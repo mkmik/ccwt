@@ -4,7 +4,7 @@ summary = "Open, name, order and close herdr workspaces on worktrees"
 kind = "bridge"
 intent = "induced"
 research = "done"
-refs = ["main.go", "tui.go"]
+refs = ["herdr.go", "main.go", "tui.go"]
 
 [[feature]]
 id = "open"

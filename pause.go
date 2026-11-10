@@ -2,12 +2,10 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
-	"sync"
 	"time"
 )
 
@@ -108,30 +106,3 @@ func pauseNote() string {
 }
 
 var errHerdrPaused = errors.New("herdr paused (ccwt unpause)")
-
-// herdrAsker is how a question is put to herdr: herdrAsk or herdrPoll, for a
-// question an action and a view both ask, each in its own way.
-type herdrAsker func(method string, params map[string]any, args ...string) ([]byte, error)
-
-// herdrPoll is herdrAsk for what ccwt asks and tells herdr on its own, to keep
-// a view up to date, rather than because a key was pressed or a command run.
-// Paused, herdr hears none of it: the answer is the last one herdr gave the same
-// question, so a view stands still rather than going blank, and errHerdrPaused
-// for a question it was never asked.
-func herdrPoll(method string, params map[string]any, args ...string) ([]byte, error) {
-	key := fmt.Sprintf("%q", args) // the cli's words for the request say all the socket's do
-	if herdrPaused() {
-		if out, ok := herdrHeard.Load(key); ok {
-			return out.([]byte), nil
-		}
-		return nil, errHerdrPaused
-	}
-	out, err := herdrAsk(method, params, args...)
-	if err == nil {
-		herdrHeard.Store(key, out)
-	}
-	return out, err
-}
-
-// herdrHeard is herdrPoll's last answer to each question it has put.
-var herdrHeard sync.Map

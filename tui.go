@@ -8,12 +8,9 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
-	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -100,7 +97,8 @@ func (c *TuiCmd) Run() error {
 	// workspaces, over herdr's socket. The ws view doesn't: there is one in
 	// every workspace, and each watching all of them is the herdr traffic the
 	// socket was meant to cut. A repo git can't name has no worktrees to list.
-	underSocket := os.Getenv("HERDR_SOCKET_PATH") != ""
+	m := mx()
+	underSocket := m.listens()
 	if !c.ws && underSocket {
 		if roots, err := worklogProjects(projects); err == nil {
 			go watchWsDown(ctx, roots, projects != nil, cfg.HerdrEvents)
@@ -114,7 +112,8 @@ func (c *TuiCmd) Run() error {
 	if c.ws && underSocket && cfg.HerdrEvents {
 		heard = make(chan struct{}, 1)
 		wsTabsHeard.on = true
-		go herdrListen(ctx, heard, wsHeard(os.Getenv("HERDR_WORKSPACE_ID")), wsEvents...)
+		ws, _ := m.here()
+		go m.listen(ctx, heard, ws)
 	}
 
 	// Raw mode so single keypresses arrive without waiting for a newline. If
@@ -164,7 +163,7 @@ func (c *TuiCmd) Run() error {
 
 	u := ui{projects: projects, sort: c.Sort, stamp: selfStamp(), asked: restartAsked(), ws: c.ws}
 	if c.ws {
-		u.askTrust() // whether Claude Code may run its agents here, asked over all else
+		u.askTrust()                         // whether Claude Code may run its agents here, asked over all else
 		u.askSeed(c.seedPrompt, c.seedTitle) // a fresh workspace opens on the question of what it is for
 	}
 	var last string
@@ -209,16 +208,16 @@ func (c *TuiCmd) Run() error {
 		}
 		// A tab of the ws view is somewhere to go too.
 		if u.sel.tab != "" {
-			return act("going there…", func() string { return herdrFocusTab(u.sel.tab) })
+			return act("going there…", func() string { return goToTab(u.sel.tab) })
 		}
-		if !underHerdr() {
+		if !mx().inside() {
 			return nil
 		}
 		switch {
 		case u.sel.pending():
 			return act("starting…", u.startPending)
 		case u.sel.worktree():
-			return act("opening "+filepath.Base(path)+"…", func() string { return herdrOpen(path, "") })
+			return act("opening "+filepath.Base(path)+"…", func() string { return openWorkspace(path, "") })
 		}
 		return nil
 	}
@@ -481,7 +480,7 @@ func (c *TuiCmd) Run() error {
 			// Not in the ws view, `x`, `c`, `r` and `G` below: they make and
 			// unmake worktrees and workspaces, and what that view is for is the
 			// tabs of the one you are in — `n` is how a worktree gets made there.
-			case k == "x" && underHerdr() && !u.ws:
+			case k == "x" && mx().inside() && !u.ws:
 				if err := act("creating…", u.newWorktree); err != nil {
 					return err
 				}
@@ -491,9 +490,9 @@ func (c *TuiCmd) Run() error {
 			// from.
 			// `o` under -g opens a repo that isn't open yet, picked from the
 			// ones ccwt has been used in.
-			case k == "o" && underHerdr() && u.projects != nil:
+			case k == "o" && mx().inside() && u.projects != nil:
 				u.openOpener()
-			case k == "c" && underHerdr() && !u.ws:
+			case k == "c" && mx().inside() && !u.ws:
 				if err := act("creating…", u.newWorkspace); err != nil {
 					return err
 				}
@@ -688,7 +687,7 @@ func (c *TuiCmd) Run() error {
 					}
 					tab := wsDownTab(row - u.corner.row)
 					if tab == u.cornerTab && time.Since(u.cornerClicked) < doubleClick {
-						u.cornerTab, u.msg = "", herdrFocusTab(tab)
+						u.cornerTab, u.msg = "", goToTab(tab)
 					} else {
 						u.cornerTab, u.cornerClicked = tab, time.Now()
 					}
@@ -1707,7 +1706,7 @@ func (u *ui) frame() ([]string, error) {
 	switch h := u.body[u.head-1]; {
 	case u.ws && strings.Contains(h, "AGENT"):
 		dots = screenWidth(h[:strings.Index(h, "AGENT")])
-	case !u.ws && !u.ps && underHerdr():
+	case !u.ws && !u.ps && mx().inside():
 		dots = 0
 	}
 	for i, line := range lines[u.head:] {
@@ -3056,7 +3055,7 @@ func psActions(sel listRow) []action {
 // down to the worktrees with an agent in them, so the key says it brings the
 // rest back.
 func actions(sel listRow, searching, global, agents bool) []action {
-	herdr := underHerdr()
+	herdr := mx().inside()
 	as := []action{{"q", "quit"}, {"p", "pull"}, {"g", "git"}, {"/", "search"}, {"l", "log"}, {"a", "agents"}}
 	if agents {
 		as[len(as)-1].label = "all"
@@ -3373,12 +3372,6 @@ func urlPath(url string) string {
 	return strings.TrimSuffix(path, ".git")
 }
 
-// underHerdr reports whether the tui is running inside a herdr pane — herdr
-// exports HERDR_ENV into every pane it spawns. Outside one there is no session
-// for `herdr worktree open` to put a workspace in, so the actions that call it
-// are hidden and their keys ignored rather than left to fail on every press.
-func underHerdr() bool { return os.Getenv("HERDR_ENV") != "" }
-
 // newWorktree is the herdr plugin's new-worktree action from the inside: create
 // a worktree of the selected row's project, open it. --force-create in spirit,
 // since the tui is usually run from inside the repo and sometimes from inside a
@@ -3400,7 +3393,7 @@ func (u *ui) newWorktreePath() (string, string) {
 	if err != nil {
 		return "", "new failed: " + err.Error()
 	}
-	return path, herdrOpen(path, filepath.Base(path))
+	return path, openWorkspace(path, filepath.Base(path))
 }
 
 // newWorkspace is `x` with the workspace's own tui already running in it: the
@@ -3417,7 +3410,7 @@ func (u *ui) newWorkspace() string {
 	if path == "" {
 		return msg
 	}
-	pane, _ := herdrPane(path)
+	pane, _ := mx().paneAt(path)
 	if pane == "" {
 		return msg
 	}
@@ -3436,7 +3429,7 @@ func runWs(pane, prompt, title string) error {
 	if err != nil {
 		return err
 	}
-	argv := []string{"pane", "run", pane, exe, "ws"}
+	argv := []string{exe, "ws"}
 	if prompt != "" {
 		arg, err := promptArg(prompt)
 		if err != nil {
@@ -3444,14 +3437,15 @@ func runWs(pane, prompt, title string) error {
 		}
 		argv = append(argv, "--prompt="+arg, "--title="+shellQuote(title))
 	}
-	if out, err := exec.Command(herdrBin(), argv...).CombinedOutput(); err != nil {
-		return errors.New("`ccwt ws` did not start: " + lastLine(out, err))
+	m := mx()
+	if err := m.run(pane, argv...); err != nil {
+		return errors.New("`ccwt ws` did not start: " + err.Error())
 	}
 	// "ws", since an unlabelled tab is named after what runs in it and that
 	// reads as the shell the tui happens to sit in. Best effort: a tab with the
 	// wrong name is still the workspace's tui.
-	if tab, err := herdrPaneTab(pane); err == nil {
-		_ = exec.Command(herdrBin(), "tab", "rename", tab, "ws").Run()
+	if tab, err := m.paneTab(pane); err == nil {
+		_ = m.renameTab(tab, "ws")
 	}
 	return nil
 }
@@ -3482,10 +3476,10 @@ func (u *ui) startPending() string {
 	if err != nil {
 		return "start failed: " + err.Error()
 	}
-	msg := herdrOpen(path, filepath.Base(path))
-	pane, _ := herdrPane(path)
+	msg := openWorkspace(path, filepath.Base(path))
+	pane, _ := mx().paneAt(path)
 	if pane == "" {
-		return msg // no pane to run in: whatever herdrOpen said went wrong
+		return msg // no pane to run in: whatever openWorkspace said went wrong
 	}
 	// Not started here: the workspace's tui opens on the seed prompt with this
 	// one typed into it, for a line more and an effort before ↵ runs it.
@@ -3557,393 +3551,23 @@ func promptArg(prompt string) (string, error) {
 	return `"$(cat ` + shellQuote(f.Name()) + `)"`, nil
 }
 
-// herdrPane is the pane sitting in the worktree at path, which after a
-// `worktree open` is the one it just made — where `ccwt ws` is to run — and the
-// workspace it is in, which is where a queued prompt's tab goes. "" when herdr
-// hasn't got one, which is the same answer as an open that failed, and is
-// handled as one.
-//
-// Retried for a second, since the pane is spawned by the open we have just
-// returned from and takes a moment to show up in the list: giving up on the
-// first look would drop the prompt on the floor on a loaded machine.
-func herdrPane(path string) (pane, ws string) {
-	for wait := 50 * time.Millisecond; ; wait *= 2 {
-		out, err := exec.Command(herdrBin(), "pane", "list").Output()
-		if err == nil {
-			var resp struct {
-				Result struct {
-					Panes []struct {
-						ID        string `json:"pane_id"`
-						Cwd       string `json:"cwd"`
-						Workspace string `json:"workspace_id"`
-					} `json:"panes"`
-				} `json:"result"`
-			}
-			if err := json.Unmarshal(out, &resp); err == nil {
-				for _, p := range resp.Result.Panes {
-					if p.Cwd == path {
-						return p.ID, p.Workspace
-					}
-				}
-			}
-		}
-		if wait > time.Second {
-			return "", ""
-		}
-		time.Sleep(wait)
-	}
-}
-
-// herdrOpen opens the worktree at path as its own herdr workspace, the same way
-// the herdr plugin's new-worktree action does — including handing it the
-// enclosing repo root as --cwd, since herdr refuses to spawn a workspace from
-// inside a linked worktree.
+// openWorkspace opens the worktree at path as its own workspace, and says how
+// that went for the bar.
 //
 // label names the workspace, and belongs only to the call that brings it into
 // existence: herdr shows a worktree workspace under its repo by branch, so
 // without one the sidebar reads "worktree-<name>" (or whatever branch_prefix
-// says) instead of <name>. On a reopen it is "" — a --label there would pin a
+// says) instead of <name>. On a reopen it is "" — a name there would pin a
 // custom name over whatever the user had renamed the workspace to since.
-func herdrOpen(path, label string) string {
+func openWorkspace(path, label string) string {
 	root, ok := gitutil.ClaudeWorktreeRepoRoot(path)
 	if !ok {
 		return "open failed: " + path + " is not a Claude Code worktree"
 	}
-	args := []string{"worktree", "open", "--cwd", root, "--path", path, "--focus"}
-	if label != "" {
-		args = append(args, "--label", label)
-	}
-	out, err := exec.Command(herdrBin(), args...).CombinedOutput()
-	if err != nil {
-		return "open failed: " + lastLine(out, err)
+	if err := mx().openWorktree(root, path, label); err != nil {
+		return "open failed: " + err.Error()
 	}
 	return "opened " + filepath.Base(path)
-}
-
-// herdrBin is the herdr to talk to: plugin actions are handed one in
-// HERDR_BIN_PATH, everyone else has it on PATH.
-func herdrBin() string {
-	if bin := os.Getenv("HERDR_BIN_PATH"); bin != "" {
-		return bin
-	}
-	return "herdr"
-}
-
-// herdrAsk puts one request to herdr and returns what `herdr <args>` would have
-// printed for it: the socket's own {"id":…,"result":…} line, since the cli is a
-// client of that socket that prints what it hears back. Under herdr the request
-// goes over the socket itself, which herdr names in HERDR_SOCKET_PATH for every
-// pane it starts: a tui in each workspace, re-reading its tabs every couple of
-// seconds, is otherwise a herdr process started for every one of those
-// questions, and a ping on the socket ahead of each. Anywhere else it is the
-// cli, which finds a running herdr without being told where.
-//
-// method and params are the socket's words for the request, args the cli's.
-func herdrAsk(method string, params map[string]any, args ...string) ([]byte, error) {
-	sock := os.Getenv("HERDR_SOCKET_PATH")
-	if sock == "" {
-		return exec.Command(herdrBin(), args...).Output()
-	}
-	c, err := net.Dial("unix", sock)
-	if err != nil {
-		return nil, err
-	}
-	defer c.Close()
-	// A request with nothing in it still sends an object, which herdr insists
-	// on: v2 writes a nil map as {} where v1 wrote null.
-	req, err := jsonv2.Marshal(map[string]any{"id": "ccwt", "method": method, "params": params})
-	if err != nil {
-		return nil, err
-	}
-	if _, err := c.Write(append(req, '\n')); err != nil {
-		return nil, err
-	}
-	out, err := bufio.NewReader(c).ReadBytes('\n')
-	if err != nil {
-		return nil, err
-	}
-	// A refusal comes back as a line too, which the cli turns into its exit
-	// status: this is where it stops passing for an answer.
-	var resp struct {
-		Error *struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if jsonv2.Unmarshal(out, &resp) == nil && resp.Error != nil {
-		return nil, errors.New(resp.Error.Message)
-	}
-	return out, nil
-}
-
-// herdrListen holds a subscription to herdr's events of these types open over
-// the socket for as long as ctx lasts, and pokes each time a line comes down
-// it that keep, when there is one, keeps: the answer that says the subscription
-// has started — whatever happened before it went unheard, so that is worth a
-// look too — and then one per event. A poke already waiting stands for the ones after it: whoever is
-// listening looks again, and one look sees all of them.
-//
-// Herdr going away — a restart, `herdr update --handoff` — ends the
-// connection, and it is made again every couple of seconds until herdr is back.
-// A pause ends it too, a subscription being something herdr keeps up for us,
-// and it is made again within a couple of seconds of `ccwt unpause`.
-func herdrListen(ctx context.Context, poke chan<- struct{}, keep func(line []byte) bool, types ...string) {
-	subs := make([]map[string]any, len(types))
-	for i, t := range types {
-		subs[i] = map[string]any{"type": t}
-	}
-	req, _ := jsonv2.Marshal(map[string]any{"id": "ccwt", "method": "events.subscribe", "params": map[string]any{"subscriptions": subs}})
-	for ctx.Err() == nil {
-		if !herdrPaused() {
-			herdrHear(ctx, req, poke, keep)
-		}
-		select {
-		case <-ctx.Done():
-		case <-time.After(2 * time.Second):
-		}
-	}
-}
-
-// herdrHear is one connection's worth of herdrListen: the subscription req
-// made, and a poke for every line down it keep keeps, until herdr hangs up, ctx
-// ends or ccwt is paused.
-func herdrHear(ctx context.Context, req []byte, poke chan<- struct{}, keep func([]byte) bool) {
-	c, err := (&net.Dialer{}).DialContext(ctx, "unix", os.Getenv("HERDR_SOCKET_PATH"))
-	if err != nil {
-		return
-	}
-	defer c.Close()
-	defer context.AfterFunc(ctx, func() { c.Close() })()
-	if _, err := c.Write(append(req, '\n')); err != nil {
-		return
-	}
-	for r := bufio.NewReader(c); ; {
-		// A read waiting on herdr's next event comes back every couple of
-		// seconds to see whether ccwt has been paused meanwhile.
-		_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
-		line, err := r.ReadBytes('\n')
-		if errors.Is(err, os.ErrDeadlineExceeded) && !herdrPaused() {
-			continue
-		}
-		if err != nil {
-			return
-		}
-		if keep != nil && !keep(line) {
-			continue
-		}
-		select {
-		case poke <- struct{}{}:
-		default:
-		}
-	}
-}
-
-// herdrAgent is one agent as `herdr agent list` has it: where it is — its pane,
-// tab and workspace, the pane's cwd and its own — what it is doing, herdr's
-// counter for when that last changed, and whether its pane is the one you are
-// in, herdr-wide.
-type herdrAgent struct {
-	Status     string `json:"agent_status"`
-	Seq        int64  `json:"state_change_seq"`
-	Cwd        string `json:"cwd"`
-	Foreground string `json:"foreground_cwd"`
-	Workspace  string `json:"workspace_id"`
-	Tab        string `json:"tab_id"`
-	Pane       string `json:"pane_id"`
-	Focused    bool   `json:"focused"`
-}
-
-// herdrAgents is every agent herdr has, in every workspace: `agent list` takes
-// no workspace to narrow it to. No herdr, or none running, or one that won't
-// say, is no agents. ask is herdrAsk where an action rests on the answer — a
-// removal must not go by one a pause has left standing — and herdrPoll where a
-// view only shows it.
-//
-// ponytail: package var so tests can fake the herdr answer.
-var herdrAgents = func(ask herdrAsker) []herdrAgent {
-	var resp struct {
-		Result struct {
-			Agents []herdrAgent `json:"agents"`
-		} `json:"result"`
-	}
-	if out, err := ask("agent.list", nil, "agent", "list"); err == nil {
-		_ = json.Unmarshal(out, &resp)
-	}
-	return resp.Result.Agents
-}
-
-// herdrBusy is the set of cwds herdr has an agent mid-task in: "working", or
-// "blocked" on a question it is waiting for an answer to. Both mean live work
-// that no git check can see — a branch made a minute ago, nothing committed to
-// it yet, looks pristine right up until the removal pulls the floor out from
-// under the agent. Asking herdr rather than the agent means it holds for
-// whatever herdr is running there, not just Claude Code.
-//
-// Our own tab doesn't count: when the agent itself runs `ccwt done`, it is the
-// working agent, and counting it would leave it unable to clean up after
-// itself. The tab rather than the whole workspace, because a workspace can hold
-// several — `ccwt ws` is a tui in one tab of a workspace with agents in the
-// others — and an agent working a tab along is precisely what a removal must
-// not pull the floor out from under. For a worktree open as its own single-tab
-// workspace the two are the same thing. A pane whose environment names no tab
-// falls back to the workspace. No herdr, or none running, is nobody working.
-func herdrBusy(agents []herdrAgent) map[string]bool {
-	busy := map[string]bool{}
-	// A tab id ("w1:t2") is never a workspace id ("w1"), so one comparison does
-	// for whichever of the two we were handed.
-	self := cmp.Or(os.Getenv("HERDR_TAB_ID"), os.Getenv("HERDR_WORKSPACE_ID"))
-	for _, a := range agents {
-		if a.Status != "working" && a.Status != "blocked" {
-			continue
-		}
-		if self != "" && (a.Tab == self || a.Workspace == self) {
-			continue
-		}
-		// Both cwds: an agent started at the repo root and cd'd into a worktree
-		// is only in the pane's cwd as the foreground process's.
-		busy[a.Cwd], busy[a.Foreground] = true, true
-	}
-	delete(busy, "")
-	return busy
-}
-
-// herdrWorkspaces are the ids of the workspaces herdr has open on the worktree
-// at path — usually one, none for a worktree nobody is sitting in. Closing one
-// is what ends the agent living in it, which is what has to happen before the
-// directory it sits in disappears.
-//
-// ponytail: package var so tests can fake the herdr answer.
-var herdrWorkspaces = func(root, path string) ([]string, error) {
-	out, err := exec.Command(herdrBin(), "worktree", "list", "--cwd", root).Output()
-	if err != nil {
-		return nil, fmt.Errorf("herdr worktree list: %w", err)
-	}
-	var resp struct {
-		Result struct {
-			Worktrees []struct {
-				Path      string `json:"path"`
-				Workspace string `json:"open_workspace_id"`
-			} `json:"worktrees"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal(out, &resp); err != nil {
-		return nil, fmt.Errorf("herdr worktree list: %w", err)
-	}
-	var ids []string
-	for _, wt := range resp.Result.Worktrees {
-		if wt.Path == path && wt.Workspace != "" {
-			ids = append(ids, wt.Workspace)
-		}
-	}
-	return ids, nil
-}
-
-// herdrLabels is what herdr calls the workspaces it has open on worktrees,
-// keyed by the worktree's path: the name in its sidebar, which starts out as
-// the worktree's own and is usually renamed to what the work is. No herdr, or
-// none running, is no names.
-//
-// order is where each sits in that sidebar, keyed by the same paths, and by
-// each repo's root too: the place of the repo's first workspace, main checkout
-// or not, which is where its section goes under -g.
-//
-// seps are the places in it of the workspaces named "------…": nothing's
-// workspace, only a divider in the sidebar, which the list draws too.
-//
-// ponytail: package var so tests can fake the herdr answer.
-var herdrLabels = func() (labels map[string]string, order map[string]int, seps []int) {
-	out, err := herdrPoll("workspace.list", nil, "workspace", "list")
-	if err != nil {
-		return nil, nil, nil
-	}
-	var resp struct {
-		Result struct {
-			Workspaces []struct {
-				Label    string `json:"label"`
-				Worktree struct {
-					Path string `json:"checkout_path"`
-					Repo string `json:"repo_root"`
-				} `json:"worktree"`
-			} `json:"workspaces"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal(out, &resp); err != nil {
-		return nil, nil, nil
-	}
-	labels, order = map[string]string{}, map[string]int{}
-	for i, w := range resp.Result.Workspaces {
-		if strings.HasPrefix(w.Label, herdrSep) {
-			seps = append(seps, i)
-			continue
-		}
-		labels[w.Worktree.Path] = w.Label
-		for _, p := range []string{w.Worktree.Path, w.Worktree.Repo} {
-			if _, ok := order[p]; !ok && p != "" {
-				order[p] = i
-			}
-		}
-	}
-	return labels, order, seps
-}
-
-// herdrSep is what the name of a workspace that is only a divider starts with.
-const herdrSep = "------"
-
-// herdrFirst puts what herdr has a place for ahead of what it hasn't, in
-// herdr's order, and says nothing about two paths it has no place for.
-func herdrFirst(order map[string]int, a, b string) int {
-	i, aok := order[a]
-	j, bok := order[b]
-	switch {
-	case aok && bok:
-		return cmp.Compare(i, j)
-	case aok:
-		return -1
-	case bok:
-		return 1
-	}
-	return 0
-}
-
-// herdrCloseWS closes one workspace. Closing our own kills this process, so
-// callers leave that one for last.
-//
-// ponytail: package var so tests can fake the herdr answer.
-var herdrCloseWS = func(id string) error {
-	if out, err := exec.Command(herdrBin(), "workspace", "close", id).CombinedOutput(); err != nil {
-		return fmt.Errorf("herdr workspace close %s: %s", id, lastLine(out, err))
-	}
-	return nil
-}
-
-// herdrFocused reports whether the workspace with this id is the one herdr has
-// focused — the one on screen. A herdr that can't say is no, which leaves the
-// focus alone: the only caller moves it, and moving it on a guess is what there
-// is to avoid.
-func herdrFocused(id string) bool {
-	out, err := exec.Command(herdrBin(), "workspace", "get", id).Output()
-	if err != nil {
-		return false
-	}
-	var resp struct {
-		Result struct {
-			Workspace struct {
-				Focused bool `json:"focused"`
-			} `json:"workspace"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal(out, &resp); err != nil {
-		return false
-	}
-	return resp.Result.Workspace.Focused
-}
-
-// herdrFocusWS focuses one workspace, which is how the removal of the workspace
-// we're standing in says where to land afterwards.
-func herdrFocusWS(id string) error {
-	if out, err := exec.Command(herdrBin(), "workspace", "focus", id).CombinedOutput(); err != nil {
-		return fmt.Errorf("herdr workspace focus %s: %s", id, lastLine(out, err))
-	}
-	return nil
 }
 
 // removeWorktree is `ccwt remove <name>` against the worktree's own project,
@@ -4010,7 +3634,7 @@ func paint(w io.Writer, lines []string) {
 	// Kitty images stay put when the text under them is written over, so the
 	// last frame's dividers go before this one's are placed. Under herdr only,
 	// which is the only place there are any.
-	if underHerdr() {
+	if mx().inside() {
 		io.WriteString(w, kittyClear)
 	}
 	for i, line := range lines {

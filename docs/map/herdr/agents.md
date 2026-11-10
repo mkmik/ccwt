@@ -4,7 +4,7 @@ summary = "What herdr says about the agents in each pane"
 kind = "bridge"
 intent = "induced"
 research = "done"
-refs = ["ws.go", "tui.go"]
+refs = ["herdr.go", "ws.go"]
 
 [[feature]]
 id = "working"

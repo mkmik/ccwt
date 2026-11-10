@@ -263,10 +263,10 @@ func emitOSC7(path string) {
 // so what a view offers and what the removal does can't drift apart.
 //
 // Asked of git and herdr directly, never of the tui's caches: a refusal to
-// delete unsaved work must not read a stale answer. ask is how herdr is asked:
-// herdrAsk by the removal, herdrPoll by the view, whose stale yes while ccwt is
-// paused costs a refusal message, never a removal.
-func removeBlocked(root, name string, keepBranch bool, ask herdrAsker) error {
+// delete unsaved work must not read a stale answer. poll is for the view, whose
+// stale yes while ccwt is paused costs a refusal message, never a removal; the
+// removal itself asks.
+func removeBlocked(root, name string, keepBranch, poll bool) error {
 	worktreePath := filepath.Join(root, ".claude", "worktrees", name)
 	branch, err := worktreeBranch(root, name)
 	if err != nil {
@@ -292,7 +292,7 @@ func removeBlocked(root, name string, keepBranch bool, ask herdrAsker) error {
 	// the only one git can't see: a branch it made a minute ago and hasn't
 	// committed to is both merged and clean. Removing it closes the workspace
 	// out from under the agent, so ask first — the same way out as the others.
-	if activeIn(worktreePath, herdrBusy(herdrAgents(ask))) {
+	if activeIn(worktreePath, busyCwds(mx().agents(poll))) {
 		return fmt.Errorf("%s has an agent working in it: let it finish, or re-run with -D to remove it anyway", name)
 	}
 	return nil
@@ -318,7 +318,7 @@ type RemoveCmd struct {
 	Name       string `arg:"" help:"Worktree name to remove. Use \".\" for the worktree you're currently in."`
 	Force      bool   `short:"D" help:"Remove anyway: delete the branch even when it is not merged, and the worktree even when it has uncommitted changes."`
 	KeepBranch bool   `help:"Remove the worktree but keep its branch."`
-	Yes        bool   `short:"y" help:"Close the worktree's herdr workspace without asking for confirmation."`
+	Yes        bool   `short:"y" help:"Close the worktree's workspace (herdr's, or dennet's in a den) without asking for confirmation."`
 }
 
 func (c *RemoveCmd) Run() error {
@@ -351,7 +351,7 @@ func (c *RemoveCmd) remove(root string) error {
 	}
 
 	if !c.Force {
-		if err := removeBlocked(root, name, c.KeepBranch, herdrAsk); err != nil {
+		if err := removeBlocked(root, name, c.KeepBranch, false); err != nil {
 			return err
 		}
 	}
@@ -361,23 +361,24 @@ func (c *RemoveCmd) remove(root string) error {
 	// workspace you can see is a bigger surprise than losing a directory, so a
 	// terminal gets asked first.
 	var self string
-	if underHerdr() {
-		ws, err := herdrWorkspaces(root, worktreePath)
+	m := mx()
+	if m.inside() {
+		ws, err := m.worktreeWorkspaces(root, worktreePath)
 		if err != nil {
 			return err
 		}
-		if len(ws) > 0 && !c.Yes && !confirmTTY(fmt.Sprintf("remove %s and close its herdr workspace?", name)) {
+		if len(ws) > 0 && !c.Yes && !confirmTTY(fmt.Sprintf("remove %s and close its workspace?", name)) {
 			return nil
 		}
 		// Ours goes last of all: closing it kills this process, so it has to
 		// outlive the removal itself.
-		me := os.Getenv("HERDR_WORKSPACE_ID")
+		me, _ := m.here()
 		for _, id := range ws {
 			if id == me {
 				self = id
 				continue
 			}
-			if err := herdrCloseWS(id); err != nil {
+			if err := m.closeWorkspace(id); err != nil {
 				return err
 			}
 		}
@@ -446,12 +447,12 @@ func (c *RemoveCmd) remove(root string) error {
 		//
 		// ponytail: a focus that fails is cosmetic, and not worth abandoning the
 		// close that `remove` was actually asked for.
-		if herdrFocused(self) {
-			if ws, err := herdrWorkspaces(root, root); err == nil && len(ws) > 0 {
-				_ = herdrFocusWS(ws[0])
+		if m.focused(self) {
+			if ws, err := m.worktreeWorkspaces(root, root); err == nil && len(ws) > 0 {
+				_ = m.focusWorkspace(ws[0])
 			}
 		}
-		return herdrCloseWS(self)
+		return m.closeWorkspace(self)
 	}
 	return nil
 }
@@ -559,7 +560,7 @@ func (c *GcCmd) Run() error {
 // this too, so both agree on what "done with" means.
 func gcNames(root string) (names []string, kept string, err error) {
 	active := claudeCwds()
-	maps.Copy(active, herdrBusy(herdrAgents(herdrAsk)))
+	maps.Copy(active, busyCwds(mx().agents(false)))
 	names, err = gcCandidates(root, active)
 	if err != nil {
 		return nil, "", err
@@ -823,14 +824,15 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 		wg.Go(func() { cur, _, _ = gitutil.CurrentClaudeWorktree() })
 	}
 	// Needed by the second round rather than after it, so it goes in the first.
-	var herdr []herdrAgent
+	var herdr []muxAgent
 	var labels map[string]string
 	var herdrOrder map[string]int
 	var herdrSeps []int
 	if tty {
-		wg.Go(func() { herdr = herdrAgents(herdrPoll) })
-		if underHerdr() {
-			wg.Go(func() { labels, herdrOrder, herdrSeps = herdrLabels() })
+		m := mx()
+		wg.Go(func() { herdr = m.agents(true) })
+		if m.inside() {
+			wg.Go(func() { labels, herdrOrder, herdrSeps = m.sidebar() })
 		}
 	}
 	for i, dir := range projects {
@@ -857,7 +859,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	if err := errors.Join(errs...); err != nil {
 		return nil, nil, err
 	}
-	busy := herdrBusy(herdr)
+	busy := busyCwds(herdr)
 
 	// One flat list of worktrees, each still knowing which project it came from.
 	type ref struct {
@@ -966,7 +968,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	}
 	if agents {
 		rows = slices.DeleteFunc(rows, func(r row) bool {
-			return r.claude != "yes" && !slices.ContainsFunc(herdr, func(a herdrAgent) bool {
+			return r.claude != "yes" && !slices.ContainsFunc(herdr, func(a muxAgent) bool {
 				return under(a.Cwd, r.path) || under(a.Foreground, r.path)
 			})
 		})
@@ -979,7 +981,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	// open in a workspace go first and in its sidebar's order, so the list reads
 	// the way the sidebar does; the rest follow, newest first.
 	slices.SortStableFunc(rows, func(a, b row) int {
-		return cmp.Or(herdrFirst(herdrOrder, a.path, b.path), b.sortTime.Compare(a.sortTime))
+		return cmp.Or(sidebarFirst(herdrOrder, a.path, b.path), b.sortTime.Compare(a.sortTime))
 	})
 
 	gutter := ""
@@ -992,7 +994,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 	// been read from one round to the next.
 	var dot func(path string) string
 	strip := ""
-	if dots && underHerdr() {
+	if dots && mx().inside() {
 		dot, strip = agentDots(herdr), gutter
 	}
 	// Everything above builds the whole row; pick is where the hidden columns
@@ -1148,7 +1150,7 @@ func renderList(out io.Writer, tty bool, width int, projects []string, collapsed
 		// sections and all, which is the project "" in shown.
 		var sections []string
 		for _, root := range slices.SortedStableFunc(slices.Values(roots), func(a, b string) int {
-			return herdrFirst(herdrOrder, a, b)
+			return sidebarFirst(herdrOrder, a, b)
 		}) {
 			if root != "" && !slices.Contains(sections, root) {
 				sections = append(sections, root)
@@ -2090,32 +2092,18 @@ type NavWsCmd struct {
 // worktree ("frolicking-tumbling-duckling") and is usually renamed to what the
 // work is ("mTLS subresource"), and either is a thing you'd type.
 //
-// ponytail: herdr only, a workspace being a herdr thing. `nav ps` is the half
-// that spans multiplexers.
+// A workspace is the mux's, so this asks it, where `nav ps` is the half that
+// spans multiplexers.
 func (c *NavWsCmd) Run() error {
-	out, err := exec.Command(herdrBin(), "workspace", "list").Output()
+	m := mx()
+	all, err := m.workspaces()
 	if err != nil {
-		return fmt.Errorf("herdr workspace list: %w", err)
-	}
-	var resp struct {
-		Result struct {
-			Workspaces []struct {
-				ID       string `json:"workspace_id"`
-				Label    string `json:"label"`
-				Tab      string `json:"active_tab_id"`
-				Worktree struct {
-					Path string `json:"checkout_path"`
-				} `json:"worktree"`
-			} `json:"workspaces"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal(out, &resp); err != nil {
-		return fmt.Errorf("herdr workspace list: %w", err)
+		return err
 	}
 	var best, bestLabel, bestTab string
 	bestScore := 0
-	for _, w := range resp.Result.Workspaces {
-		for _, name := range []string{w.Label, filepath.Base(w.Worktree.Path)} {
+	for _, w := range all {
+		for _, name := range []string{w.Label, filepath.Base(w.Path)} {
 			if name == "" || name == "." { // a workspace holding no worktree
 				continue
 			}
@@ -2130,14 +2118,14 @@ func (c *NavWsCmd) Run() error {
 	if c.DryRun {
 		// The tab the workspace is on: focusing a workspace lands you in it,
 		// so it is what the pane half of nav would have printed too.
-		where, err := herdrPlace(bestTab)
+		where, err := m.place(bestTab)
 		if err != nil {
 			return err
 		}
 		where.print()
 		return nil
 	}
-	if err := herdrFocusWS(best); err != nil {
+	if err := m.focusWorkspace(best); err != nil {
 		return err
 	}
 	fmt.Println(best, bestLabel)
@@ -2285,90 +2273,6 @@ func processEnv(pid int) []string {
 		return nil
 	}
 	return strings.Fields(string(out))
-}
-
-// herdrFocusPane goes to one pane. `agent focus` is the only thing herdr
-// focuses a pane itself by, so a pane running no agent is reached through its
-// tab instead — which lands on the tab's own focused pane, close enough when
-// the tab is split and exact when it isn't.
-func herdrFocusPane(pane string) error {
-	if err := exec.Command(herdrBin(), "agent", "focus", pane).Run(); err == nil {
-		return nil
-	}
-	tab, err := herdrPaneTab(pane)
-	if err != nil {
-		return err
-	}
-	if out, err := exec.Command(herdrBin(), "tab", "focus", tab).CombinedOutput(); err != nil {
-		return fmt.Errorf("herdr tab focus %s: %s", tab, lastLine(out, err))
-	}
-	return nil
-}
-
-// herdrPaneTab is the tab a pane sits in, which is what herdr can be told to
-// go to.
-func herdrPaneTab(pane string) (string, error) {
-	out, err := exec.Command(herdrBin(), "pane", "get", pane).Output()
-	if err != nil {
-		return "", fmt.Errorf("herdr pane get %s: %w", pane, err)
-	}
-	var resp struct {
-		Result struct {
-			Pane struct {
-				Tab string `json:"tab_id"`
-			} `json:"pane"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal(out, &resp); err != nil || resp.Result.Pane.Tab == "" {
-		return "", fmt.Errorf("herdr pane get %s: no tab in the answer", pane)
-	}
-	return resp.Result.Pane.Tab, nil
-}
-
-// herdrWherePane is a pane's place, for --dry-run: its tab's, the tab being
-// where going there lands you.
-func herdrWherePane(pane string) (place, error) {
-	tab, err := herdrPaneTab(pane)
-	if err != nil {
-		return place{}, err
-	}
-	return herdrPlace(tab)
-}
-
-// herdrPlace is a tab's place: the name of the workspace it is in, its own
-// name, and its id — the address `herdr tab focus` takes. Names, not ids, are
-// what a dry run is read for; the id is there to be pasted into herdr.
-func herdrPlace(tab string) (place, error) {
-	var tabResp struct {
-		Result struct {
-			Tab struct {
-				Label     string `json:"label"`
-				Workspace string `json:"workspace_id"`
-			} `json:"tab"`
-		} `json:"result"`
-	}
-	out, err := exec.Command(herdrBin(), "tab", "get", tab).Output()
-	if err != nil {
-		return place{}, fmt.Errorf("herdr tab get %s: %w", tab, err)
-	}
-	if err := json.Unmarshal(out, &tabResp); err != nil {
-		return place{}, fmt.Errorf("herdr tab get %s: %w", tab, err)
-	}
-	var wsResp struct {
-		Result struct {
-			Workspace struct {
-				Label string `json:"label"`
-			} `json:"workspace"`
-		} `json:"result"`
-	}
-	out, err = exec.Command(herdrBin(), "workspace", "get", tabResp.Result.Tab.Workspace).Output()
-	if err != nil {
-		return place{}, fmt.Errorf("herdr workspace get %s: %w", tabResp.Result.Tab.Workspace, err)
-	}
-	if err := json.Unmarshal(out, &wsResp); err != nil {
-		return place{}, fmt.Errorf("herdr workspace get %s: %w", tabResp.Result.Tab.Workspace, err)
-	}
-	return place{wsResp.Result.Workspace.Label, tabResp.Result.Tab.Label, tab}, nil
 }
 
 var cli struct {

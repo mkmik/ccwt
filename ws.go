@@ -1,9 +1,7 @@
 package main
 
 import (
-	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -33,8 +31,8 @@ type WsCmd struct {
 }
 
 func (c *WsCmd) Run() error {
-	if !underHerdr() {
-		return errors.New("ws runs in a herdr workspace, and this isn't one (no HERDR_ENV)")
+	if !mx().inside() {
+		return errors.New("ws runs in a herdr workspace or a den, and this is neither (no HERDR_ENV or DEN_SOCKET)")
 	}
 	// The prompt is for the box this run opens on, and no other: a restart (see
 	// reexec) runs the tui again on its arguments, by when that box has been
@@ -68,90 +66,6 @@ type wsTab struct {
 	Cwd, Title        string
 	Focused           bool  // the one tab the user is looking at, herdr-wide
 	Seq               int64 // herdr's state counter for the agent the dot is about
-}
-
-// herdrTabs is the workspace's tabs in the order herdr lists them, which is
-// the order they sit in along the tab bar: tabs can be dragged about, and a
-// tab's `number` is the one it was born with rather than the place it now
-// holds, so the list's own order is the only thing that says where a tab is.
-// The three lists are asked for separately because that is how herdr keeps
-// them: a tab has a label and a place in the bar, a pane has a cwd and a
-// title, and an agent has a status and the counter that says when it last
-// changed.
-func herdrTabs() ([]wsTab, error) {
-	ws := os.Getenv("HERDR_WORKSPACE_ID")
-	scope := map[string]any{"workspace_id": ws}
-	out, err := herdrPoll("tab.list", scope, "tab", "list", "--workspace", ws)
-	if err != nil {
-		return nil, fmt.Errorf("herdr tab list: %w", err)
-	}
-	var tabs struct {
-		Result struct {
-			Tabs []struct {
-				ID      string `json:"tab_id"`
-				Label   string `json:"label"`
-				Status  string `json:"agent_status"`
-				Focused bool   `json:"focused"`
-			} `json:"tabs"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal(out, &tabs); err != nil {
-		return nil, fmt.Errorf("herdr tab list: %w", err)
-	}
-	out, err = herdrPoll("pane.list", scope, "pane", "list", "--workspace", ws)
-	if err != nil {
-		return nil, fmt.Errorf("herdr pane list: %w", err)
-	}
-	var panes struct {
-		Result struct {
-			Panes []struct {
-				Tab   string `json:"tab_id"`
-				Cwd   string `json:"cwd"`
-				Title string `json:"terminal_title_stripped"`
-			} `json:"panes"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal(out, &panes); err != nil {
-		return nil, fmt.Errorf("herdr pane list: %w", err)
-	}
-	// Not scoped to the workspace: a tab id is herdr-wide, so the agents of
-	// other workspaces simply match no tab of ours.
-	//
-	// An answer that doesn't come is no answer rather than an error: the tabs
-	// and their panes are what the table is, and a herdr that won't say what
-	// its agents are up to costs the dots their state, not the view.
-	agents := herdrAgents(herdrPoll)
-	// ponytail: the first pane herdr lists for the tab stands for it — a split
-	// tab is two panes, and the table has one row to say what the tab is.
-	first := map[string]int{}
-	for i, p := range panes.Result.Panes {
-		if _, ok := first[p.Tab]; !ok {
-			first[p.Tab] = i
-		}
-	}
-	// The dot is the agents' rather than the first pane's: herdr keeps a status
-	// per agent, and which pane of a tab an agent happens to sit in is no
-	// reason for the tab to go quiet about it. A tab split between several
-	// shows whichever most wants you, and carries that one's counter.
-	loudest := map[string]wsTab{}
-	for _, a := range agents {
-		if wsRank(a.Status) > wsRank(loudest[a.Tab].Status) {
-			loudest[a.Tab] = wsTab{Status: a.Status, Seq: a.Seq}
-		}
-	}
-	var ts []wsTab
-	for _, t := range tabs.Result.Tabs {
-		// A tab with no agent in it has only herdr's own word to go on, which
-		// is what keeps a bare shell a bare shell.
-		ld := loudest[t.ID]
-		wt := wsTab{ID: t.ID, Label: t.Label, Status: cmp.Or(ld.Status, t.Status), Focused: t.Focused, Seq: ld.Seq}
-		if i, ok := first[t.ID]; ok {
-			wt.Cwd, wt.Title = panes.Result.Panes[i].Cwd, panes.Result.Panes[i].Title
-		}
-		ts = append(ts, wt)
-	}
-	wsAttention(ts)
-	return ts, nil
 }
 
 // wsRank is how much a state wants you, which is what settles the dot on a tab
@@ -247,7 +161,7 @@ func wsAttention(tabs []wsTab) {
 // agents and nothing else — so a tab read from a shell pane beside its agent
 // stays green until the agent's pane has had the focus. A herdr-wide `tab list`
 // would settle it, at a second round trip a round.
-func agentDots(agents []herdrAgent) func(path string) string {
+func agentDots(agents []muxAgent) func(path string) string {
 	looked := map[string]bool{} // a tab -> one of its agents has the focus
 	for _, a := range agents {
 		looked[a.Tab] = looked[a.Tab] || a.Focused
@@ -296,7 +210,7 @@ func wsTable(width int) ([]string, []listRow) {
 	cols := []column{{name: "TAB", cut: truncate, max: 30}, {name: "AGENT"}, {name: "DIR", cut: elide, max: 30}, {name: "TITLE", cut: truncate}}
 	table := [][]string{{"  TAB", "AGENT", "DIR", "TITLE"}}
 	var rows []listRow
-	self := os.Getenv("HERDR_TAB_ID")
+	_, self := mx().here()
 	for _, t := range tabs {
 		mark := "  "
 		if t.ID == self {
@@ -323,13 +237,26 @@ var wsTabsHeard struct {
 // while herdr is quiet.
 const wsTabsEvery = time.Minute
 
-// wsTabs is herdrTabs, through wsTabsHeard.
+// readTabs is the ws view's own workspace's tabs, as the mux has them and
+// wsAttention colours them.
+func readTabs() ([]wsTab, error) {
+	m := mx()
+	ws, _ := m.here()
+	tabs, err := m.tabs(ws)
+	if err != nil {
+		return nil, err
+	}
+	wsAttention(tabs)
+	return tabs, nil
+}
+
+// wsTabs is readTabs, through wsTabsHeard.
 func wsTabs() ([]wsTab, error) {
 	h := &wsTabsHeard
 	if h.on && !h.dirty && time.Since(h.at) < wsTabsEvery {
 		return h.tabs, nil
 	}
-	tabs, err := herdrTabs()
+	tabs, err := readTabs()
 	if err == nil {
 		h.tabs, h.at, h.dirty = tabs, time.Now(), false
 	}
@@ -444,20 +371,12 @@ const wsBadgeTTL = 5 * mrWindow
 // GitHub's merge queue), where the pipeline is the train's and nothing is on you
 // either way. The sidebar has no colour to say it with, so the shape does.
 //
-// herdr has no icon for a client to set, so it goes as display-only workspace
-// metadata under an `mr` token, which the spaces panel draws for whoever has
-// asked for it in their config:
-//
-//	[ui.sidebar.spaces]
-//	rows = [["state_icon", "workspace", "$mr"], ["branch", "git_status"]]
-//
-// Nothing tells herdr when this tui stops, so the badge always carries a ttl
-// and expires on its own rather than leaving a "✓" on a workspace that has long
-// since moved on. A lookup that failed reports nothing at all: glab being down
-// is no news about the merge request, and the badge standing another few
-// minutes says less than a wrong one would.
+// A lookup that failed reports nothing at all: glab being down is no news
+// about the merge request, and the badge standing another few minutes says
+// less than a wrong one would.
 func wsBadge(look *mrLook) {
-	ws := os.Getenv("HERDR_WORKSPACE_ID")
+	m := mx()
+	ws, _ := m.here()
 	if ws == "" || look == nil || look.err != nil {
 		return
 	}
@@ -482,17 +401,7 @@ func wsBadge(look *mrLook) {
 			}
 		}
 	}
-	// A workspace with nothing to say loses the token rather than keeping the
-	// last thing it said until the ttl runs out.
-	params := map[string]any{"workspace_id": ws, "source": "ccwt", "tokens": map[string]any{"mr": nil}}
-	token := []string{"--clear-token", "mr"}
-	if glyph != "" {
-		params["tokens"], params["ttl_ms"] = map[string]any{"mr": glyph}, wsBadgeTTL.Milliseconds()
-		token = []string{"--token", "mr=" + glyph, "--ttl-ms", fmt.Sprint(wsBadgeTTL.Milliseconds())}
-	}
-	// The workspace id goes ahead of the flags: herdr's parser takes a trailing
-	// one for the value of whatever option came last and refuses the lot.
-	_, _ = herdrPoll("workspace.report_metadata", params, append([]string{"workspace", "report-metadata", ws, "--source", "ccwt"}, token...)...)
+	m.badge(ws, glyph)
 }
 
 // mrSection is that answer as lines, laid out in the same columns `ccwt mr`
@@ -613,7 +522,7 @@ func wsRemovable() bool {
 			return false
 		}
 		root, err := gitutil.RepoRoot("", true)
-		return err == nil && removeBlocked(root, name, false, herdrPoll) == nil
+		return err == nil && removeBlocked(root, name, false, true) == nil
 	})
 }
 
@@ -639,7 +548,7 @@ func wsDone() string {
 // whatever else is there, with it and its title already typed in, so the effort
 // can be picked and a line added before anything runs.
 func (u *ui) askSeed(prompt, title string) {
-	if tabs, err := herdrTabs(); prompt != "" || err == nil && len(tabs) <= 1 {
+	if tabs, err := readTabs(); prompt != "" || err == nil && len(tabs) <= 1 {
 		u.entry, u.title = newEntry(listRow{}, prompt, 0), newEntry(listRow{}, title, 0)
 	}
 }
@@ -671,7 +580,7 @@ var titleSettle = time.Second
 // titleSettle, so a word typed is one rename and not one per letter. A title
 // cleared back to nothing leaves the last name standing.
 //
-// The workspace and the herdr are read now, not when the timer goes off: by
+// The workspace and the mux are read now, not when the timer goes off: by
 // then the environment may say something else, and a rename sent to the wrong
 // herdr renames somebody else's workspace.
 func (u *ui) renameSoon() {
@@ -679,12 +588,13 @@ func (u *ui) renameSoon() {
 		u.renaming.Stop()
 	}
 	name := strings.Join(strings.Fields(u.title.text), " ")
-	ws, bin := os.Getenv("HERDR_WORKSPACE_ID"), herdrBin()
+	m := mx()
+	ws, _ := m.here()
 	if !u.ws || ws == "" || name == "" {
 		return
 	}
 	u.renaming = time.AfterFunc(titleSettle, func() {
-		_ = exec.Command(bin, "workspace", "rename", ws, name).Run()
+		_ = m.renameWorkspace(ws, name)
 	})
 }
 
@@ -846,7 +756,8 @@ func (u *ui) startSeed() string {
 	if u.renaming != nil { // seed names the workspace itself
 		u.renaming.Stop()
 	}
-	if err := seed(os.Getenv("HERDR_WORKSPACE_ID"), cwd, u.modelName, u.effort, name, u.entry.expanded()); err != nil {
+	ws, _ := mx().here()
+	if err := seed(ws, cwd, u.modelName, u.effort, name, u.entry.expanded()); err != nil {
 		return "start failed: " + err.Error()
 	}
 	u.entry, u.title = entry{}, entry{}
@@ -907,25 +818,13 @@ func seed(ws, cwd, model, effort, name, prompt string) error {
 	if name != "" {
 		argv = append(argv, "--name", shellQuote(name))
 	}
-	out, err := exec.Command(herdrBin(), "tab", "create", "--workspace", ws,
-		"--cwd", cwd, "--no-focus").CombinedOutput()
+	m := mx()
+	_, pane, err := m.newTab(ws, cwd, "")
 	if err != nil {
-		return fmt.Errorf("herdr tab create: %s", lastLine(out, err))
-	}
-	var resp struct {
-		Result struct {
-			Pane struct {
-				ID string `json:"pane_id"`
-			} `json:"root_pane"`
-		} `json:"result"`
-	}
-	_ = json.Unmarshal(out, &resp)
-	pane := resp.Result.Pane.ID
-	if pane == "" {
-		return errors.New("no pane in the new tab to run the agent in")
+		return err
 	}
 	if name != "" {
-		_ = exec.Command(herdrBin(), "workspace", "rename", ws, name).Run()
+		_ = m.renameWorkspace(ws, name)
 	}
 	arg, err := promptArg(prompt)
 	if err != nil {
@@ -933,18 +832,18 @@ func seed(ws, cwd, model, effort, name, prompt string) error {
 	}
 	// `--` before it, or a prompt that opens on a dash — a list pasted in, say
 	// — is read by the cli as an option it doesn't know.
-	if out, err := exec.Command(herdrBin(), append([]string{"pane", "run", pane}, append(argv, "--", arg)...)...).CombinedOutput(); err != nil {
-		return fmt.Errorf("herdr pane run: %s", lastLine(out, err))
+	if err := m.run(pane, append(argv, "--", arg)...); err != nil {
+		return fmt.Errorf("herdr pane run: %w", err)
 	}
 	return nil
 }
 
-// herdrFocusTab goes to one tab, which is what `space` does on a row of the ws
+// goToTab goes to one tab, which is what `space` does on a row of the ws
 // view. It reports for the bar, and has nothing to say when it worked: you are
 // looking at the other tab by then.
-func herdrFocusTab(id string) string {
-	if out, err := exec.Command(herdrBin(), "tab", "focus", id).CombinedOutput(); err != nil {
-		return "herdr tab focus: " + lastLine(out, err)
+func goToTab(id string) string {
+	if err := mx().focusTab(id); err != nil {
+		return err.Error()
 	}
 	// Going there is reading it, and it counts from now rather than from the
 	// next round: a look and a step straight back is quicker than the poll.
@@ -981,52 +880,10 @@ func wsDownTab(i int) string {
 	return wsDown.tabs[i]
 }
 
-// wsDownEvents are what herdr says when the `ws` tabs, or the names of the
-// workspaces they are in, may have changed.
-var wsDownEvents = []string{"tab.created", "tab.renamed", "tab.closed", "workspace.renamed", "workspace.closed"}
-
-// wsEvents are what herdr says when what the ws view shows — the tabs, their
-// panes, the agents in them — may have changed. An agent's status comes as a
-// pane.updated: pane.agent_status_changed is one pane's, by its id, and herdr
-// refuses a subscription to it without one (herdr 0.9.5). Output in a pane
-// says nothing.
-var wsEvents = []string{
-	"tab.created", "tab.renamed", "tab.closed", "tab.moved", "tab.focused",
-	"pane.created", "pane.updated", "pane.closed", "pane.agent_detected",
-	"workspace.renamed",
-}
-
 // wsSettleHeard is how long the ws view waits after an event before it asks:
 // an agent at work rewrites its pane's title over and over, and a burst of
 // those is one change to read.
 const wsSettleHeard = 500 * time.Millisecond
-
-// wsHeard is which of herdr's events the ws view of workspace ws re-reads for:
-// anything in that workspace, and a tab taking the focus anywhere — which is
-// how one of ours loses it, with nothing said about ours (herdr 0.9.5). The
-// line saying the subscription has started counts, and so does a line that
-// doesn't say where it happened.
-func wsHeard(ws string) func(line []byte) bool {
-	return func(line []byte) bool {
-		var e struct {
-			Event string `json:"event"`
-			Data  struct {
-				Workspace string `json:"workspace_id"`
-				Tab       struct {
-					Workspace string `json:"workspace_id"`
-				} `json:"tab"`
-				Pane struct {
-					Workspace string `json:"workspace_id"`
-				} `json:"pane"`
-			} `json:"data"`
-		}
-		if json.Unmarshal(line, &e) != nil {
-			return true
-		}
-		w := cmp.Or(e.Data.Workspace, e.Data.Tab.Workspace, e.Data.Pane.Workspace)
-		return e.Event == "" || e.Event == "tab_focused" || w == "" || w == ws
-	}
-}
 
 // wsDownEvery is how often the list looks anyway. A ccwt that quits hands its
 // pane back to the shell, and herdr says nothing when a pane's foreground
@@ -1046,7 +903,7 @@ var wsSettle = 2 * time.Second
 func watchWsDown(ctx context.Context, roots []string, global, listen bool) {
 	poke := make(chan struct{}, 1)
 	if listen {
-		go herdrListen(ctx, poke, nil, wsDownEvents...)
+		go mx().listen(ctx, poke, "")
 	}
 	for {
 		select {
@@ -1063,14 +920,14 @@ func watchWsDown(ctx context.Context, roots []string, global, listen bool) {
 		if herdrPaused() {
 			continue // the box goes on saying what it said
 		}
-		names, tabs := herdrWsDown(roots, global)
+		names, tabs := findWsDown(roots, global)
 		wsDown.Lock()
 		wsDown.names, wsDown.tabs, wsDown.global = names, tabs, global
 		wsDown.Unlock()
 	}
 }
 
-// herdrWsDown is the workspaces with a `ws` tab that has no ccwt running in
+// findWsDown is the workspaces with a `ws` tab that has no ccwt running in
 // it, by name, in the order herdr's sidebar lists them: a conductor that quit,
 // or never came back after herdr did — herdr restores a tab's name but not what
 // was running in it. The name is what says a ccwt belongs there, since it is
@@ -1088,17 +945,17 @@ func watchWsDown(ctx context.Context, roots []string, global, listen bool) {
 // A pane herdr can't say that about counts as having one, and a herdr that
 // won't answer at all as having no such tabs: this is a warning, and one that
 // isn't sure is one to leave out.
-func herdrWsDown(roots []string, global bool) (names, tabs []string) {
-	s, ok := herdrSnap()
+func findWsDown(roots []string, global bool) (names, tabs []string) {
+	s, ok := mx().snapshot()
 	if !ok {
 		return nil, nil
 	}
 	ours := map[string]bool{} // a workspace -> it is open on one of our worktrees, or global, one of our repos
 	for _, w := range s.Workspaces {
 		if global {
-			ours[w.ID] = slices.Contains(roots, filepath.Clean(w.Worktree.Path))
+			ours[w.ID] = slices.Contains(roots, filepath.Clean(w.Path))
 		} else {
-			root, ok := gitutil.ClaudeWorktreeRepoRoot(w.Worktree.Path)
+			root, ok := gitutil.ClaudeWorktreeRepoRoot(w.Path)
 			ours[w.ID] = ok && slices.Contains(roots, root)
 		}
 	}
@@ -1122,7 +979,7 @@ func herdrWsDown(roots []string, global bool) (names, tabs []string) {
 	}
 	for _, p := range s.Panes {
 		if u, ok := unit[p.Tab]; ok && !up[u] {
-			up[u] = herdrRunsCcwt(p.ID)
+			up[u] = runsCcwt(p.ID)
 		}
 	}
 	down := map[string]bool{}
@@ -1137,78 +994,6 @@ func herdrWsDown(roots []string, global bool) (names, tabs []string) {
 		}
 	}
 	return names, tabs
-}
-
-// herdrSnapshot is the part of herdr's `api snapshot` the corner looks at: the
-// workspaces, tabs and panes, each in the order herdr lists them.
-type herdrSnapshot struct {
-	Workspaces []struct {
-		ID       string `json:"workspace_id"`
-		Label    string `json:"label"`
-		Worktree struct {
-			Path string `json:"checkout_path"`
-		} `json:"worktree"`
-	} `json:"workspaces"`
-	Tabs []struct {
-		ID        string `json:"tab_id"`
-		Workspace string `json:"workspace_id"`
-		Label     string `json:"label"`
-	} `json:"tabs"`
-	Panes []struct {
-		ID  string `json:"pane_id"`
-		Tab string `json:"tab_id"`
-	} `json:"panes"`
-}
-
-func herdrSnap() (herdrSnapshot, bool) {
-	var snap struct {
-		Result struct {
-			Snapshot herdrSnapshot `json:"snapshot"`
-		} `json:"result"`
-	}
-	out, err := herdrAsk("session.snapshot", nil, "api", "snapshot")
-	if err != nil || json.Unmarshal(out, &snap) != nil {
-		return herdrSnapshot{}, false
-	}
-	return snap.Result.Snapshot, true
-}
-
-// paneProcs is what herdr says is in the foreground of a pane: the processes by
-// name, and whether that is the pane's shell itself, waiting at its prompt.
-type paneProcs struct {
-	names []string
-	shell bool
-}
-
-func herdrProcs(pane string) (paneProcs, bool) {
-	out, err := herdrAsk("pane.process_info", map[string]any{"pane_id": pane}, "pane", "process-info", "--pane", pane)
-	var resp struct {
-		Result struct {
-			Info struct {
-				Group      int `json:"foreground_process_group_id"`
-				Shell      int `json:"shell_pid"`
-				Foreground []struct {
-					Name string `json:"name"`
-				} `json:"foreground_processes"`
-			} `json:"process_info"`
-		} `json:"result"`
-	}
-	if err != nil || json.Unmarshal(out, &resp) != nil {
-		return paneProcs{}, false
-	}
-	i := resp.Result.Info
-	p := paneProcs{shell: i.Shell != 0 && i.Group == i.Shell}
-	for _, f := range i.Foreground {
-		p.names = append(p.names, f.Name)
-	}
-	return p, true
-}
-
-// herdrRunsCcwt reports whether a ccwt is in the foreground of a pane, or
-// herdr can't say.
-func herdrRunsCcwt(pane string) bool {
-	p, ok := herdrProcs(pane)
-	return !ok || slices.Contains(p.names, "ccwt")
 }
 
 // restartStep is what the corner's ↻ does for one of the workspaces in its box:
@@ -1237,7 +1022,8 @@ func restartPlan() ([]restartStep, bool) {
 	firsts, global := slices.Clone(wsDown.tabs), wsDown.global
 	wsDown.Unlock()
 	label, _ := restartTab(global)
-	s, ok := herdrSnap()
+	m := mx()
+	s, ok := m.snapshot()
 	if !ok {
 		return nil, global
 	}
@@ -1252,7 +1038,7 @@ func restartPlan() ([]restartStep, bool) {
 		if !down[w.ID] {
 			continue
 		}
-		st := restartStep{name: w.Label, ws: w.ID, cwd: w.Worktree.Path}
+		st := restartStep{name: w.Label, ws: w.ID, cwd: w.Path}
 		for _, t := range s.Tabs {
 			if t.Workspace == w.ID && t.Label == label {
 				st.tab = t.ID
@@ -1266,7 +1052,7 @@ func restartPlan() ([]restartStep, bool) {
 					break
 				}
 			}
-			switch procs, ok := herdrProcs(st.pane); {
+			switch procs, ok := m.procs(st.pane); {
 			case st.pane == "" || !ok:
 				st.skip = "herdr can't say what its `" + label + "` tab is running"
 			case !procs.shell:
@@ -1309,6 +1095,7 @@ func restart(steps []restartStep, global bool) string {
 		return "restart failed: " + err.Error()
 	}
 	label, args := restartTab(global)
+	m := mx()
 	n := 0
 	for _, st := range steps {
 		if st.skip != "" {
@@ -1316,28 +1103,16 @@ func restart(steps []restartStep, global bool) string {
 		}
 		pane := st.pane
 		if st.tab == "" {
-			out, err := herdrAsk("tab.create", map[string]any{"workspace_id": st.ws, "cwd": st.cwd, "label": label, "focus": false},
-				"tab", "create", "--workspace", st.ws, "--cwd", st.cwd, "--label", label, "--no-focus")
-			var resp struct {
-				Result struct {
-					Tab struct {
-						ID string `json:"tab_id"`
-					} `json:"tab"`
-					Pane struct {
-						ID string `json:"pane_id"`
-					} `json:"root_pane"`
-				} `json:"result"`
+			tab, p, err := m.newTab(st.ws, st.cwd, label)
+			if err != nil {
+				return fmt.Sprintf("restart failed in %s: %v", st.name, err)
 			}
-			if err != nil || json.Unmarshal(out, &resp) != nil || resp.Result.Pane.ID == "" {
-				return fmt.Sprintf("restart failed in %s: herdr tab create: %v", st.name, err)
-			}
-			pane = resp.Result.Pane.ID
-			// Only over the socket: the cli has no `tab move`. Best effort: a
-			// tab in the wrong place still has its tui.
-			_, _ = herdrAsk("tab.move", map[string]any{"tab_id": resp.Result.Tab.ID, "insert_index": 0}, "tab", "move", resp.Result.Tab.ID, "0")
+			pane = p
+			// Best effort: a tab in the wrong place still has its tui.
+			_ = m.moveTab(tab, 0)
 		}
-		if out, err := exec.Command(herdrBin(), append([]string{"pane", "run", pane, exe}, args...)...).CombinedOutput(); err != nil {
-			return "restart failed in " + st.name + ": herdr pane run: " + lastLine(out, err)
+		if err := m.run(pane, append([]string{exe}, args...)...); err != nil {
+			return "restart failed in " + st.name + ": herdr pane run: " + err.Error()
 		}
 		n++
 	}
