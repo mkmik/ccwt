@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -47,13 +48,18 @@ func fakeDennet(t *testing.T, den string, lists map[string]string) *fakeAPI {
 		}
 		f.objs[res] = objs
 	}
-	srv := &http.Server{Handler: f}
+	srv := &http.Server{Handler: f, ConnState: func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			f.conns.Add(1)
+		}
+	}}
 	go srv.Serve(l)
-	t.Cleanup(func() { srv.Close() })
+	t.Cleanup(func() { srv.Close(); dennetTransport.CloseIdleConnections() })
 	return f
 }
 
 type fakeAPI struct {
+	conns  atomic.Int32 // connections dennet was ever dialled on
 	mu     sync.Mutex
 	objs   map[string][]map[string]any
 	events map[string]chan string
@@ -256,6 +262,21 @@ func TestDennetReads(t *testing.T) {
 	s, ok := m.snapshot()
 	if !ok || len(s.Workspaces) != 3 || len(s.Tabs) != 4 || len(s.Panes) != 4 || s.Tabs[0].ID != "repo-1" {
 		t.Errorf("snapshot() = %+v, %v", s, ok)
+	}
+}
+
+// Questions to dennet share a connection: a refresh a second, all day, doesn't
+// leave a socket open for each.
+func TestDennetReusesConnections(t *testing.T) {
+	t.Chdir(t.TempDir())
+	f := fakeDennet(t, "wt-1", dennetRepo)
+	for range 20 {
+		if _, err := dennetList[dnSpace]("spaces"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := f.conns.Load(); n != 1 {
+		t.Errorf("20 lists dialled dennet %d times, want once", n)
 	}
 }
 

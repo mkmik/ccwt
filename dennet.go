@@ -72,12 +72,16 @@ const dennetDefaultNS = "default"
 // dennetClient talks HTTP over dennet's unix socket. A question gets a few
 // seconds; a watch, none.
 func dennetClient(timeout time.Duration) *http.Client {
-	sock := dennetSocket()
-	return &http.Client{Timeout: timeout, Transport: &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "unix", sock)
-		},
-	}}
+	return &http.Client{Timeout: timeout, Transport: dennetTransport}
+}
+
+// dennetTransport is the one pool of connections to dennet. One per request
+// would leave each request's kept-alive connection open for good, in ccwt and
+// in dennet both, until the machine runs out of files.
+var dennetTransport = &http.Transport{
+	DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", dennetSocket())
+	},
 }
 
 // dennetURL is the url of resource res (spaces, surfaces, dens) in the
