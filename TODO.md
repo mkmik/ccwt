@@ -249,6 +249,11 @@ What dennet (or dense, or den) does not have yet, and what ccwt does meanwhile.
 - `mx()` chooses afresh at each call, from the environment, so a test changes
   it with `t.Setenv`. `herdrMux` keeps the cli it was made with, so a rename
   put off for a second still goes to the herdr it was meant for.
+- Reads come from a list-then-watch per resource (`dennetStore`), started by
+  the first read and shared by every view in the process, not a list of all
+  three resources on every tick. What an action writes from (`dennetOpen`,
+  `moveTab`, `createTab`, `closeWorkspace`, `badge`) still asks dennet itself,
+  so it never acts on what a watch hasn't brought in yet.
 - The standard library, not client-go, to talk to dennet: the api is JSON over
   HTTP, and client-go would add megabytes to each of the 40-odd ccwts running
   (see "One ccwt for every pane").

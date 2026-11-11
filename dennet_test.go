@@ -20,8 +20,9 @@ import (
 // of namespace "default" named den, holding the objects in lists to begin
 // with: spaces, surfaces and dens, each a list of objects in JSON. It keeps
 // what it is told — a POST adds (naming from generateName), a merge PATCH
-// merges, refusing a stale resourceVersion, a DELETE takes away — and a watch
-// gets the objects there as ADDED events, then whatever is sent on that
+// merges, refusing a stale resourceVersion, a DELETE takes away, each
+// sent on to that resource's watch — and a watch from no resourceVersion
+// gets the objects there as ADDED events first, then whatever is sent on that
 // resource's channel. Every write is in the log, as "VERB res/name".
 //
 // The socket goes in rt/ under the directory the test is in: relative, as
@@ -54,12 +55,13 @@ func fakeDennet(t *testing.T, den string, lists map[string]string) *fakeAPI {
 		}
 	}}
 	go srv.Serve(l)
-	t.Cleanup(func() { srv.Close(); dennetTransport.CloseIdleConnections() })
+	t.Cleanup(func() { dennetCacheReset(); srv.Close(); dennetTransport.CloseIdleConnections() })
 	return f
 }
 
 type fakeAPI struct {
 	conns  atomic.Int32 // connections dennet was ever dialled on
+	lists  atomic.Int32 // lists asked for, watches aside
 	mu     sync.Mutex
 	objs   map[string][]map[string]any
 	events map[string]chan string
@@ -89,7 +91,8 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	switch {
 	case r.Method == http.MethodGet && name == "":
-		_ = json.NewEncoder(w).Encode(map[string]any{"items": f.objs[res]})
+		f.lists.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]any{"resourceVersion": fmt.Sprint(f.rv)}, "items": f.objs[res]})
 		return
 	case i < 0 && r.Method != http.MethodPost:
 		refuse(http.StatusNotFound, res+" "+name+" not found")
@@ -123,12 +126,20 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.rv++
 	metaOf(body)["resourceVersion"] = fmt.Sprint(f.rv)
 	f.log = append(f.log, r.Method+" "+res+"/"+name)
+	b, _ := json.Marshal(body)
+	select {
+	case f.events[res] <- fmt.Sprintf(`{"type":%q,"object":%s}`, map[string]string{"POST": "ADDED", "PATCH": "MODIFIED", "DELETE": "DELETED"}[r.Method], b):
+	default:
+	}
 	_ = json.NewEncoder(w).Encode(body)
 }
 
 func (f *fakeAPI) watch(w http.ResponseWriter, r *http.Request, res string) {
 	f.mu.Lock()
 	for _, o := range f.objs[res] {
+		if r.URL.Query().Get("resourceVersion") != "" {
+			break
+		}
 		b, _ := json.Marshal(o)
 		fmt.Fprintf(w, `{"type":"ADDED","object":%s}`+"\n", b)
 	}
@@ -278,6 +289,52 @@ func TestDennetReusesConnections(t *testing.T) {
 	if n := f.conns.Load(); n != 1 {
 		t.Errorf("20 lists dialled dennet %d times, want once", n)
 	}
+}
+
+// The views ask on every tick; what they read comes from dennet's watches,
+// not a list each time. A watch dennet calls too old lists again.
+func TestDennetReadsFromItsWatch(t *testing.T) {
+	t.Chdir(t.TempDir())
+	f := fakeDennet(t, "wt-1", dennetRepo)
+	m := mx()
+	spaces := func() int {
+		ws, err := m.workspaces()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(ws)
+	}
+	until := func(what string, ok func() bool) {
+		t.Helper()
+		for end := time.Now().Add(3 * time.Second); !ok(); time.Sleep(10 * time.Millisecond) {
+			if time.Now().After(end) {
+				t.Fatal("never: " + what)
+			}
+		}
+	}
+	spaces()
+	until("the watches up", func() bool {
+		_, a := dennetCache().items("spaces")
+		_, b := dennetCache().items("surfaces")
+		_, c := dennetCache().items("dens")
+		return a && b && c
+	})
+	lists := f.lists.Load()
+	for range 20 {
+		if n := spaces(); n != 3 {
+			t.Fatalf("%d workspaces, want 3", n)
+		}
+	}
+	if n := f.lists.Load() - lists; n != 0 {
+		t.Errorf("20 reads listed %d times, want none", n)
+	}
+	f.events["spaces"] <- `{"type":"ADDED","object":{"metadata":{"name":"new","resourceVersion":"50"},"spec":{"workingDir":"/src/new"}}}`
+	until("the new Space read", func() bool { return spaces() == 4 })
+	f.events["spaces"] <- `{"type":"DELETED","object":{"metadata":{"name":"later","resourceVersion":"51"}}}`
+	until("the deleted Space gone", func() bool { return spaces() == 3 })
+
+	f.events["spaces"] <- `{"type":"ERROR","object":{"kind":"Status","code":410}}`
+	until("a list after 410 Gone", func() bool { return f.lists.Load() > lists })
 }
 
 // The ws view hears about its own workspace — its Space, its tabs and the dens
