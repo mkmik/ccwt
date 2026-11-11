@@ -138,7 +138,7 @@ gaps below are what dennet, dense or den would need to add.
 | `badge` | a `ccwt` token with a ttl | `spec.badges` — see gap 4 |
 | `agents` | `agent list`: working, blocked, idle, done, and a counter | none — gap 2 |
 | `focusTab`, `focusWorkspace` | `tab focus`, `workspace focus` | a request on our own Surface, obeyed by dense — gap 1 |
-| `focused` | `workspace get` | none — gap 1 |
+| `focused` | `workspace get` | our own Space only: the window that typed into our den shows it — gap 1 |
 | `procs` | `pane process-info` | none — gap 3 |
 | `popup` | a plugin pane | none — gap 6 |
 | `file` | `workspace move` under a `------` divider | none — gap 8 |

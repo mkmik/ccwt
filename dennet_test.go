@@ -405,6 +405,12 @@ func TestDennetActs(t *testing.T) {
 		t.Errorf("tabs after the move = %v, %v", ts, err)
 	}
 
+	// Our own Space is the one being looked at — the window that typed into
+	// our den is showing it — and nothing else is.
+	if !m.focused("wt") || m.focused("repo") {
+		t.Errorf("focused(wt), focused(repo) = %v, %v, want true, false", m.focused("wt"), m.focused("repo"))
+	}
+
 	// Going somewhere is a request on our own Surface, for dense to read.
 	show := func() map[string]any {
 		var ask map[string]any
