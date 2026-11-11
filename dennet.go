@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -201,10 +202,11 @@ type dennetWorld struct {
 }
 
 // dennetLoad reads what it is asked for: the spaces always, and the surfaces
-// and dens when tabs says so.
-func dennetLoad(tabs bool) (dennetWorld, error) {
+// and dens when tabs says so. fresh asks dennet itself rather than what its
+// watches have brought in, for an action about to write from what it reads.
+func dennetLoad(tabs, fresh bool) (dennetWorld, error) {
 	var w dennetWorld
-	spaces, err := dennetList[dnSpace]("spaces")
+	spaces, err := dennetGet[dnSpace]("spaces", fresh)
 	if err != nil {
 		return w, err
 	}
@@ -212,13 +214,13 @@ func dennetLoad(tabs bool) (dennetWorld, error) {
 	if !tabs {
 		return w, nil
 	}
-	if w.surfaces, err = dennetList[dnSurface]("surfaces"); err != nil {
+	if w.surfaces, err = dennetGet[dnSurface]("surfaces", fresh); err != nil {
 		return w, err
 	}
 	slices.SortStableFunc(w.surfaces, func(a, b dnSurface) int {
 		return cmp.Or(cmp.Compare(a.Spec.Order, b.Spec.Order), strings.Compare(a.Metadata.Name, b.Metadata.Name))
 	})
-	dens, err := dennetList[dnDen]("dens")
+	dens, err := dennetGet[dnDen]("dens", fresh)
 	if err != nil {
 		return w, err
 	}
@@ -303,7 +305,7 @@ func (dennetMux) here() (ws, tab string) {
 		h := h.([2]string)
 		return h[0], h[1]
 	}
-	surfaces, err := dennetList[dnSurface]("surfaces")
+	surfaces, err := dennetGet[dnSurface]("surfaces", false)
 	if err != nil {
 		return "", ""
 	}
@@ -321,7 +323,7 @@ var dennetHere sync.Map
 func (dennetMux) listens() bool { return true }
 
 func (dennetMux) workspaces() ([]muxWorkspace, error) {
-	w, err := dennetLoad(true)
+	w, err := dennetLoad(true, false)
 	if err != nil {
 		return nil, err
 	}
@@ -334,7 +336,7 @@ func (dennetMux) workspaces() ([]muxWorkspace, error) {
 
 // sidebar has no dividers: dense's sidebar is a tree (TODO.md, gap 8).
 func (m dennetMux) sidebar() (map[string]string, map[string]int, []int) {
-	w, err := dennetLoad(false)
+	w, err := dennetLoad(false, false)
 	if err != nil {
 		return nil, nil, nil
 	}
@@ -355,7 +357,7 @@ func (m dennetMux) sidebar() (map[string]string, map[string]int, []int) {
 }
 
 func (dennetMux) worktreeWorkspaces(_, path string) ([]string, error) {
-	w, err := dennetLoad(false)
+	w, err := dennetLoad(false, false)
 	if err != nil {
 		return nil, err
 	}
@@ -369,7 +371,7 @@ func (dennetMux) worktreeWorkspaces(_, path string) ([]string, error) {
 }
 
 func (dennetMux) repoWorkspaces() map[string]string {
-	w, err := dennetLoad(false)
+	w, err := dennetLoad(false, false)
 	if err != nil {
 		return nil
 	}
@@ -402,7 +404,7 @@ func (dennetMux) tabs(ws string) ([]wsTab, error) {
 	if ws == "" {
 		return nil, errors.New("dennet: this den is in no Space's tab")
 	}
-	w, err := dennetLoad(true)
+	w, err := dennetLoad(true, false)
 	if err != nil {
 		return nil, err
 	}
@@ -424,7 +426,7 @@ func (dennetMux) tabs(ws string) ([]wsTab, error) {
 // agents is every Den whose title says an agent is in it (TODO.md, gap 2a),
 // placed by the Surface showing it.
 func (dennetMux) agents(bool) []muxAgent {
-	w, err := dennetLoad(true)
+	w, err := dennetLoad(true, false)
 	if err != nil {
 		return nil
 	}
@@ -465,7 +467,7 @@ func denAgent(title string) (status, rest string) {
 }
 
 func (dennetMux) paneAt(path string) (string, string) {
-	w, err := dennetLoad(true)
+	w, err := dennetLoad(true, false)
 	if err != nil {
 		return "", ""
 	}
@@ -483,7 +485,7 @@ func (dennetMux) paneAt(path string) (string, string) {
 }
 
 func (dennetMux) paneTab(pane string) (string, error) {
-	surfaces, err := dennetList[dnSurface]("surfaces")
+	surfaces, err := dennetGet[dnSurface]("surfaces", false)
 	if err != nil {
 		return "", err
 	}
@@ -496,7 +498,7 @@ func (dennetMux) paneTab(pane string) (string, error) {
 }
 
 func (dennetMux) place(tab string) (place, error) {
-	w, err := dennetLoad(true)
+	w, err := dennetLoad(true, false)
 	if err != nil {
 		return place{}, err
 	}
@@ -517,7 +519,7 @@ func (dennetMux) place(tab string) (place, error) {
 }
 
 func (dennetMux) snapshot() (muxSnapshot, bool) {
-	w, err := dennetLoad(true)
+	w, err := dennetLoad(true, false)
 	if err != nil {
 		return muxSnapshot{}, false
 	}
@@ -542,15 +544,16 @@ func (dennetMux) snapshot() (muxSnapshot, bool) {
 // its prompt. Dens in our namespace run on this machine; one whose program
 // isn't in the table is one this can't say about.
 func (dennetMux) procs(pane string) (paneProcs, bool) {
-	var d dnDen
-	if dennetDo(http.MethodGet, "dens/"+pane, nil, &d) != nil || d.Status.PID == 0 {
+	dens, err := dennetGet[dnDen]("dens", false)
+	i := slices.IndexFunc(dens, func(d dnDen) bool { return d.Metadata.Name == pane })
+	if err != nil || i < 0 || dens[i].Status.PID == 0 {
 		return paneProcs{}, false
 	}
 	out, err := exec.Command("ps", "-A", "-o", "pid=,pgid=,tpgid=,comm=").Output()
 	if err != nil {
 		return paneProcs{}, false
 	}
-	return foreground(string(out), d.Status.PID)
+	return foreground(string(out), dens[i].Status.PID)
 }
 
 // foreground reads ps's pid, pgid, tpgid and comm columns for what is in front
@@ -589,13 +592,14 @@ func foreground(table string, pid int) (paneProcs, bool) {
 	return p, true
 }
 
-// listen watches spaces and surfaces — and dens too, for the ws view of
-// workspace ws, whose tabs show what their Dens say. A watch starts by
-// sending every object there is, which is the look after a (re)connect.
+// listen hears what dennet's watches bring in on spaces and surfaces — and
+// dens too, for the ws view of workspace ws, whose tabs show what their Dens
+// say. What the watches have already brought in comes first, as it would
+// after a (re)connect.
 //
 // Only what touches ws pokes the ws view: its own Space, its Surfaces, and the
-// Dens they show — which the surfaces' watch is what says. Dens report every
-// few seconds while their programs write, so another workspace's agent at work
+// Dens they show — which the surfaces are what says. Dens report every few
+// seconds while their programs write, so another workspace's agent at work
 // would otherwise have this one asking all the time.
 func (dennetMux) listen(ctx context.Context, poke chan<- struct{}, ws string) {
 	var mu sync.Mutex
@@ -630,53 +634,234 @@ func (dennetMux) listen(ctx context.Context, poke chan<- struct{}, ws string) {
 	if ws != "" {
 		res = append(res, "dens")
 	}
-	var wg sync.WaitGroup
+	c := dennetCache()
 	for _, r := range res {
-		wg.Go(func() {
-			for ctx.Err() == nil {
-				dennetWatch(ctx, r, poke, keep)
+		defer c.subscribe(r, func(obj json.RawMessage) {
+			if keep(r, obj) {
 				select {
-				case <-ctx.Done():
-				case <-time.After(2 * time.Second):
+				case poke <- struct{}{}:
+				default:
 				}
 			}
-		})
+		})()
 	}
-	wg.Wait()
+	<-ctx.Done()
 }
 
-// dennetWatch is one connection's worth of a watch on res: a poke for every
-// event keep keeps, until dennet hangs up or ctx ends. dennet going away, or
-// saying the watch has gone on too long (410 Gone, after its compaction), is
-// an end; listen dials again.
-func dennetWatch(ctx context.Context, res string, poke chan<- struct{}, keep func(res string, obj []byte) bool) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, dennetURL(res, "watch=1"), nil)
+// dennetStore is what dennet's watches have brought in, so that the views,
+// which ask on every tick, read it here rather than list everything again
+// each time: a list, then a watch from the list's resourceVersion, for each
+// resource the moment something first asks about it. A watch that drops
+// picks up where it was; one dennet says is too old (410 Gone) lists again.
+//
+// ponytail: kept as JSON and decoded on every read, which is a few dozen
+// small objects; typed stores if that ever shows.
+type dennetStore struct {
+	ctx    context.Context
+	stop   context.CancelFunc
+	mu     sync.Mutex
+	objs   map[string]map[string]json.RawMessage // resource → name → object
+	synced map[string]bool                       // the watch on it is up now
+	going  map[string]bool
+	subs   map[string]map[*func(json.RawMessage)]bool
+}
+
+var (
+	dennetCacheMu  sync.Mutex
+	dennetCacheNow *dennetStore
+)
+
+// dennetCache is this process's store: one set of watches, however many
+// views listen.
+func dennetCache() *dennetStore {
+	dennetCacheMu.Lock()
+	defer dennetCacheMu.Unlock()
+	if dennetCacheNow == nil {
+		ctx, stop := context.WithCancel(context.Background())
+		dennetCacheNow = &dennetStore{ctx: ctx, stop: stop, objs: map[string]map[string]json.RawMessage{},
+			synced: map[string]bool{}, going: map[string]bool{}, subs: map[string]map[*func(json.RawMessage)]bool{}}
+	}
+	return dennetCacheNow
+}
+
+// dennetCacheReset stops the watches and forgets what they brought in: for a
+// test, whose dennet is another than the last test's.
+func dennetCacheReset() {
+	dennetCacheMu.Lock()
+	defer dennetCacheMu.Unlock()
+	if dennetCacheNow != nil {
+		dennetCacheNow.stop()
+		dennetCacheNow = nil
+	}
+}
+
+// dennetGet is every object of res: what the watch has brought in when it is
+// up, a list otherwise — and always, when fresh says so.
+func dennetGet[T any](res string, fresh bool) ([]T, error) {
+	if !fresh {
+		if raws, ok := dennetCache().items(res); ok {
+			out := make([]T, len(raws))
+			for i, r := range raws {
+				if err := json.Unmarshal(r, &out[i]); err != nil {
+					return nil, fmt.Errorf("dennet: %s: %w", res, err)
+				}
+			}
+			return out, nil
+		}
+	}
+	return dennetList[T](res)
+}
+
+// items is res's objects by name, and whether its watch is up; asking starts
+// the watch.
+func (c *dennetStore) items(res string) ([]json.RawMessage, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.start(res)
+	if !c.synced[res] {
+		return nil, false
+	}
+	var out []json.RawMessage
+	for _, name := range slices.Sorted(maps.Keys(c.objs[res])) {
+		out = append(out, c.objs[res][name])
+	}
+	return out, true
+}
+
+// subscribe has fn told of every object of res the watch brings in — nil
+// for "everything, maybe": after a list — starting with those it has
+// already, until the returned func is called.
+func (c *dennetStore) subscribe(res string, fn func(json.RawMessage)) func() {
+	c.mu.Lock()
+	c.start(res)
+	if c.subs[res] == nil {
+		c.subs[res] = map[*func(json.RawMessage)]bool{}
+	}
+	c.subs[res][&fn] = true
+	var have []json.RawMessage
+	if c.synced[res] {
+		have = append(slices.Collect(maps.Values(c.objs[res])), nil)
+	}
+	c.mu.Unlock()
+	for _, o := range have {
+		fn(o)
+	}
+	return func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		delete(c.subs[res], &fn)
+	}
+}
+
+// start runs res's watch, once. c.mu is held.
+func (c *dennetStore) start(res string) {
+	if !c.going[res] {
+		c.going[res] = true
+		go c.reflect(res)
+	}
+}
+
+func (c *dennetStore) reflect(res string) {
+	rv := ""
+	for {
+		if rv == "" {
+			rv = c.relist(res)
+		}
+		if rv != "" {
+			rv = c.watch(res, rv)
+		}
+		c.mu.Lock()
+		c.synced[res] = false
+		c.mu.Unlock()
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+// relist replaces what there is of res with a list, and is the
+// resourceVersion to watch from, "" when dennet couldn't say.
+func (c *dennetStore) relist(res string) string {
+	var l struct {
+		Metadata dnMeta
+		Items    []json.RawMessage
+	}
+	if dennetDo(http.MethodGet, res, nil, &l) != nil {
+		return ""
+	}
+	objs := map[string]json.RawMessage{}
+	for _, o := range l.Items {
+		objs[dnMetaOf(o).Name] = o
+	}
+	c.mu.Lock()
+	c.objs[res], c.synced[res] = objs, true
+	c.mu.Unlock()
+	for _, o := range append(l.Items, nil) {
+		c.tell(res, o)
+	}
+	return l.Metadata.ResourceVersion
+}
+
+// watch applies res's events from resourceVersion rv on, until dennet hangs
+// up or the store stops, and is where to pick up again: "" to list again.
+func (c *dennetStore) watch(res, rv string) string {
+	req, err := http.NewRequestWithContext(c.ctx, http.MethodGet, dennetURL(res, "watch=1&allowWatchBookmarks=true&resourceVersion="+url.QueryEscape(rv)), nil)
 	if err != nil {
-		return
+		return ""
 	}
 	resp, err := dennetClient(0).Do(req)
 	if err != nil {
-		return
+		return rv
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return
+		return ""
 	}
+	c.mu.Lock()
+	c.synced[res] = true
+	c.mu.Unlock()
 	for dec := json.NewDecoder(resp.Body); ; {
 		var ev struct {
 			Type   string
 			Object json.RawMessage
 		}
-		if err := dec.Decode(&ev); err != nil || ev.Type == "ERROR" {
-			return
+		if err := dec.Decode(&ev); err != nil {
+			return rv
 		}
-		if keep(res, ev.Object) {
-			select {
-			case poke <- struct{}{}:
-			default:
-			}
+		if ev.Type == "ERROR" { // 410 Gone, mostly
+			return ""
 		}
+		m := dnMetaOf(ev.Object)
+		rv = cmp.Or(m.ResourceVersion, rv)
+		if ev.Type == "BOOKMARK" {
+			continue
+		}
+		c.mu.Lock()
+		if ev.Type == "DELETED" {
+			delete(c.objs[res], m.Name)
+		} else {
+			c.objs[res][m.Name] = ev.Object
+		}
+		c.mu.Unlock()
+		c.tell(res, ev.Object)
 	}
+}
+
+func (c *dennetStore) tell(res string, obj json.RawMessage) {
+	c.mu.Lock()
+	fns := slices.Collect(maps.Keys(c.subs[res]))
+	c.mu.Unlock()
+	for _, fn := range fns {
+		(*fn)(obj)
+	}
+}
+
+func dnMetaOf(obj json.RawMessage) dnMeta {
+	var o struct{ Metadata dnMeta }
+	_ = json.Unmarshal(obj, &o)
+	return o.Metadata
 }
 
 // openWorktree gives the worktree at path a Space under its repo's — the
@@ -702,7 +887,7 @@ func (dennetMux) openProject(path string) (muxOpened, error) {
 // open is told to focus it; a dense that doesn't listen leaves it in the
 // sidebar.
 func dennetOpen(path, root, title string) (muxOpened, bool, error) {
-	w, err := dennetLoad(true)
+	w, err := dennetLoad(true, true)
 	if err != nil {
 		return muxOpened{}, false, err
 	}
@@ -869,7 +1054,7 @@ func (dennetMux) renameWorkspace(ws, name string) error {
 // moveTab puts tab at place at (from 0) in its Space's tab bar, numbering the
 // tabs again from 1 and writing the ones whose number changed.
 func (dennetMux) moveTab(tab string, at int) error {
-	w, err := dennetLoad(true)
+	w, err := dennetLoad(true, true)
 	if err != nil {
 		return err
 	}
