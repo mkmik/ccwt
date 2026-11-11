@@ -384,9 +384,15 @@ func (dennetMux) repoWorkspaces() map[string]string {
 	return ids
 }
 
-// focused is no: dennet can't say what dense shows (TODO.md, gap 1), and no is
-// the answer that leaves the focus alone.
-func (dennetMux) focused(string) bool { return false }
+// focused is yes for our own Space only. dennet can't say what dense shows
+// (TODO.md, gap 1), but a request to show something goes to the window that
+// last typed into our den — and that window is looking at our Space. So
+// `remove`, run from here, takes that window to the repo's Space before ours
+// closes; every other Space is no, which leaves the focus alone.
+func (m dennetMux) focused(ws string) bool {
+	here, _ := m.here()
+	return ws != "" && ws == here
+}
 
 // tabs is the Space's Surfaces, each with what its Den says: where it is, its
 // title, and the agent in it if the title gives one away. Never focused and
