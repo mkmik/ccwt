@@ -1057,6 +1057,35 @@ esac
 // The badge always goes with a ttl, because nothing tells herdr when this tui
 // stops; a lookup that failed says nothing rather than taking the last answer
 // down with it.
+// A forge that can't be reached is not a branch without a merge request: the
+// one is "no merge request yet", the other has to say it couldn't ask.
+func TestBranchLookTellsUnreachableFromNone(t *testing.T) {
+	initRepo(t)
+	git(t, "remote", "add", "origin", "git@gitlab.example.com:a/b.git")
+	bin := t.TempDir()
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GLAB_CONFIG_DIR", t.TempDir()) // no token: the lookup goes through the fake glab
+	t.Setenv("GITLAB_TOKEN", "")
+	glab := func(script string) {
+		if err := os.WriteFile(filepath.Join(bin, "glab"), []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	glab("echo '[]'")
+	if look := branchLook(); look.err != nil || len(look.rows) != 0 {
+		t.Errorf("no merge request: %+v, want no rows and no error", look)
+	}
+	glab("echo 'dial tcp: no route to host' >&2; exit 1")
+	look := branchLook()
+	if look.err == nil {
+		t.Fatalf("unreachable forge: %+v, want an error", look)
+	}
+	if got := mrSection(look, 0); !strings.Contains(got[0], unknownGlyph+" ") || !strings.Contains(got[0], "no route to host") {
+		t.Errorf("unreachable forge: section %q, want the %q and what went wrong", got, unknownGlyph)
+	}
+}
+
 func TestWsBadgeSaysWhereTheMergeRequestStands(t *testing.T) {
 	dir := t.TempDir()
 	log := filepath.Join(dir, "calls")
@@ -1086,7 +1115,8 @@ func TestWsBadgeSaysWhereTheMergeRequestStands(t *testing.T) {
 	}
 	wsBadge(&mrLook{}) // never pushed: the workspace every one of these starts as
 	want = append(want, call+"--clear-token mr")
-	wsBadge(&mrLook{err: errors.New("glab is not installed")})
+	wsBadge(&mrLook{err: errors.New("dial tcp: no route to host")}) // the forge out of reach: unknown, not none
+	want = append(want, call+"--token mr="+unknownGlyph+ttl)
 	if err := os.WriteFile("untracked", nil, 0o600); err != nil {
 		t.Fatal(err)
 	}

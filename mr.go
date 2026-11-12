@@ -204,7 +204,7 @@ func branchMR(dir string) (string, error) {
 	branch := checkedOutBranch(dir)
 	project := urlPath(origin)
 	if project == "" || branch == "" {
-		return "", errors.New("no merge request for this branch: no origin remote or no branch here")
+		return "", noReview("no merge request for this branch: no origin remote or no branch here")
 	}
 	if onGitHub(urlHost(origin)) {
 		return branchPR(urlHost(origin), project, branch)
@@ -218,13 +218,20 @@ func branchMR(dir string) (string, error) {
 	var hits []mr
 	path := "projects/" + url.PathEscape(project) + "/merge_requests?" + query.Encode()
 	if err := glabAPI(urlHost(origin), path, &hits); err != nil {
-		return "", fmt.Errorf("no merge request for this branch: %w", err)
+		return "", fmt.Errorf("couldn't ask for this branch's merge request: %w", err)
 	}
 	if len(hits) == 0 {
-		return "", errors.New("no merge request for this branch")
+		return "", noReview("no merge request for this branch")
 	}
 	return hits[0].WebURL, nil
 }
+
+// noReview is branchMR's answer when the forge said there is none, as against
+// an error about asking it: the forge being out of reach says nothing about
+// whether there is one.
+type noReview string
+
+func (e noReview) Error() string { return string(e) }
 
 // checkedOutBranch is dir's branch as origin knows it: the branch it tracks
 // there, when it tracks one, since a worktree's branch is often pushed under
