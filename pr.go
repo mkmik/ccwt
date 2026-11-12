@@ -288,11 +288,11 @@ func branchPR(host, repo, branch string) (string, error) {
 		}
 	}`
 	if err := ghQL(host, &got, q, "owner="+owner, "name="+name, "branch="+branch); err != nil {
-		return "", fmt.Errorf("no pull request for this branch: %w", err)
+		return "", fmt.Errorf("couldn't ask for this branch's pull request: %w", err)
 	}
 	hits := got.Repository.PullRequests.Nodes
 	if len(hits) == 0 {
-		return "", errors.New("no pull request for this branch")
+		return "", noReview("no pull request for this branch")
 	}
 	return hits[0].URL, nil
 }

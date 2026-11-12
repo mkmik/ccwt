@@ -1124,7 +1124,7 @@ func (dennetMux) file(_, _ string) {}
 
 // ccwtBadges are the badges ccwt puts on a workspace, which are how it tells
 // its own from anyone else's: dennet's badges have no owner (TODO.md, gap 4).
-var ccwtBadges = []string{"✓", mergedDirtyGlyph, reviewGlyph, "■", "▣", "☒"}
+var ccwtBadges = []string{"✓", mergedDirtyGlyph, reviewGlyph, "■", "▣", "☒", unknownGlyph}
 
 // badge swaps ccwt's badge on the Space for glyph, or takes it off for "", and
 // writes nothing when that changes nothing — it is asked once a minute. A

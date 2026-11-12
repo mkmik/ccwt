@@ -337,14 +337,17 @@ func landed() {
 // branchLook is one round of it: the merge request of the branch the workspace
 // is working on, and then the same lookup any other `ccwt mr` argument gets.
 //
-// glab reports "this branch has no merge request" and "there is no glab here"
-// the same way, as a failure, and the first is where every workspace starts —
-// so a branch it can't find one for is no rows rather than an error to put on
-// the screen. `ccwt mr` in a tab says which of the two it was.
+// A branch the forge says has none is where every workspace starts, so it is
+// no rows rather than an error to put on the screen. A forge that couldn't be
+// asked is the error: it says nothing about whether there is one, and reading
+// as "no merge request yet" would hide a review you are waiting on.
 func branchLook() *mrLook {
 	u, err := branchMR(".")
-	if err != nil {
+	if _, ok := errors.AsType[noReview](err); ok {
 		return &mrLook{}
+	}
+	if err != nil {
+		return &mrLook{err: err}
 	}
 	rows, err := lookThing(u, true)
 	return &mrLook{rows, err}
@@ -355,6 +358,9 @@ func branchLook() *mrLook {
 // blink it off the sidebar, and short enough that a workspace whose ws tui has
 // gone stops claiming anything about its merge request.
 const wsBadgeTTL = 5 * mrWindow
+
+// unknownGlyph is the badge of a merge request the forge couldn't be asked about.
+const unknownGlyph = "?"
 
 // wsBadge puts where the merge request stands on the workspace itself, in the
 // marks the worktree list already leads a name with: the "✓" of a branch that
@@ -371,17 +377,18 @@ const wsBadgeTTL = 5 * mrWindow
 // GitHub's merge queue), where the pipeline is the train's and nothing is on you
 // either way. The sidebar has no colour to say it with, so the shape does.
 //
-// A lookup that failed reports nothing at all: glab being down is no news
-// about the merge request, and the badge standing another few minutes says
-// less than a wrong one would.
+// A lookup that failed is a "?": the forge being out of reach is no news about
+// the merge request, and a badge that went away would read as there being none.
 func wsBadge(look *mrLook) {
 	m := mx()
 	ws, _ := m.here()
-	if ws == "" || look == nil || look.err != nil {
+	if ws == "" || look == nil {
 		return
 	}
 	glyph := ""
-	if len(look.rows) > 0 {
+	if look.err != nil {
+		glyph = unknownGlyph
+	} else if len(look.rows) > 0 {
 		switch look.rows[0].status {
 		case "merged":
 			glyph = "✓"
@@ -423,7 +430,7 @@ func mrSection(look *mrLook, width int) []string {
 	case look == nil:
 		msg = "looking for the merge request…"
 	case look.err != nil:
-		msg = oneLine(look.err.Error())
+		msg = unknownGlyph + " " + oneLine(look.err.Error())
 	case len(look.rows) == 0:
 		msg = "no merge request yet"
 	}
