@@ -441,6 +441,37 @@ func TestDennetNewWorkspace(t *testing.T) {
 	}
 }
 
+// A Space made by hand in dense, on no directory, with ccwt run at the repo
+// from a tab in it, is the repo's Space: the worktree goes under it, and it is
+// put on the repo, rather than a second Space made on the repo beside it.
+func TestDennetAdoptsItsSpace(t *testing.T) {
+	root, err := filepath.EvalSymlinks(initRepo(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := fakeDennet(t, "hand-1", map[string]string{
+		"spaces":   `{"metadata":{"name":"space-x"},"spec":{"order":3,"title":"repo"}}`,
+		"surfaces": `{"metadata":{"name":"hand-1"},"spec":{"space":"space-x","order":1,"kind":"terminal","terminal":{"den":"hand-1"}}}`,
+		"dens":     fmt.Sprintf(`{"metadata":{"name":"hand-1"},"status":{"phase":"Running","cwd":%q}}`, root),
+	})
+	t.Setenv("DEN_BIN_PATH", "true")
+
+	msg := (&ui{}).newWorktree()
+	name, ok := strings.CutPrefix(msg, "opened ")
+	if !ok {
+		t.Fatalf("newWorktree: %s", msg)
+	}
+	if got := api.get("spaces", "space-x")["spec"].(map[string]any)["workingDir"]; got != root {
+		t.Errorf("hand-made Space's workingDir = %v, want %s", got, root)
+	}
+	if sp := api.get("spaces", name); sp == nil || sp["spec"].(map[string]any)["parent"] != "space-x" {
+		t.Errorf("worktree Space = %v, want it under space-x", sp)
+	}
+	if got := api.writes(); slices.Contains(got, "POST spaces/"+dnsLabel(filepath.Base(root))) {
+		t.Errorf("writes = %q, want no second Space on the repo", got)
+	}
+}
+
 // The ws view's own changes under dennet: a tab made, labelled and moved to
 // the front; the workspace renamed; ccwt's badge put on, swapped and taken off
 // beside someone else's; and the workspace closed — the Space first and its

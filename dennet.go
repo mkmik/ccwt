@@ -897,6 +897,14 @@ func dennetOpen(path, root, title string) (muxOpened, bool, error) {
 		if root != "" {
 			p, ok := w.spaceOn(root)
 			if !ok {
+				// The Space we run in, on no directory, is the repo's from now.
+				if p, ok = w.adopt(root); ok {
+					if err = dennetDo(http.MethodPatch, "spaces/"+p.Metadata.Name, map[string]any{"spec": map[string]any{"workingDir": root}}, nil); err != nil {
+						return muxOpened{}, false, err
+					}
+				}
+			}
+			if !ok {
 				if p, err = createSpace(w, root, "", filepath.Base(root)); err != nil {
 					return muxOpened{}, false, err
 				}
@@ -927,6 +935,24 @@ func dennetOpen(path, root, title string) (muxOpened, bool, error) {
 func (w dennetWorld) spaceOn(path string) (dnSpace, bool) {
 	for _, s := range w.spaces {
 		if s.Spec.WorkingDir == path {
+			return s, true
+		}
+	}
+	return dnSpace{}, false
+}
+
+// adopt is the Space ccwt runs in, when it is on no directory and our den is
+// at root: a Space made by hand in dense for the repo, with ccwt started from a
+// tab in it. Without this, the repo's first worktree made a second Space on
+// root beside it.
+func (w dennetWorld) adopt(root string) (dnSpace, bool) {
+	ws, _ := dennetMux{}.here()
+	_, den := dennetDen()
+	if ws == "" || w.dens[den].Status.CWD != root {
+		return dnSpace{}, false
+	}
+	for _, s := range w.spaces {
+		if s.Metadata.Name == ws && s.Spec.WorkingDir == "" {
 			return s, true
 		}
 	}
