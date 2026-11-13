@@ -25,7 +25,7 @@ needs = ["/cli/mr#merge-train"]
 
 [[feature]]
 id = "unknown"
-title = "? when the forge couldn't be asked, rather than no badge"
+title = "? when the forge couldn't be asked for 10 minutes, rather than no badge"
 status = "done"
 
 [[needs]]

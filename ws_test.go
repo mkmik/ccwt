@@ -1086,6 +1086,29 @@ func TestBranchLookTellsUnreachableFromNone(t *testing.T) {
 	}
 }
 
+// A failed round keeps the last answer up until the failures have lasted
+// unknownAfter; only then does the error (and its `?`) show.
+func TestSteadyLookWaitsOutBlips(t *testing.T) {
+	t0 := time.Now()
+	good, bad := &mrLook{rows: []mrRow{{status: "opened"}}}, &mrLook{err: errors.New("502")}
+	look, failing := steadyLook(good, bad, time.Time{}, t0)
+	if look != good || !failing.Equal(t0) {
+		t.Fatalf("first failure: %+v since %v, want the last answer since %v", look, failing, t0)
+	}
+	if look, _ = steadyLook(look, bad, failing, t0.Add(unknownAfter-time.Second)); look != good {
+		t.Fatalf("failing for less than unknownAfter: %+v, want the last answer", look)
+	}
+	if look, failing = steadyLook(look, bad, failing, t0.Add(unknownAfter)); look != bad {
+		t.Fatalf("failing for unknownAfter: %+v, want the error", look)
+	}
+	if look, failing = steadyLook(look, good, failing, t0.Add(unknownAfter+time.Minute)); look != good || !failing.IsZero() {
+		t.Fatalf("answering again: %+v since %v, want the answer and no failing", look, failing)
+	}
+	if look, _ = steadyLook(nil, bad, time.Time{}, t0); look != nil {
+		t.Fatalf("first round failing: %+v, want still looking", look)
+	}
+}
+
 func TestWsBadgeSaysWhereTheMergeRequestStands(t *testing.T) {
 	dir := t.TempDir()
 	log := filepath.Join(dir, "calls")

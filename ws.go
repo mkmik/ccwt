@@ -292,6 +292,30 @@ var wsMRLook struct {
 	stamp   string
 	running bool
 	look    *mrLook
+	// failing is when the rounds started failing, zero while they answer.
+	failing time.Time
+}
+
+// unknownAfter is how long the forge has to go on failing before the ws view
+// says it couldn't ask: one failed round is mostly a blip (a vpn reconnecting,
+// a 502), and a `?` for it is noise.
+const unknownAfter = 10 * time.Minute
+
+// steadyLook is what to show after a round came back as look: a failed round
+// keeps showing last, the answer before it, until the rounds have been failing
+// since failing for unknownAfter. It returns the look to show and when the
+// failures started, zero again once a round answers.
+func steadyLook(last, look *mrLook, failing, now time.Time) (*mrLook, time.Time) {
+	if look.err == nil {
+		return look, time.Time{}
+	}
+	if failing.IsZero() {
+		failing = now
+	}
+	if now.Sub(failing) < unknownAfter && (last == nil || last.err == nil) {
+		return last, failing
+	}
+	return look, failing
 }
 
 // wsMR is the ws view's first section: where the workspace's merge request
@@ -306,13 +330,14 @@ func wsMR(width int) []string {
 		was := lookMerged(wsMRLook.look)
 		go func() {
 			look := branchLook()
+			wsMRLook.Lock()
+			look, wsMRLook.failing = steadyLook(wsMRLook.look, look, wsMRLook.failing, time.Now())
+			wsMRLook.look, wsMRLook.running = look, false
+			wsMRLook.Unlock()
 			if lookMerged(look) && !was {
 				landed()
 			}
 			wsBadge(look)
-			wsMRLook.Lock()
-			defer wsMRLook.Unlock()
-			wsMRLook.look, wsMRLook.running = look, false
 		}()
 	}
 	return mrSection(wsMRLook.look, width)
@@ -379,6 +404,7 @@ const unknownGlyph = "?"
 //
 // A lookup that failed is a "?": the forge being out of reach is no news about
 // the merge request, and a badge that went away would read as there being none.
+// It only gets here once the failures have lasted unknownAfter (steadyLook).
 func wsBadge(look *mrLook) {
 	m := mx()
 	ws, _ := m.here()
