@@ -3179,13 +3179,24 @@ func fetchMain(ctx context.Context, every time.Duration, dirs []string) {
 // fetchOrigin is one round of fetchMain's, for one repo — also what the ws view
 // runs out of turn when the forge says the branch has landed, rather than wait
 // out the minute for origin/main to hear the same news.
+//
+// It gets fetchTimeout and no more. It holds fetchLock, and `p` waits on that
+// lock from the key loop, so an ssh that never answers would otherwise freeze
+// the whole tui — no keys, no repaint — until the fetch gave up, which it
+// never does on its own.
 func fetchOrigin(ctx context.Context, dir string) {
+	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
+	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", "fetch", "--quiet", "origin", "main")
 	cmd.Dir = dir
 	fetchLock.Lock()
 	_ = cmd.Run()
 	fetchLock.Unlock()
 }
+
+// fetchTimeout is how long one background fetch of one branch may take. A
+// healthy one takes a second or two.
+const fetchTimeout = time.Minute
 
 // fetchLock keeps fetchMain out of gitPull's way. Both move
 // refs/remotes/origin/main, and git only moves a ref that still holds the value
