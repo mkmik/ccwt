@@ -217,6 +217,40 @@ exit 0
 	}
 }
 
+// `p` against a remote that never answers leaves the keys working: the pull
+// runs off the key loop, so `q` still quits while it hangs. It used to freeze
+// the whole tui for as long as the ssh did.
+func TestAHangingPullLeavesTheKeysWorking(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds ccwt")
+	}
+	src, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	initRepo(t)
+	bin := filepath.Join(t.TempDir(), "ccwt")
+	build := exec.Command("go", "build", "-o", bin, ".")
+	build.Dir = src
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	// An ssh remote whose ssh is a sleep: the pull waits on it, and nothing
+	// has been fetched for it to fast-forward to first. The `;:` takes the
+	// host and command git adds, which sleep would refuse at once.
+	git(t, "remote", "add", "origin", "ssh://nowhere/repo")
+	git(t, "config", "core.sshCommand", "sleep 30;:")
+	git(t, "config", "branch.main.remote", "origin")
+	git(t, "config", "branch.main.merge", "refs/heads/main")
+
+	tt := runTty(t, exec.Command(bin, "tui", "--interval=100ms", "--fetch=0"))
+	tt.waitFor(t, "the list", func() bool { return strings.Contains(plain(tt.raw()), "q:quit") })
+	tt.write(t, "p")
+	tt.waitFor(t, "the pull to start", func() bool { return strings.Contains(plain(tt.raw()), "pulling…") })
+	tt.write(t, "q")
+	tt.waitFor(t, "q to quit mid-pull", func() bool { return strings.Contains(tt.raw(), "\x1b[?1049l") })
+}
+
 // tty is a program running in a terminal of its own, and everything it has
 // written there.
 type tty struct {

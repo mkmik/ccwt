@@ -166,6 +166,10 @@ func (c *TuiCmd) Run() error {
 		u.askTrust()                         // whether Claude Code may run its agents here, asked over all else
 		u.askSeed(c.seedPrompt, c.seedTitle) // a fresh workspace opens on the question of what it is for
 	}
+	// pulled brings `p`'s answer back to the loop. One pull at a time, so one
+	// slot is all it needs, and a pull that ends after the tui has quit doesn't
+	// wait on anyone.
+	pulled, pulling := make(chan string, 1), false
 	var last string
 	redraw := func() error {
 		lines, err := u.frame()
@@ -281,15 +285,23 @@ func (c *TuiCmd) Run() error {
 			settled = nil
 			wsTabsHeard.dirty = true
 			u.refresh()
+		case msg := <-pulled:
+			pulling = false
+			u.msg = msg
+			u.stale() // the pull may well have moved the branch
 		case <-tick.C:
 			u.msg = ""
+			if pulling {
+				u.msg = "pulling…"
+			}
 			u.refresh() // the tick is what re-reads the list
 			u.checkUpgrade()
 			// The upgrade's own restart, once the keys have been quiet long
 			// enough that nobody is mid-anything: Run returns, its defers give
 			// the terminal back, and main execs the new binary in this
-			// process's place.
-			if u.restart != "" && reexec != nil && u.idle() {
+			// process's place. A pull going on is something: the restart would
+			// leave its answer with nobody to read it.
+			if u.restart != "" && reexec != nil && u.idle() && !pulling {
 				return errRestart
 			}
 		case k := <-keys:
@@ -457,10 +469,14 @@ func (c *TuiCmd) Run() error {
 				u.reorder = true
 			case k == "q", k == "\x03": // \x03 = Ctrl-C, which raw mode delivers as a keystroke
 				return nil
+			// The pull runs off the key loop: it goes to the remote, and a
+			// remote that never answers would otherwise take the keys and the
+			// screen with it. Its line comes back on pulled.
+			case k == "p" && pulling:
+				u.msg = "still pulling…"
 			case k == "p":
-				if err := act("pulling…", func() string { return gitPull(u.gitDir()) }); err != nil {
-					return err
-				}
+				pulling, u.msg = true, "pulling…"
+				go func(dir string) { pulled <- gitPull(dir) }(u.gitDir())
 			// `m` is the worktree's review, in the browser — the branch is here,
 			// the review is over there.
 			case k == "m" && u.sel.worktree():
