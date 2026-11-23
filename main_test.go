@@ -302,6 +302,9 @@ func TestRemoveUnmerged(t *testing.T) {
 	path := capture(t, &NewWorktreeBranchCmd{Name: "ahead", Path: true})
 	commitWork(t, path, "ahead")
 
+	if err := (&RemoveCmd{Name: "ahead", Check: true}).Run(); err == nil {
+		t.Error("--check of an unmerged worktree passed, want refusal")
+	}
 	if err := (&RemoveCmd{Name: "ahead"}).Run(); err == nil {
 		t.Error("removing an unmerged worktree succeeded, want refusal")
 	}
@@ -329,6 +332,12 @@ func TestRemoveSwitchedBranch(t *testing.T) {
 	commitWork(t, path, "stale")
 	git(t, "-C", path, "switch", "-c", "landed", "main")
 
+	if err := (&RemoveCmd{Name: "switched", Check: true}).Run(); err != nil {
+		t.Fatalf("--check of a worktree on a merged branch: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("--check removed the worktree: %v", err)
+	}
 	if err := (&RemoveCmd{Name: "switched"}).Run(); err != nil {
 		t.Fatalf("removing a worktree on a merged branch: %v", err)
 	}
