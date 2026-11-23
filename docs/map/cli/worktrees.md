@@ -24,6 +24,13 @@ status = "done"
 needs = ["/model/removal"]
 
 [[feature]]
+id = "remove-check"
+title = "ccwt remove --check: only say whether remove would refuse, and why"
+status = "done"
+needs = ["#remove"]
+note = "For dowt's panel in dense, which greys its done button when it would"
+
+[[feature]]
 id = "close-workspace"
 title = "remove closes the worktree's herdr workspace, ours last, focus to the repo's"
 status = "done"

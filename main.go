@@ -319,6 +319,7 @@ type RemoveCmd struct {
 	Force      bool   `short:"D" help:"Remove anyway: delete the branch even when it is not merged, and the worktree even when it has uncommitted changes."`
 	KeepBranch bool   `help:"Remove the worktree but keep its branch."`
 	Yes        bool   `short:"y" help:"Close the worktree's workspace (herdr's, or dennet's in a den) without asking for confirmation."`
+	Check      bool   `help:"Remove nothing: only say whether the removal would go through without -D, failing with the reason when it wouldn't."`
 }
 
 func (c *RemoveCmd) Run() error {
@@ -350,6 +351,12 @@ func (c *RemoveCmd) remove(root string) error {
 		return err
 	}
 
+	// --check is the question removeBlocked answers, asked by a program that
+	// wants to show whether a removal is safe before anyone asks for one (dowt's
+	// panel in dense), so that it and the removal can't drift apart.
+	if c.Check {
+		return removeBlocked(root, name, c.KeepBranch, false)
+	}
 	if !c.Force {
 		if err := removeBlocked(root, name, c.KeepBranch, false); err != nil {
 			return err
